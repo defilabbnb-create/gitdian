@@ -1,0 +1,20 @@
+# dependencies
+node_modules
+
+# build outputs
+.next
+dist
+coverage
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+pnpm-debug.log*
+
+# macOS
+.DS_Store

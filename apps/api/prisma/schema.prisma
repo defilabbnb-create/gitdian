@@ -1,0 +1,252 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RepositoryRoughLevel {
+  A
+  B
+  C
+}
+
+enum RepositoryCompletenessLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RepositoryRunabilityLevel {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum RepositoryOpportunityLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RepositoryDecision {
+  PENDING
+  REJECTED
+  WATCHLIST
+  RECOMMENDED
+}
+
+enum RepositoryStatus {
+  DISCOVERED
+  SNAPSHOTTED
+  ANALYZED
+  ARCHIVED
+}
+
+enum RepositorySourceType {
+  GITHUB
+  GITHUB_SEARCH
+  MANUAL
+  IMPORTED
+}
+
+enum FavoritePriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model Repository {
+  id                    String                       @id @default(cuid())
+  githubRepoId          BigInt                       @unique
+  fullName              String                       @unique
+  name                  String
+  ownerLogin            String
+  htmlUrl               String                       @unique
+  description           String?
+  homepage              String?
+  language              String?
+  license               String?
+  defaultBranch         String?
+  stars                 Int                          @default(0)
+  forks                 Int                          @default(0)
+  watchers              Int                          @default(0)
+  openIssues            Int                          @default(0)
+  topics                String[]                     @default([])
+  archived              Boolean                      @default(false)
+  disabled              Boolean                      @default(false)
+  hasWiki               Boolean                      @default(false)
+  hasIssues             Boolean                      @default(true)
+  createdAtGithub       DateTime?
+  updatedAtGithub       DateTime?
+  pushedAtGithub        DateTime?
+  lastCommitAt          DateTime?
+  commitCount30d        Int                          @default(0)
+  contributorsCount     Int                          @default(0)
+  issueActivityScore    Decimal?                     @db.Decimal(10, 4)
+  growth24h             Decimal?                     @db.Decimal(10, 4)
+  growth7d              Decimal?                     @db.Decimal(10, 4)
+  activityScore         Decimal?                     @db.Decimal(10, 4)
+  roughPass             Boolean                      @default(false)
+  roughLevel            RepositoryRoughLevel?
+  roughReason           String?
+  toolLikeScore         Decimal?                     @db.Decimal(10, 4)
+  completenessScore     Decimal?                     @db.Decimal(10, 4)
+  completenessLevel     RepositoryCompletenessLevel?
+  productionReady       Boolean                      @default(false)
+  runability            RepositoryRunabilityLevel?
+  projectReferenceScore Decimal?                     @db.Decimal(10, 4)
+  ideaFitScore          Decimal?                     @db.Decimal(10, 4)
+  opportunityLevel      RepositoryOpportunityLevel?
+  finalScore            Decimal?                     @db.Decimal(10, 4)
+  decision              RepositoryDecision           @default(PENDING)
+  categoryL1            String?
+  categoryL2            String?
+  status                RepositoryStatus             @default(DISCOVERED)
+  isFavorited           Boolean                      @default(false)
+  sourceType            RepositorySourceType         @default(GITHUB)
+  analysisProvider      String?
+  analysisModel         String?
+  analysisConfidence    Decimal?                     @db.Decimal(10, 4)
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  snapshots             RepositorySnapshot[]
+  content               RepositoryContent?
+  analysis              RepositoryAnalysis?
+  favorite              Favorite?
+
+  @@index([ownerLogin, name])
+  @@index([status])
+  @@index([decision])
+  @@index([roughPass])
+  @@index([isFavorited])
+  @@index([finalScore(sort: Desc)])
+  @@index([stars(sort: Desc)])
+  @@index([updatedAtGithub])
+  @@index([pushedAtGithub])
+  @@index([categoryL1, categoryL2])
+}
+
+model RepositorySnapshot {
+  id                 String     @id @default(cuid())
+  repositoryId       String
+  stars              Int        @default(0)
+  forks              Int        @default(0)
+  watchers           Int        @default(0)
+  openIssues         Int        @default(0)
+  commitCount30d     Int        @default(0)
+  contributorsCount  Int        @default(0)
+  issueActivityScore Decimal?   @db.Decimal(10, 4)
+  growth24h          Decimal?   @db.Decimal(10, 4)
+  growth7d           Decimal?   @db.Decimal(10, 4)
+  activityScore      Decimal?   @db.Decimal(10, 4)
+  snapshotAt         DateTime   @default(now())
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  repository         Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([repositoryId, snapshotAt(sort: Desc)])
+  @@index([snapshotAt(sort: Desc)])
+}
+
+model RepositoryContent {
+  id               String     @id @default(cuid())
+  repositoryId     String     @unique
+  readmeText       String?
+  fileTree         Json?
+  rootFiles        Json?
+  recentCommits    Json?
+  recentIssues     Json?
+  hasDockerfile    Boolean    @default(false)
+  hasCompose       Boolean    @default(false)
+  hasCi            Boolean    @default(false)
+  hasTests         Boolean    @default(false)
+  hasDocs          Boolean    @default(false)
+  hasEnvExample    Boolean    @default(false)
+  packageManifests Json?
+  fetchedAt        DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  repository       Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([fetchedAt(sort: Desc)])
+}
+
+model RepositoryAnalysis {
+  id                String     @id @default(cuid())
+  repositoryId      String     @unique
+  analysisJson      Json?
+  completenessJson  Json?
+  ideaFitJson       Json?
+  extractedIdeaJson Json?
+  negativeFlags     Json?
+  tags              String[]   @default([])
+  provider          String?
+  modelName         String?
+  promptVersion     String?
+  confidence        Decimal?   @db.Decimal(10, 4)
+  rawResponse       Json?
+  fallbackUsed      Boolean    @default(false)
+  analyzedAt        DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  repository        Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([provider, modelName])
+  @@index([analyzedAt(sort: Desc)])
+}
+
+model Favorite {
+  id           String           @id @default(cuid())
+  repositoryId String           @unique
+  note         String?
+  priority     FavoritePriority @default(MEDIUM)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  repository   Repository       @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([priority])
+}
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  configKey   String   @unique
+  configValue Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model JobLog {
+  id           String    @id @default(cuid())
+  jobName      String
+  jobStatus    JobStatus @default(PENDING)
+  queueName    String?
+  queueJobId   String?
+  triggeredBy  String?
+  attempts     Int       @default(0)
+  retryCount   Int       @default(0)
+  progress     Int       @default(0)
+  durationMs   Int?
+  parentJobId  String?
+  payload      Json?
+  result       Json?
+  errorMessage String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([jobName, createdAt(sort: Desc)])
+  @@index([jobStatus, createdAt(sort: Desc)])
+  @@index([queueName, queueJobId])
+  @@index([parentJobId, createdAt(sort: Desc)])
+}
