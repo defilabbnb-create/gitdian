@@ -19,8 +19,17 @@ export function RepositoryQuickFilters({
 
   const isHighOpportunityActive = query.opportunityLevel === 'HIGH';
   const hasExtractedIdeaActive = query.hasExtractedIdea === true;
+  const hasGoodInsightActive = query.hasGoodInsight === true;
+  const hasManualInsightActive = query.hasManualInsight === true;
+  const hasBuildActionActive = query.recommendedAction === 'BUILD';
+  const hasCloneActionActive = query.recommendedAction === 'CLONE';
   const hasActiveQuickFilter =
-    isHighOpportunityActive || hasExtractedIdeaActive;
+    isHighOpportunityActive ||
+    hasExtractedIdeaActive ||
+    hasGoodInsightActive ||
+    hasManualInsightActive ||
+    hasBuildActionActive ||
+    hasCloneActionActive;
 
   function pushQuery(nextQuery: Partial<RepositoryListQueryState>) {
     const search = buildRepositoryListSearchParams({
@@ -46,10 +55,37 @@ export function RepositoryQuickFilters({
     });
   }
 
+  function handleToggleGoodInsight() {
+    pushQuery({
+      hasGoodInsight: hasGoodInsightActive ? undefined : true,
+    });
+  }
+
+  function handleToggleBuildAction() {
+    pushQuery({
+      recommendedAction: hasBuildActionActive ? undefined : 'BUILD',
+    });
+  }
+
+  function handleToggleManualInsight() {
+    pushQuery({
+      hasManualInsight: hasManualInsightActive ? undefined : true,
+    });
+  }
+
+  function handleToggleCloneAction() {
+    pushQuery({
+      recommendedAction: hasCloneActionActive ? undefined : 'CLONE',
+    });
+  }
+
   function handleClear() {
     pushQuery({
       opportunityLevel: undefined,
       hasExtractedIdea: undefined,
+      hasGoodInsight: undefined,
+      hasManualInsight: undefined,
+      recommendedAction: undefined,
     });
   }
 
@@ -77,6 +113,30 @@ export function RepositoryQuickFilters({
             label="只看已提取点子项目"
             helper="hasExtractedIdea=true"
             onClick={handleToggleExtractedIdea}
+          />
+          <QuickFilterChip
+            active={hasGoodInsightActive}
+            label="只看好点子"
+            helper="hasGoodInsight=true"
+            onClick={handleToggleGoodInsight}
+          />
+          <QuickFilterChip
+            active={hasManualInsightActive}
+            label="只看我判断过的"
+            helper="hasManualInsight=true"
+            onClick={handleToggleManualInsight}
+          />
+          <QuickFilterChip
+            active={hasBuildActionActive}
+            label="只看值得做"
+            helper="recommendedAction=BUILD"
+            onClick={handleToggleBuildAction}
+          />
+          <QuickFilterChip
+            active={hasCloneActionActive}
+            label="只看值得借鉴"
+            helper="recommendedAction=CLONE"
+            onClick={handleToggleCloneAction}
           />
           {hasActiveQuickFilter ? (
             <button

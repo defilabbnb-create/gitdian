@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { AnalysisStepRunner } from '@/components/repositories/analysis-step-runner';
 import { FavoriteToggleButton } from '@/components/repositories/favorite-toggle-button';
+import { getRepositoryActionBehaviorContext, getRepositoryDecisionSummary } from '@/lib/repository-decision';
 import { RepositoryDetail } from '@/lib/types/repository';
 
 type RepositoryWorkflowAdviceProps = {
@@ -19,14 +20,16 @@ type AdviceItem = {
 export function RepositoryWorkflowAdvice({
   repository,
 }: RepositoryWorkflowAdviceProps) {
-  const adviceItems = buildAdviceItems(repository);
+  const summary = getRepositoryDecisionSummary(repository);
+  const behaviorContext = getRepositoryActionBehaviorContext(repository, summary);
+  const adviceItems = buildAdviceItems(repository, behaviorContext);
 
   return (
     <section className="space-y-4 rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Workflow Advice
+            下一步建议
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
             先做下一步最值钱的动作，而不是继续反复浏览同一份分析。
@@ -74,7 +77,10 @@ export function RepositoryWorkflowAdvice({
   );
 }
 
-function buildAdviceItems(repository: RepositoryDetail): AdviceItem[] {
+function buildAdviceItems(
+  repository: RepositoryDetail,
+  behaviorContext: ReturnType<typeof getRepositoryActionBehaviorContext>,
+): AdviceItem[] {
   const hasIdeaFitAnalysis =
     typeof repository.ideaFitScore === 'number' ||
     Boolean(repository.analysis?.ideaFitJson);
@@ -112,6 +118,14 @@ function buildAdviceItems(repository: RepositoryDetail): AdviceItem[] {
         <AnalysisStepRunner
           repositoryId={repository.id}
           step="ideaFit"
+          categoryLabel={behaviorContext.categoryLabel}
+          projectType={behaviorContext.projectType}
+          targetUsersLabel={behaviorContext.targetUsersLabel}
+          useCaseLabel={behaviorContext.useCaseLabel}
+          patternKeys={behaviorContext.patternKeys}
+          hasRealUser={behaviorContext.hasRealUser}
+          hasClearUseCase={behaviorContext.hasClearUseCase}
+          isDirectlyMonetizable={behaviorContext.isDirectlyMonetizable}
         />
       ),
     });
@@ -126,6 +140,14 @@ function buildAdviceItems(repository: RepositoryDetail): AdviceItem[] {
         <AnalysisStepRunner
           repositoryId={repository.id}
           step="ideaFit"
+          categoryLabel={behaviorContext.categoryLabel}
+          projectType={behaviorContext.projectType}
+          targetUsersLabel={behaviorContext.targetUsersLabel}
+          useCaseLabel={behaviorContext.useCaseLabel}
+          patternKeys={behaviorContext.patternKeys}
+          hasRealUser={behaviorContext.hasRealUser}
+          hasClearUseCase={behaviorContext.hasClearUseCase}
+          isDirectlyMonetizable={behaviorContext.isDirectlyMonetizable}
         />
       ),
     });
@@ -142,6 +164,14 @@ function buildAdviceItems(repository: RepositoryDetail): AdviceItem[] {
         <AnalysisStepRunner
           repositoryId={repository.id}
           step="ideaExtract"
+          categoryLabel={behaviorContext.categoryLabel}
+          projectType={behaviorContext.projectType}
+          targetUsersLabel={behaviorContext.targetUsersLabel}
+          useCaseLabel={behaviorContext.useCaseLabel}
+          patternKeys={behaviorContext.patternKeys}
+          hasRealUser={behaviorContext.hasRealUser}
+          hasClearUseCase={behaviorContext.hasClearUseCase}
+          isDirectlyMonetizable={behaviorContext.isDirectlyMonetizable}
         />
       ),
     });

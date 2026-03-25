@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { JobStatusBadge } from '@/components/jobs/job-status-badge';
+import { getJobDisplayName } from '@/components/jobs/job-display';
 import { JobLogItem } from '@/lib/types/repository';
 
 type RecentJobItemProps = {
@@ -16,10 +17,12 @@ export function RecentJobItem({ job }: RecentJobItemProps) {
     >
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
-          <p className="text-sm font-semibold text-slate-950">{job.jobName}</p>
+          <p className="text-sm font-semibold text-slate-950">
+            {getJobDisplayName(job.jobName)}
+          </p>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
-            <span>开始：{formatDateTime(job.startedAt)}</span>
-            <span>结束：{formatDateTime(job.finishedAt)}</span>
+            <span>开始于：{formatDateTime(job.startedAt)}</span>
+            <span>结束于：{formatDateTime(job.finishedAt)}</span>
           </div>
         </div>
 
@@ -28,11 +31,11 @@ export function RecentJobItem({ job }: RecentJobItemProps) {
 
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
         <SummaryBlock
-          title="结果摘要"
+          title="执行信息"
           text={summarizeObject(job.result)}
         />
         <SummaryBlock
-          title={job.errorMessage ? '错误摘要' : 'Payload 摘要'}
+          title={job.errorMessage ? '失败原因' : '输入信息'}
           text={job.errorMessage ?? summarizeObject(job.payload)}
           tone={job.errorMessage ? 'rose' : 'slate'}
         />
@@ -78,7 +81,7 @@ function SummaryBlock({
 
 function formatDateTime(value?: string | null) {
   if (!value) {
-    return '--';
+    return '待记录';
   }
 
   const date = new Date(value);
@@ -98,7 +101,7 @@ function formatDateTime(value?: string | null) {
 
 function summarizeObject(value?: Record<string, unknown> | null) {
   if (!value || Object.keys(value).length === 0) {
-    return '暂无摘要';
+    return '暂无关键信息';
   }
 
   return Object.entries(value)

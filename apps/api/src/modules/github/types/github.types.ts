@@ -82,3 +82,14 @@ export type GitHubIssueItem = {
   } | null;
   pull_request?: Record<string, unknown>;
 };
+
+export type GitHubIdeaSnapshotJobPayload = {
+  repositoryId: string;
+  windowDate: string;
+  fromBackfill?: boolean;
+  runFastFilter?: boolean;
+  runDeepAnalysis?: boolean;
+  deepAnalysisOnlyIfPromising?: boolean;
+  targetCategories?: string[];
+  rootJobId?: string | null;
+};

@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link';
 import {
   JobLogQueryState,
@@ -25,29 +27,30 @@ export function JobContextBanner({
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
-            Repository Context
+            聚焦这个项目
           </p>
           <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
-            正在查看某个仓库的关联任务
+            现在看的，是这个项目最近跑过的关键任务。
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            当前列表已经按仓库维度收窄，方便你直接判断这一个项目最近跑过哪些分析、是否失败、是否需要重新触发。
+            这里已经按仓库收窄好了，先判断最近出了什么问题，再决定要不要重新触发。
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-            <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 font-semibold text-sky-700">
-              Repository ID · {repositoryId}
-            </span>
             {repository ? (
               <span className="rounded-full border border-slate-200 bg-white px-3 py-1 font-medium text-slate-700">
                 {repository.name} · {repository.fullName}
               </span>
-            ) : null}
+            ) : (
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 font-medium text-slate-700">
+                仓库标识 · {repositoryId}
+              </span>
+            )}
           </div>
 
           {repositoryError ? (
             <p className="mt-4 text-sm leading-7 text-amber-700">
-              仓库基础信息暂时没有加载出来，当前仍然会继续按 repositoryId 展示任务记录。
+              仓库基础信息暂时没有完全拿到，但你仍然可以先按任务记录继续排查。
             </p>
           ) : null}
         </div>
@@ -63,7 +66,7 @@ export function JobContextBanner({
             href={`/repositories/${repositoryId}`}
             className="inline-flex items-center rounded-full border border-slate-950 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
           >
-            返回仓库详情
+            回到项目判断页
           </Link>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, RepositoryRoughLevel } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FastFilterService } from '../fast-filter/fast-filter.service';
@@ -8,6 +8,17 @@ import { RunAnalysisDto } from './dto/run-analysis.dto';
 import { CompletenessService } from './completeness.service';
 import { IdeaExtractService } from './idea-extract.service';
 import { IdeaFitService } from './idea-fit.service';
+import { IdeaSnapshotService } from './idea-snapshot.service';
+import { RepositoryInsightService } from './repository-insight.service';
+import { AnalysisTrainingKnowledgeService } from './analysis-training-knowledge.service';
+import {
+  evaluateIdeaExtractGate,
+  IdeaExtractExecutionMode,
+  IdeaExtractGateDecision,
+  IdeaExtractGateReason,
+} from './helpers/idea-extract-gate.helper';
+import { resolveEffectiveOneLinerStrength } from './helpers/one-liner-strength.helper';
+import { SelfTuningService } from './self-tuning.service';
 
 type RepositoryWithAnalysisState = Prisma.RepositoryGetPayload<{
   include: {
@@ -43,6 +54,11 @@ type IdeaExtractStepResult = {
   status: StepStatus;
   ideaSummary?: string | null;
   productForm?: string | null;
+  ideaExtractMode?: IdeaExtractExecutionMode | null;
+  ideaExtractSkipped?: boolean;
+  ideaExtractReason?: IdeaExtractGateReason | null;
+  ideaExtractDeferred?: boolean;
+  ideaExtractTrace?: string[];
   message: string;
 };
 
@@ -58,8 +74,26 @@ type AnalysisRunResult = {
   steps: AnalysisRunSteps;
 };
 
+type DeepRuntimeStatsState = {
+  date: string;
+  deepEnteredCount: number;
+  deepSkippedCount: number;
+  ideaExtractExecutedCount: number;
+  ideaExtractSkippedCount: number;
+  ideaExtractSkippedByStrengthCount: number;
+  ideaExtractDeferredCount: number;
+  ideaExtractTimeoutCount: number;
+  lastIdeaExtractInflight: number;
+  ideaExtractMaxInflight: number;
+  updatedAt: string | null;
+};
+
+const DEEP_RUNTIME_STATS_CONFIG_KEY = 'analysis.deep.runtime_stats';
+
 @Injectable()
 export class AnalysisOrchestratorService {
+  private readonly logger = new Logger(AnalysisOrchestratorService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly fastFilterService: FastFilterService,
@@ -67,6 +101,10 @@ export class AnalysisOrchestratorService {
     private readonly completenessService: CompletenessService,
     private readonly ideaFitService: IdeaFitService,
     private readonly ideaExtractService: IdeaExtractService,
+    private readonly ideaSnapshotService: IdeaSnapshotService,
+    private readonly repositoryInsightService: RepositoryInsightService,
+    private readonly analysisTrainingKnowledgeService: AnalysisTrainingKnowledgeService,
+    private readonly selfTuningService: SelfTuningService,
   ) {}
 
   async runRepositoryAnalysis(
@@ -82,6 +120,15 @@ export class AnalysisOrchestratorService {
         runIdeaFit: dto.runIdeaFit,
         runIdeaExtract: dto.runIdeaExtract,
         forceRerun: dto.forceRerun,
+        userSuccessPatterns: dto.userSuccessPatterns?.slice(0, 8) ?? [],
+        userFailurePatterns: dto.userFailurePatterns?.slice(0, 8) ?? [],
+        preferredCategories: dto.preferredCategories?.slice(0, 6) ?? [],
+        avoidedCategories: dto.avoidedCategories?.slice(0, 6) ?? [],
+        recentValidatedWins: dto.recentValidatedWins?.slice(0, 6) ?? [],
+        recentDroppedReasons: dto.recentDroppedReasons?.slice(0, 6) ?? [],
+        userPreferencePriorityBoost: dto.userPreferencePriorityBoost ?? 0,
+        userPreferencePriorityReasons:
+          dto.userPreferencePriorityReasons?.slice(0, 4) ?? [],
       },
     });
 
@@ -187,15 +234,79 @@ export class AnalysisOrchestratorService {
     const shouldSkipIdeaExtract =
       !dto.forceRerun && this.hasIdeaExtractResult(repository);
     if (dto.runIdeaExtract) {
-      steps.ideaExtract = shouldSkipIdeaExtract
-        ? {
-            status: 'skipped',
-            ideaSummary: this.readIdeaSummary(repository.analysis?.extractedIdeaJson),
-            productForm: this.readIdeaProductForm(repository.analysis?.extractedIdeaJson),
-            message: 'Idea extraction already exists.',
-          }
-        : await this.executeIdeaExtract(repository.id, fastFilterDidNotPass);
+      if (shouldSkipIdeaExtract) {
+        steps.ideaExtract = {
+          status: 'skipped',
+          ideaSummary: this.readIdeaSummary(repository.analysis?.extractedIdeaJson),
+          productForm: this.readIdeaProductForm(repository.analysis?.extractedIdeaJson),
+          ideaExtractMode: this.readIdeaExtractMode(repository.analysis?.extractedIdeaJson),
+          ideaExtractSkipped: true,
+          ideaExtractReason: 'already_exists',
+          ideaExtractTrace: ['already_exists'],
+          message: 'Idea extraction already exists.',
+        };
+      } else {
+        const extractGate = await this.shouldRunIdeaExtract(repository.id);
+        steps.ideaExtract = extractGate.shouldRun
+          ? await this.executeIdeaExtract(
+              repository.id,
+              fastFilterDidNotPass,
+              extractGate.mode,
+            )
+          : {
+              status: 'skipped',
+              ideaExtractMode: extractGate.mode,
+              ideaExtractSkipped: true,
+              ideaExtractReason: extractGate.reason,
+              ideaExtractTrace: extractGate.trace,
+              message: `Idea extraction skipped: ${extractGate.reason}. trace=${extractGate.trace.join(',')}`,
+            };
+
+        if (
+          steps.ideaExtract.ideaExtractReason === 'strength_not_strong'
+        ) {
+          this.logger.log(
+            `idea_extract skipped repositoryId=${repository.id} strength=${extractGate.strength ?? 'unknown'} effectiveStrength=${extractGate.effectiveStrength ?? 'unknown'} reason=strength_not_strong trace=${(steps.ideaExtract.ideaExtractTrace ?? []).join(',')}`,
+          );
+        }
+      }
     }
+
+    await this.repositoryInsightService.refreshInsight(repository.id, {
+      userSuccessPatterns: dto.userSuccessPatterns ?? [],
+      userFailurePatterns: dto.userFailurePatterns ?? [],
+      preferredCategories: dto.preferredCategories ?? [],
+      avoidedCategories: dto.avoidedCategories ?? [],
+      recentValidatedWins: dto.recentValidatedWins ?? [],
+      recentDroppedReasons: dto.recentDroppedReasons ?? [],
+    });
+    await this.recordDeepRuntimeStats({
+      deepEnteredCount:
+        dto.runCompleteness || dto.runIdeaFit || dto.runIdeaExtract ? 1 : 0,
+      deepSkippedCount:
+        dto.runIdeaExtract &&
+        steps.ideaExtract.ideaExtractSkipped === true &&
+        steps.ideaExtract.ideaExtractReason !== 'already_exists' &&
+        steps.ideaExtract.ideaExtractReason !== 'deferred'
+          ? 1
+          : 0,
+      ideaExtractExecutedCount: steps.ideaExtract.status === 'executed' ? 1 : 0,
+      ideaExtractSkippedCount:
+        steps.ideaExtract.ideaExtractSkipped === true ? 1 : 0,
+      ideaExtractSkippedByStrengthCount:
+        steps.ideaExtract.ideaExtractReason === 'strength_not_strong' ? 1 : 0,
+      ideaExtractDeferredCount:
+        steps.ideaExtract.ideaExtractDeferred === true ? 1 : 0,
+      ideaExtractTimeoutCount:
+        steps.ideaExtract.status === 'failed' &&
+        this.isTimeoutMessage(steps.ideaExtract.message)
+          ? 1
+          : 0,
+      lastIdeaExtractInflight:
+        this.ideaExtractService.getIdeaExtractLimiterState().inflight,
+      ideaExtractMaxInflight:
+        this.ideaExtractService.getIdeaExtractLimiterState().maxInflight,
+    });
 
     return {
       repositoryId: repository.id,
@@ -373,14 +484,44 @@ export class AnalysisOrchestratorService {
   private async executeIdeaExtract(
     repositoryId: string,
     fastFilterDidNotPass: boolean,
+    mode: IdeaExtractExecutionMode,
   ): Promise<IdeaExtractStepResult> {
     try {
-      const result = await this.ideaExtractService.analyzeRepository(repositoryId);
+      const result = await this.ideaExtractService.analyzeRepository(repositoryId, {
+        deferIfBusy: true,
+        mode: mode === 'skip' ? 'light' : mode,
+      });
+
+      if ('deferred' in result && result.deferred) {
+        return {
+          status: 'skipped',
+          ideaExtractMode: mode,
+          ideaExtractSkipped: true,
+          ideaExtractReason: 'deferred',
+          ideaExtractDeferred: true,
+          ideaExtractTrace: ['deferred'],
+          message: `${result.reason} inflight=${result.inflight}/${result.maxInflight}`,
+        };
+      }
+
+      const completedResult = result as Exclude<typeof result, { deferred: true }>;
 
       return {
         status: 'executed',
-        ideaSummary: result.ideaSummary,
-        productForm: result.productForm,
+        ideaSummary: completedResult.ideaSummary,
+        productForm: completedResult.productForm,
+        ideaExtractMode: completedResult.extractMode ?? mode,
+        ideaExtractSkipped: false,
+        ideaExtractReason:
+          completedResult.extractMode === 'light'
+            ? 'eligible_light_value'
+            : 'eligible_high_value',
+        ideaExtractDeferred: false,
+        ideaExtractTrace: [
+          completedResult.extractMode === 'light'
+            ? 'idea_extract_mode_light'
+            : 'idea_extract_mode_full',
+        ],
         message: fastFilterDidNotPass
           ? 'Idea extraction executed after rough filter did not pass.'
           : 'Idea extraction executed successfully.',
@@ -388,9 +529,148 @@ export class AnalysisOrchestratorService {
     } catch (error) {
       return {
         status: 'failed',
+        ideaExtractMode: mode,
+        ideaExtractSkipped: false,
+        ideaExtractReason: 'execution_failed',
+        ideaExtractDeferred: false,
+        ideaExtractTrace: ['execution_failed'],
         message: error instanceof Error ? error.message : 'Idea extraction failed.',
       };
     }
+  }
+
+  private async shouldRunIdeaExtract(
+    repositoryId: string,
+  ): Promise<IdeaExtractGateDecision> {
+    const repository = await this.prisma.repository.findUnique({
+      where: { id: repositoryId },
+      include: {
+        content: true,
+        analysis: true,
+      },
+    });
+
+    if (!repository) {
+      throw new NotFoundException(`Repository with id "${repositoryId}" was not found.`);
+    }
+
+    const snapshot = this.ideaSnapshotService.readIdeaSnapshot(
+      repository.analysis?.ideaSnapshotJson,
+    );
+    const verdict = this.readVerdict(repository.analysis?.insightJson);
+    const categoryMain =
+      this.readCategoryMain(repository.analysis?.insightJson) ??
+      snapshot?.category?.main ??
+      this.readString(repository.categoryL1);
+    const toolLike =
+      snapshot?.toolLike === true ||
+      (this.toNumber(repository.toolLikeScore) ?? 0) >= 65;
+    const ideaFitScore =
+      this.toNumber(repository.ideaFitScore) ??
+      this.readIdeaFitScore(repository.analysis?.ideaFitJson) ??
+      0;
+    const haystack = [
+      repository.name,
+      repository.fullName,
+      repository.description,
+      repository.language,
+      ...(repository.topics ?? []),
+      repository.content?.readmeText?.slice(0, 1600) ?? '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .toLowerCase();
+    const readmeText = repository.content?.readmeText?.trim() ?? '';
+    const insight = this.readJsonObject(repository.analysis?.insightJson);
+    const claudeReview =
+      repository.analysis?.claudeReviewStatus === 'SUCCESS'
+        ? this.readJsonObject(repository.analysis?.claudeReviewJson)
+        : null;
+    const projectReality = this.readJsonObject(insight?.projectReality);
+    const { strength: baseStrength } = resolveEffectiveOneLinerStrength({
+      localStrength: this.readOneLinerStrength(insight?.oneLinerStrength),
+      claudeStrength: this.readOneLinerStrength(claudeReview?.oneLinerStrength),
+      updatedAt: repository.updatedAtGithub ?? repository.updatedAt,
+      createdAt: repository.createdAtGithub ?? repository.createdAt,
+    });
+    const tuningPolicy = await this.selfTuningService.getCurrentPolicy();
+    const trainingKnowledge =
+      await this.analysisTrainingKnowledgeService.getLatestKnowledge();
+    const forceLightAnalysis = this.shouldForceLightIdeaAnalysis({
+      snapshot,
+      insight,
+      claudeReview,
+      projectReality,
+      baseStrength,
+    });
+
+    const gate = evaluateIdeaExtractGate({
+      snapshotIsPromising: snapshot?.isPromising === true,
+      toolLike,
+      verdict,
+      oneLinerStrength: baseStrength,
+      forceLightAnalysis,
+      loadLevel: tuningPolicy.systemLoadLevel,
+      ideaFitScore,
+      readmeLength: readmeText.length,
+      categoryMain,
+      haystack,
+      projectRealityType: this.readProjectRealityType(projectReality?.type),
+      heuristicAdjustments: trainingKnowledge?.heuristicAdjustments ?? null,
+    });
+    return {
+      ...gate,
+      strength: baseStrength,
+      effectiveStrength: baseStrength,
+    };
+  }
+
+  private shouldForceLightIdeaAnalysis(input: {
+    snapshot: { isPromising: boolean; nextAction: string } | null;
+    insight: Record<string, unknown> | null;
+    claudeReview: Record<string, unknown> | null;
+    projectReality: Record<string, unknown> | null;
+    baseStrength: 'STRONG' | 'MEDIUM' | 'WEAK' | null;
+  }) {
+    const insightVerdict = this.readString(input.insight?.verdict);
+    const insightAction = this.readString(input.insight?.action);
+    const claudeVerdict = this.readString(input.claudeReview?.verdict);
+    const claudeAction = this.readString(input.claudeReview?.action);
+    const insightOneLiner = this.readString(input.insight?.oneLinerZh);
+    const claudeOneLiner = this.readString(input.claudeReview?.oneLinerZh);
+    const insightType = this.readProjectRealityType(
+      this.readJsonObject(input.insight?.projectReality)?.type,
+    );
+    const claudeType = this.readProjectRealityType(input.claudeReview?.projectType);
+    const confidence = this.readNumber(input.insight?.confidence);
+    const strongBusinessSignals =
+      this.readBoolean(input.projectReality?.hasRealUser) &&
+      this.readBoolean(input.projectReality?.hasClearUseCase) &&
+      this.readBoolean(input.projectReality?.isDirectlyMonetizable);
+    const highLocalIntent =
+      input.baseStrength === 'STRONG' ||
+      insightVerdict === 'GOOD' ||
+      (insightVerdict === 'OK' && insightAction === 'CLONE' && strongBusinessSignals);
+    const hasConflict =
+      Boolean(claudeVerdict && insightVerdict && claudeVerdict !== insightVerdict) ||
+      Boolean(claudeAction && insightAction && claudeAction !== insightAction) ||
+      Boolean(claudeType && insightType && claudeType !== insightType) ||
+      Boolean(
+        claudeOneLiner &&
+          insightOneLiner &&
+          claudeOneLiner.trim() !== insightOneLiner.trim(),
+      );
+    const needsRecheck =
+      hasConflict || (confidence > 0 && confidence < 0.45) || input.baseStrength === 'STRONG';
+    const snapshotSkipped =
+      input.snapshot?.isPromising === false || input.snapshot?.nextAction === 'SKIP';
+
+    return (
+      highLocalIntent ||
+      strongBusinessSignals ||
+      hasConflict ||
+      (snapshotSkipped && needsRecheck)
+    );
   }
 
   private async selectBatchRepositories(dto: BatchRunAnalysisDto) {
@@ -459,17 +739,17 @@ export class AnalysisOrchestratorService {
 
   private hasCompletenessResult(repository: RepositoryWithAnalysisState) {
     return (
-      repository.completenessScore !== null ||
-      repository.analysis?.completenessJson !== null
+      repository.completenessScore != null ||
+      repository.analysis?.completenessJson != null
     );
   }
 
   private hasIdeaFitResult(repository: RepositoryWithAnalysisState) {
-    return repository.ideaFitScore !== null || repository.analysis?.ideaFitJson !== null;
+    return repository.ideaFitScore != null || repository.analysis?.ideaFitJson != null;
   }
 
   private hasIdeaExtractResult(repository: RepositoryWithAnalysisState) {
-    return repository.analysis?.extractedIdeaJson !== null;
+    return repository.analysis?.extractedIdeaJson != null;
   }
 
   private readIdeaFitOpportunityLevel(value: Prisma.JsonValue | null | undefined) {
@@ -496,6 +776,20 @@ export class AnalysisOrchestratorService {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const normalized = value as Record<string, unknown>;
       return typeof normalized.productForm === 'string' ? normalized.productForm : null;
+    }
+
+    return null;
+  }
+
+  private readIdeaExtractMode(
+    value: Prisma.JsonValue | null | undefined,
+  ): IdeaExtractExecutionMode | null {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const normalized = value as Record<string, unknown>;
+      const mode = String(normalized.extractMode ?? '').toLowerCase();
+      if (mode === 'full' || mode === 'light' || mode === 'skip') {
+        return mode;
+      }
     }
 
     return null;
@@ -546,6 +840,222 @@ export class AnalysisOrchestratorService {
       action: this.resolveOverallAction(result.steps),
       steps: result.steps,
     };
+  }
+
+  private async recordDeepRuntimeStats(input: {
+    deepEnteredCount: number;
+    deepSkippedCount: number;
+    ideaExtractExecutedCount: number;
+    ideaExtractSkippedCount: number;
+    ideaExtractSkippedByStrengthCount: number;
+    ideaExtractDeferredCount: number;
+    ideaExtractTimeoutCount: number;
+    lastIdeaExtractInflight: number;
+    ideaExtractMaxInflight: number;
+  }) {
+    if (
+      input.deepEnteredCount === 0 &&
+      input.deepSkippedCount === 0 &&
+      input.ideaExtractExecutedCount === 0 &&
+      input.ideaExtractSkippedCount === 0 &&
+      input.ideaExtractSkippedByStrengthCount === 0 &&
+      input.ideaExtractDeferredCount === 0 &&
+      input.ideaExtractTimeoutCount === 0
+    ) {
+      return;
+    }
+
+    const today = this.toDateKey(new Date());
+    const existing = await this.prisma.systemConfig.findUnique({
+      where: {
+        configKey: DEEP_RUNTIME_STATS_CONFIG_KEY,
+      },
+      select: {
+        configValue: true,
+      },
+    });
+    const current = this.readDeepRuntimeStats(existing?.configValue, today);
+    const nextState: DeepRuntimeStatsState = {
+      date: today,
+      deepEnteredCount: current.deepEnteredCount + input.deepEnteredCount,
+      deepSkippedCount: current.deepSkippedCount + input.deepSkippedCount,
+      ideaExtractExecutedCount:
+        current.ideaExtractExecutedCount + input.ideaExtractExecutedCount,
+      ideaExtractSkippedCount:
+        current.ideaExtractSkippedCount + input.ideaExtractSkippedCount,
+      ideaExtractSkippedByStrengthCount:
+        current.ideaExtractSkippedByStrengthCount +
+        input.ideaExtractSkippedByStrengthCount,
+      ideaExtractDeferredCount:
+        current.ideaExtractDeferredCount + input.ideaExtractDeferredCount,
+      ideaExtractTimeoutCount:
+        current.ideaExtractTimeoutCount + input.ideaExtractTimeoutCount,
+      lastIdeaExtractInflight: input.lastIdeaExtractInflight,
+      ideaExtractMaxInflight: input.ideaExtractMaxInflight,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await this.prisma.systemConfig.upsert({
+      where: {
+        configKey: DEEP_RUNTIME_STATS_CONFIG_KEY,
+      },
+      update: {
+        configValue: nextState as unknown as Prisma.InputJsonValue,
+      },
+      create: {
+        configKey: DEEP_RUNTIME_STATS_CONFIG_KEY,
+        configValue: nextState as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  private readDeepRuntimeStats(
+    value: Prisma.JsonValue | null | undefined,
+    today: string,
+  ): DeepRuntimeStatsState {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return this.emptyDeepRuntimeStats(today);
+    }
+
+    const normalized = value as Record<string, unknown>;
+    const date = this.readString(normalized.date) ?? today;
+    if (date !== today) {
+      return this.emptyDeepRuntimeStats(today);
+    }
+
+    return {
+      date,
+      deepEnteredCount: this.readNumber(normalized.deepEnteredCount),
+      deepSkippedCount: this.readNumber(normalized.deepSkippedCount),
+      ideaExtractExecutedCount: this.readNumber(
+        normalized.ideaExtractExecutedCount,
+      ),
+      ideaExtractSkippedCount: this.readNumber(
+        normalized.ideaExtractSkippedCount,
+      ),
+      ideaExtractSkippedByStrengthCount: this.readNumber(
+        normalized.ideaExtractSkippedByStrengthCount,
+      ),
+      ideaExtractDeferredCount: this.readNumber(
+        normalized.ideaExtractDeferredCount,
+      ),
+      ideaExtractTimeoutCount: this.readNumber(
+        normalized.ideaExtractTimeoutCount,
+      ),
+      lastIdeaExtractInflight: this.readNumber(
+        normalized.lastIdeaExtractInflight,
+      ),
+      ideaExtractMaxInflight: this.readNumber(
+        normalized.ideaExtractMaxInflight,
+      ),
+      updatedAt: this.readString(normalized.updatedAt),
+    };
+  }
+
+  private emptyDeepRuntimeStats(today: string): DeepRuntimeStatsState {
+    return {
+      date: today,
+      deepEnteredCount: 0,
+      deepSkippedCount: 0,
+      ideaExtractExecutedCount: 0,
+      ideaExtractSkippedCount: 0,
+      ideaExtractSkippedByStrengthCount: 0,
+      ideaExtractDeferredCount: 0,
+      ideaExtractTimeoutCount: 0,
+      lastIdeaExtractInflight: 0,
+      ideaExtractMaxInflight: this.ideaExtractService.getIdeaExtractLimiterState().maxInflight,
+      updatedAt: null,
+    };
+  }
+
+  private readVerdict(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const normalized = value as Record<string, unknown>;
+    const verdict = this.readString(normalized.verdict);
+    return verdict === 'GOOD' || verdict === 'OK' || verdict === 'BAD'
+      ? verdict
+      : null;
+  }
+
+  private readOneLinerStrength(value: unknown) {
+    const normalized = this.readString(value);
+    return normalized === 'STRONG' ||
+      normalized === 'MEDIUM' ||
+      normalized === 'WEAK'
+      ? normalized
+      : null;
+  }
+
+  private readCategoryMain(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const normalized = value as Record<string, unknown>;
+    const category =
+      normalized.category && typeof normalized.category === 'object'
+        ? (normalized.category as Record<string, unknown>)
+        : null;
+
+    return this.readString(category?.main);
+  }
+
+  private readIdeaFitScore(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const normalized = value as Record<string, unknown>;
+    return this.readNumber(normalized.ideaFitScore);
+  }
+
+  private readJsonObject(value: unknown) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    return value as Record<string, unknown>;
+  }
+
+  private readProjectRealityType(value: unknown) {
+    const normalized = this.readString(value)?.toLowerCase();
+    if (
+      normalized === 'product' ||
+      normalized === 'tool' ||
+      normalized === 'model' ||
+      normalized === 'infra' ||
+      normalized === 'demo'
+    ) {
+      return normalized;
+    }
+
+    return null;
+  }
+
+  private readString(value: unknown) {
+    return typeof value === 'string' && value.trim().length > 0
+      ? value.trim()
+      : null;
+  }
+
+  private readNumber(value: unknown) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  private readBoolean(value: unknown) {
+    return value === true;
+  }
+
+  private isTimeoutMessage(message: string) {
+    const normalized = message.toLowerCase();
+    return normalized.includes('timed out') || normalized.includes('timeout');
+  }
+
+  private toDateKey(date: Date) {
+    return date.toISOString().slice(0, 10);
   }
 
   private toNumber(value: Prisma.Decimal | null) {

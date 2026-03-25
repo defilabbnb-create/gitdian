@@ -16,13 +16,13 @@ export function RelatedRepositories({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Related Opportunities
+            相邻机会
           </p>
           <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
-            你可能还想顺手看看这些相邻项目
+            只有当你要横向比较时，再顺手看看这些相邻项目。
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            这里只做轻量同类浏览：优先看同语言、同机会等级，以及和当前仓库 topics 更接近的项目。
+            这里只做轻量同类浏览，帮你判断当前项目是不是同类里最值得继续看的一批。
           </p>
         </div>
 
@@ -30,12 +30,13 @@ export function RelatedRepositories({
           href="/"
           className="inline-flex items-center rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
         >
-          回到项目列表
+          回到机会首页
         </Link>
       </div>
 
       {errorMessage ? (
-        <div className="mt-6 rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-5 text-sm leading-7 text-rose-700">
+        <div className="mt-6 rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-5 text-sm leading-7 text-amber-800">
+          <span className="font-semibold">相邻机会暂不可用：</span>
           {errorMessage}
         </div>
       ) : null}

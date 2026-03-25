@@ -17,7 +17,7 @@ export default function RepositoryNotFound() {
           href="/"
           className="mt-8 inline-flex rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
         >
-          返回项目列表
+          回到机会首页
         </Link>
       </div>
     </main>

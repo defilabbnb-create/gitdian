@@ -2,6 +2,7 @@ import {
   RepositoryOverviewSummary,
   buildRepositoryListSearchParams,
 } from '@/lib/types/repository';
+import { getRepositoryViewMeta } from '@/lib/repository-view-meta';
 import { WorkflowCard } from './workflow-card';
 
 type RepositoryWorkflowCardsProps = {
@@ -13,11 +14,15 @@ export function RepositoryWorkflowCards({
   summary,
   errorMessage = null,
 }: RepositoryWorkflowCardsProps) {
+  const pendingAnalysisView = getRepositoryViewMeta('pendingAnalysis');
+  const ideaPendingView = getRepositoryViewMeta('ideaExtractionPending');
+  const highOpportunityView = getRepositoryViewMeta('highOpportunityUnfavorited');
+
   if (!summary) {
     return (
       <section className="rounded-[32px] border border-dashed border-slate-300 bg-white/80 p-8 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-          Workflow Suggestions Unavailable
+          工作流提示暂不可用
         </p>
         <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
           当前还拿不到待处理工作流提示
@@ -34,7 +39,7 @@ export function RepositoryWorkflowCards({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Workflow Suggestions
+            工作流提示
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
             先处理最值得推进的下一步，而不是继续在全量仓库里游泳。
@@ -47,51 +52,54 @@ export function RepositoryWorkflowCards({
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <WorkflowCard
-          label="待分析项目"
-          title="先补核心创业评分"
-          description="这些项目还没完成 Idea Fit，适合优先补上核心创业判断。"
+          label={pendingAnalysisView.label}
+          title="先补核心判断，再决定值不值得继续看"
+          description="这些项目还没形成完整的创业判断，进入后会优先看到一句话结论、分类和建议动作。"
           count={summary.pendingAnalysisRepositories}
           href={`/?${buildRepositoryListSearchParams({
             page: 1,
             pageSize: 20,
             view: 'pendingAnalysis',
+            displayMode: 'insight',
             hasIdeaFitAnalysis: false,
             sortBy: 'latest',
             order: 'desc',
           })}`}
-          actionLabel="查看待分析项目"
+          actionLabel={`查看${pendingAnalysisView.label}`}
         />
         <WorkflowCard
-          label="待补点子项目"
-          title="评分有了，点子还没提"
-          description="这些项目已经做过创业评分，但还没完成点子提取，适合继续补足产品化输出。"
+          label={ideaPendingView.label}
+          title="判断有了，再把点子收口成人能看懂的话"
+          description="这些项目已经有基础评分，但还缺一句能直接说明机会价值的产品化结论。"
           count={summary.needsIdeaExtractionRepositories}
           href={`/?${buildRepositoryListSearchParams({
             page: 1,
             pageSize: 20,
             view: 'ideaExtractionPending',
+            displayMode: 'insight',
             hasIdeaFitAnalysis: true,
             hasExtractedIdea: false,
             sortBy: 'ideaFitScore',
             order: 'desc',
           })}`}
-          actionLabel="查看待补点子项目"
+          actionLabel={`查看${ideaPendingView.label}`}
         />
         <WorkflowCard
-          label="待收藏高机会项目"
-          title="别让高机会项目躺在列表里"
-          description="这些项目已经是高机会，但还没进收藏库，适合尽快收口成明确跟进池。"
+          label={highOpportunityView.label}
+          title="别让已经值得看的项目继续躺在列表里"
+          description="这些项目已经出现明显机会信号，但还没收进收藏池，适合尽快变成明确跟进列表。"
           count={summary.highOpportunityUnfavoritedRepositories}
           href={`/?${buildRepositoryListSearchParams({
             page: 1,
             pageSize: 20,
             view: 'highOpportunityUnfavorited',
+            displayMode: 'insight',
             opportunityLevel: 'HIGH',
             isFavorited: false,
             sortBy: 'ideaFitScore',
             order: 'desc',
           })}`}
-          actionLabel="查看待收藏高机会项目"
+          actionLabel={`查看${highOpportunityView.label}`}
         />
       </div>
     </section>

@@ -1,6 +1,7 @@
 import { RepositoryListItem } from '@/lib/types/repository';
 import { SettingsPayload } from '@/lib/types/settings';
 import { BatchAnalysisRunner } from './batch-analysis-runner';
+import { GitHubCreatedBackfillRunner } from './github-created-backfill-runner';
 import { GitHubFetchRunner } from './github-fetch-runner';
 import { RepositoryQuickFilters } from './repository-quick-filters';
 import { RepositoryListQueryState } from '@/lib/types/repository';
@@ -21,19 +22,20 @@ export function HomeQuickActions({
       <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Quick Actions
+            快捷动作
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            先决定现在要做什么：采集新仓库、补分析，还是直接切到重点工作集。
+            先决定现在要做什么：采集仓库、启动工具机会雷达，还是直接切到重点工作集。
           </h2>
         </div>
         <p className="max-w-2xl text-sm leading-7 text-slate-600">
-          这里收口首页最常用的动作入口。逻辑上仍然是独立功能，只是在视觉上统一归到一层，方便你先做动作，再回到推荐视图和列表判断结果。
+          这里收口首页最常用的动作入口。你可以先抓最新仓库，也可以直接回溯过去一年的工具项目机会池，再回到推荐视图里做判断。
         </p>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-3">
         <GitHubFetchRunner githubDefaults={githubDefaults} />
+        <GitHubCreatedBackfillRunner />
         <BatchAnalysisRunner repositories={repositories} />
       </div>
 

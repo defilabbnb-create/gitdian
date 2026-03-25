@@ -7,6 +7,12 @@
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
     "start:worker": "ENABLE_QUEUE_WORKERS=true node dist/worker.js",
+    "export:training-knowledge": "node dist/scripts/export-training-knowledge.js",
+    "recover:historical-data": "node dist/scripts/run-historical-data-recovery.js",
+    "report:task-analysis-completion": "node dist/scripts/report-task-analysis-completion.js",
+    "health:daily": "node dist/scripts/health/daily-health-check.js",
+    "scheduler:adaptive": "node dist/scripts/health/run-adaptive-scheduler.js",
+    "rebuild:cached-rankings": "node dist/scripts/rebuild-repository-cached-rankings.js",
     "lint": "eslint \"src/**/*.ts\"",
     "prisma:format": "prisma format",
     "prisma:validate": "prisma validate",
@@ -14,7 +20,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"No tests yet\""
+    "test": "pnpm run build && node --test test/*.test.js"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.4",

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsArray, IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class RunAnalysisDto {
   @IsOptional()
@@ -26,4 +26,44 @@ export class RunAnalysisDto {
   @Type(() => Boolean)
   @IsBoolean()
   forceRerun: boolean = false;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  userSuccessPatterns?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  userFailurePatterns?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  preferredCategories?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  avoidedCategories?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  recentValidatedWins?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  recentDroppedReasons?: string[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  userPreferencePriorityBoost?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  userPreferencePriorityReasons?: string[];
 }

@@ -10,8 +10,9 @@ import { BatchCompletenessAnalysisDto } from './dto/batch-completeness-analysis.
 import { buildCompletenessPromptInput } from './helpers/completeness-input.helper';
 import {
   buildCompletenessPrompt,
-  COMPLETENESS_PROMPT_VERSION,
 } from './prompts/completeness.prompt';
+import { RepositoryInsightService } from './repository-insight.service';
+import { AnalysisTrainingKnowledgeService } from './analysis-training-knowledge.service';
 
 type RepositoryAnalysisTarget = Prisma.RepositoryGetPayload<{
   include: {
@@ -43,6 +44,8 @@ export class CompletenessService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouterService: AiRouterService,
+    private readonly repositoryInsightService: RepositoryInsightService,
+    private readonly analysisTrainingKnowledgeService: AnalysisTrainingKnowledgeService,
   ) {}
 
   async analyzeRepository(repositoryId: string) {
@@ -133,7 +136,11 @@ export class CompletenessService {
 
   private async analyzeRepositoryRecord(repository: RepositoryAnalysisTarget) {
     const promptInput = buildCompletenessPromptInput(repository);
-    const prompt = buildCompletenessPrompt(promptInput);
+    const basePrompt = buildCompletenessPrompt(promptInput);
+    const prompt = await this.analysisTrainingKnowledgeService.enhancePrompt(
+      'completeness',
+      basePrompt,
+    );
 
     const aiResult = await this.aiRouterService.generateJson<CompletenessAnalysisOutput>({
       taskType: 'completeness',
@@ -169,7 +176,7 @@ export class CompletenessService {
         modelName: aiResult.model,
         confidence: aiResult.confidence,
         rawResponse: aiResult.rawResponse as Prisma.InputJsonValue,
-        promptVersion: COMPLETENESS_PROMPT_VERSION,
+        promptVersion: prompt.promptVersion,
         analyzedAt: new Date(),
         fallbackUsed: aiResult.fallbackUsed,
       },
@@ -180,11 +187,13 @@ export class CompletenessService {
         modelName: aiResult.model,
         confidence: aiResult.confidence,
         rawResponse: aiResult.rawResponse as Prisma.InputJsonValue,
-        promptVersion: COMPLETENESS_PROMPT_VERSION,
+        promptVersion: prompt.promptVersion,
         analyzedAt: new Date(),
         fallbackUsed: aiResult.fallbackUsed,
       },
     });
+
+    await this.repositoryInsightService.refreshInsight(repository.id);
 
     return {
       repositoryId: repository.id,

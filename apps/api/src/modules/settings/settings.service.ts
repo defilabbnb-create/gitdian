@@ -43,6 +43,8 @@ export type SettingsPayload = {
     taskRouting: Record<AiTaskType, AiProviderName>;
     models: {
       omlx: string | null;
+      omlxLight: string | null;
+      omlxDeep: string | null;
       openai: string | null;
     };
     timeoutMs: number;
@@ -75,6 +77,19 @@ export type SettingsHealthPayload = {
   github: {
     ok: boolean;
     hasToken: boolean;
+    hasTokenPool: boolean;
+    tokenPoolSize: number;
+    usingMultiToken: boolean;
+    anonymousFallback: boolean;
+    lastKnownRateLimitStatus: {
+      tokenIndex: number | null;
+      requestType: 'search' | 'enrichment' | 'health';
+      limited: boolean;
+      remaining: number | null;
+      resetAt: string | null;
+      retryAfterMs: number | null;
+      updatedAt: string;
+    } | null;
     latencyMs: number | null;
     error: string | null;
   };
@@ -259,11 +274,23 @@ export class SettingsService {
             merged['ai.taskRouting.idea_extract'],
             defaults['ai.taskRouting.idea_extract'] as AiProviderName,
           ),
+          idea_snapshot: this.toProviderName(
+            merged['ai.taskRouting.idea_snapshot'],
+            defaults['ai.taskRouting.idea_snapshot'] as AiProviderName,
+          ),
         },
         models: {
           omlx: this.toNullableString(
             merged['ai.models.omlx'],
             defaults['ai.models.omlx'] as string | null,
+          ),
+          omlxLight: this.toNullableString(
+            merged['ai.models.omlxLight'],
+            defaults['ai.models.omlxLight'] as string | null,
+          ),
+          omlxDeep: this.toNullableString(
+            merged['ai.models.omlxDeep'],
+            defaults['ai.models.omlxDeep'] as string | null,
           ),
           openai: this.toNullableString(
             merged['ai.models.openai'],
@@ -280,12 +307,25 @@ export class SettingsService {
 
   private applyRuntimeAiDefaults(settings: SettingsPayload): SettingsPayload {
     const normalized = structuredClone(settings);
-    const omlxModel = normalized.ai.models.omlx ?? process.env.OMLX_MODEL ?? null;
+    const omlxDeepModel =
+      normalized.ai.models.omlxDeep ??
+      process.env.OMLX_DEEP_MODEL ??
+      process.env.OMLX_MODEL ??
+      null;
+    const omlxModel = normalized.ai.models.omlx ?? omlxDeepModel;
+    const omlxLightModel =
+      normalized.ai.models.omlxLight ??
+      process.env.OMLX_SNAPSHOT_MODEL ??
+      process.env.OMLX_LIGHT_MODEL ??
+      omlxModel ??
+      null;
     const openAiModel =
       normalized.ai.models.openai ?? process.env.OPENAI_MODEL ?? null;
     const hasOpenAiConfigured = Boolean(process.env.OPENAI_API_KEY && openAiModel);
 
     normalized.ai.models.omlx = omlxModel;
+    normalized.ai.models.omlxLight = omlxLightModel;
+    normalized.ai.models.omlxDeep = omlxDeepModel ?? omlxModel;
     normalized.ai.models.openai = openAiModel;
 
     if (!hasOpenAiConfigured) {
@@ -297,6 +337,7 @@ export class SettingsService {
       normalized.ai.taskRouting.basic_analysis = 'omlx';
       normalized.ai.taskRouting.idea_fit = 'omlx';
       normalized.ai.taskRouting.idea_extract = 'omlx';
+      normalized.ai.taskRouting.idea_snapshot = 'omlx';
     }
 
     return normalized;
@@ -400,8 +441,21 @@ export class SettingsService {
     if (dto.ai?.taskRouting?.idea_extract !== undefined) {
       flat['ai.taskRouting.idea_extract'] = dto.ai.taskRouting.idea_extract;
     }
+    if (dto.ai?.taskRouting?.idea_snapshot !== undefined) {
+      flat['ai.taskRouting.idea_snapshot'] = dto.ai.taskRouting.idea_snapshot;
+    }
     if (dto.ai?.models?.omlx !== undefined) {
       flat['ai.models.omlx'] = this.toJsonInputValue(dto.ai.models.omlx);
+    }
+    if (dto.ai?.models?.omlxLight !== undefined) {
+      flat['ai.models.omlxLight'] = this.toJsonInputValue(
+        dto.ai.models.omlxLight,
+      );
+    }
+    if (dto.ai?.models?.omlxDeep !== undefined) {
+      flat['ai.models.omlxDeep'] = this.toJsonInputValue(
+        dto.ai.models.omlxDeep,
+      );
     }
     if (dto.ai?.models?.openai !== undefined) {
       flat['ai.models.openai'] = this.toJsonInputValue(dto.ai.models.openai);
@@ -449,7 +503,12 @@ export class SettingsService {
       'ai.taskRouting.basic_analysis': 'omlx',
       'ai.taskRouting.idea_fit': 'omlx',
       'ai.taskRouting.idea_extract': 'omlx',
+      'ai.taskRouting.idea_snapshot': 'omlx',
       'ai.models.omlx': process.env.OMLX_MODEL || null,
+      'ai.models.omlxLight':
+        process.env.OMLX_SNAPSHOT_MODEL || process.env.OMLX_LIGHT_MODEL || null,
+      'ai.models.omlxDeep':
+        process.env.OMLX_DEEP_MODEL || process.env.OMLX_MODEL || null,
       'ai.models.openai': process.env.OPENAI_MODEL || null,
       'ai.timeoutMs': 30000,
     };

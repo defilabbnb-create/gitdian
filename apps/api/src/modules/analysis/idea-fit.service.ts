@@ -10,8 +10,9 @@ import { BatchIdeaFitAnalysisDto } from './dto/batch-idea-fit-analysis.dto';
 import { buildIdeaFitPromptInput } from './helpers/idea-fit-input.helper';
 import {
   buildIdeaFitPrompt,
-  IDEA_FIT_PROMPT_VERSION,
 } from './prompts/idea-fit.prompt';
+import { RepositoryInsightService } from './repository-insight.service';
+import { AnalysisTrainingKnowledgeService } from './analysis-training-knowledge.service';
 
 type RepositoryAnalysisTarget = Prisma.RepositoryGetPayload<{
   include: {
@@ -43,6 +44,8 @@ export class IdeaFitService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouterService: AiRouterService,
+    private readonly repositoryInsightService: RepositoryInsightService,
+    private readonly analysisTrainingKnowledgeService: AnalysisTrainingKnowledgeService,
   ) {}
 
   async analyzeRepository(repositoryId: string) {
@@ -132,7 +135,11 @@ export class IdeaFitService {
 
   private async analyzeRepositoryRecord(repository: RepositoryAnalysisTarget) {
     const promptInput = buildIdeaFitPromptInput(repository);
-    const prompt = buildIdeaFitPrompt(promptInput);
+    const basePrompt = buildIdeaFitPrompt(promptInput);
+    const prompt = await this.analysisTrainingKnowledgeService.enhancePrompt(
+      'idea_fit',
+      basePrompt,
+    );
 
     const aiResult = await this.aiRouterService.generateJson<IdeaFitAnalysisOutput>({
       taskType: 'idea_fit',
@@ -142,7 +149,10 @@ export class IdeaFitService {
       timeoutMs: 30000,
     });
 
-    const normalized = this.normalizeIdeaFitResult(aiResult.data);
+    const normalized = await this.analysisTrainingKnowledgeService.buildIdeaFitEnhancement({
+      repository,
+      output: this.normalizeIdeaFitResult(aiResult.data),
+    });
     const analysisExists = Boolean(repository.analysis);
 
     await this.prisma.repository.update({
@@ -168,7 +178,7 @@ export class IdeaFitService {
         modelName: aiResult.model,
         confidence: aiResult.confidence,
         rawResponse: aiResult.rawResponse as Prisma.InputJsonValue,
-        promptVersion: IDEA_FIT_PROMPT_VERSION,
+        promptVersion: prompt.promptVersion,
         analyzedAt: new Date(),
         fallbackUsed: aiResult.fallbackUsed,
       },
@@ -180,11 +190,13 @@ export class IdeaFitService {
         modelName: aiResult.model,
         confidence: aiResult.confidence,
         rawResponse: aiResult.rawResponse as Prisma.InputJsonValue,
-        promptVersion: IDEA_FIT_PROMPT_VERSION,
+        promptVersion: prompt.promptVersion,
         analyzedAt: new Date(),
         fallbackUsed: aiResult.fallbackUsed,
       },
     });
+
+    await this.repositoryInsightService.refreshInsight(repository.id);
 
     return {
       repositoryId: repository.id,

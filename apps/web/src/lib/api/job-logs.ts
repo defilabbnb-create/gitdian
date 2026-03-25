@@ -13,13 +13,27 @@ function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
 }
 
-export async function getJobLogs(query: JobLogQueryState) {
+function buildTimeoutSignal(timeoutMs?: number) {
+  if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
+    return undefined;
+  }
+
+  return AbortSignal.timeout(timeoutMs);
+}
+
+export async function getJobLogs(
+  query: JobLogQueryState,
+  options: {
+    timeoutMs?: number;
+  } = {},
+) {
   const search = buildJobLogListSearchParams(query);
   const response = await fetch(
     `${getApiBaseUrl()}/api/job-logs${search ? `?${search}` : ''}`,
     {
       method: 'GET',
       cache: 'no-store',
+      signal: buildTimeoutSignal(options.timeoutMs),
       headers: {
         Accept: 'application/json',
       },
@@ -43,12 +57,18 @@ export async function getJobLogs(query: JobLogQueryState) {
   return payload.data;
 }
 
-export async function getJobLogsForRepository(repositoryId: string, pageSize = 5) {
+export async function getJobLogsForRepository(
+  repositoryId: string,
+  pageSize = 5,
+  options: {
+    timeoutMs?: number;
+  } = {},
+) {
   return getJobLogs({
     page: 1,
     pageSize,
     repositoryId,
-  });
+  }, options);
 }
 
 async function parseResponse<T>(response: Response, fallbackMessage: string) {

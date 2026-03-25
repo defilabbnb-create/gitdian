@@ -1,3 +1,5 @@
+'use client';
+
 import {
   JobLogItem,
   JobLogQueryState,
@@ -25,13 +27,13 @@ export function JobList({
     return (
       <section className="rounded-[32px] border border-dashed border-slate-300 bg-white/80 p-10 text-center shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-          Empty Result
+          暂无结果
         </p>
         <h2 className="mt-4 text-2xl font-semibold tracking-tight text-slate-950">
-          当前筛选条件下没有任务日志
+          现在没有需要处理的任务
         </h2>
         <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-slate-600">
-          可以先去执行一次 GitHub 采集、批量粗筛或统一分析编排，然后再回到这里看历史记录。
+          如果你刚触发过采集或分析，可以稍后回来；否则说明当前运行比较平稳。
         </p>
       </section>
     );

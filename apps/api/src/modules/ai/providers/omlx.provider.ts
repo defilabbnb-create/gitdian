@@ -25,6 +25,9 @@ export class OmlxProvider implements AiProvider {
   private readonly baseUrl = process.env.OMLX_BASE_URL || 'http://localhost:11434';
   private readonly model = process.env.OMLX_MODEL || null;
   private readonly apiKey = process.env.OMLX_API_KEY || '';
+  private snapshotTimeoutCount = 0;
+  private deepTimeoutCount = 0;
+  private ideaExtractTimeoutCount = 0;
 
   async generateJson<T>(input: GenerateJsonInput): Promise<AiProviderResult<T>> {
     const startedAt = Date.now();
@@ -36,7 +39,7 @@ export class OmlxProvider implements AiProvider {
       const latencyMs = Date.now() - startedAt;
 
       this.logger.log(
-        `provider=${this.name} model=${model ?? 'unknown'} latencyMs=${latencyMs} success=true`,
+        `provider=${this.name} taskType=${input.taskType} model=${model ?? 'unknown'} timeoutMs=${input.timeoutMs ?? 'unknown'} latencyMs=${latencyMs} success=true`,
       );
 
       return {
@@ -52,8 +55,15 @@ export class OmlxProvider implements AiProvider {
       const latencyMs = Date.now() - startedAt;
       const message = error instanceof Error ? error.message : 'Unknown OMLX error.';
 
+      if (this.isTimeoutError(error)) {
+        const counters = this.bumpTimeoutCounter(input.taskType);
+        this.logger.warn(
+          `provider=${this.name} taskType=${input.taskType} model=${model ?? 'unknown'} timeoutMs=${input.timeoutMs ?? 'unknown'} snapshotTimeoutCount=${counters.snapshot} deepTimeoutCount=${counters.deep} ideaExtractTimeoutCount=${counters.ideaExtract}`,
+        );
+      }
+
       this.logger.error(
-        `provider=${this.name} model=${model ?? 'unknown'} latencyMs=${latencyMs} success=false error=${message}`,
+        `provider=${this.name} taskType=${input.taskType} model=${model ?? 'unknown'} latencyMs=${latencyMs} success=false error=${message}`,
       );
 
       throw error;
@@ -144,6 +154,38 @@ export class OmlxProvider implements AiProvider {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private isTimeoutError(error: unknown) {
+    return (
+      error instanceof Error &&
+      error.message.toLowerCase().includes('timed out')
+    );
+  }
+
+  private bumpTimeoutCounter(taskType: GenerateJsonInput['taskType']) {
+    if (taskType === 'idea_snapshot') {
+      this.snapshotTimeoutCount += 1;
+    }
+
+    if (taskType === 'idea_extract') {
+      this.ideaExtractTimeoutCount += 1;
+    }
+
+    if (
+      taskType === 'completeness' ||
+      taskType === 'idea_fit' ||
+      taskType === 'idea_extract' ||
+      taskType === 'basic_analysis'
+    ) {
+      this.deepTimeoutCount += 1;
+    }
+
+    return {
+      snapshot: this.snapshotTimeoutCount,
+      deep: this.deepTimeoutCount,
+      ideaExtract: this.ideaExtractTimeoutCount,
+    };
   }
 
   private buildHeaders() {

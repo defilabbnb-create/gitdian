@@ -24,7 +24,7 @@ export function ExportRepositoryJsonButton({
       onClick={handleExport}
       className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-semibold transition hover:bg-white/10"
     >
-      导出 JSON
+      导出结果快照
     </button>
   );
 }

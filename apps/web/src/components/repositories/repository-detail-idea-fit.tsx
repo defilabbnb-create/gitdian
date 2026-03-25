@@ -1,14 +1,32 @@
 import { AnalysisStepRunner } from '@/components/repositories/analysis-step-runner';
-import { RepositoryDetail } from '@/lib/types/repository';
+import {
+  getRepositoryActionBehaviorContext,
+  getRepositoryDecisionSummary,
+  getRepositoryDeepAnalysisStatus,
+  getRepositoryFallbackIdeaAnalysis,
+} from '@/lib/repository-decision';
+import { JobLogItem, RepositoryDetail } from '@/lib/types/repository';
 
 type RepositoryDetailIdeaFitProps = {
   repository: RepositoryDetail;
+  relatedJobs?: JobLogItem[] | null;
 };
 
 export function RepositoryDetailIdeaFit({
   repository,
+  relatedJobs,
 }: RepositoryDetailIdeaFitProps) {
   const ideaFit = repository.analysis?.ideaFitJson;
+  const summary = getRepositoryDecisionSummary(repository);
+  const behaviorContext = getRepositoryActionBehaviorContext(repository, summary);
+  const fallback = getRepositoryFallbackIdeaAnalysis(repository, summary);
+  const status = getRepositoryDeepAnalysisStatus(repository, relatedJobs);
+  const actionLabel =
+    summary.action === 'BUILD'
+      ? '立即做'
+      : summary.action === 'CLONE'
+        ? '快速验证'
+        : '暂不投入';
 
   return (
     <section className="rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm">
@@ -21,23 +39,36 @@ export function RepositoryDetailIdeaFit({
             创业价值判断
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            {ideaFit?.coreJudgement ||
-              '还没有生成创业机会评分。你现在仍然可以先看仓库元信息和点子提取区，后续再补跑 idea fit。'}
+            {ideaFit?.coreJudgement ?? status.helperText}
           </p>
         </div>
 
-        <div className="grid min-w-[220px] gap-4">
+        <div className="grid min-w-[240px] gap-4">
           <AnalysisStepRunner
             repositoryId={repository.id}
             step="ideaFit"
+            labelOverride="补创业评分"
+            runningLabelOverride="创业评分补跑中..."
+            successLabelOverride="创业评分已加入队列，稍后刷新就能看到新的判断。"
+            categoryLabel={behaviorContext.categoryLabel}
+            projectType={behaviorContext.projectType}
+            targetUsersLabel={behaviorContext.targetUsersLabel}
+            useCaseLabel={behaviorContext.useCaseLabel}
+            patternKeys={behaviorContext.patternKeys}
+            hasRealUser={behaviorContext.hasRealUser}
+            hasClearUseCase={behaviorContext.hasClearUseCase}
+            isDirectlyMonetizable={behaviorContext.isDirectlyMonetizable}
           />
           <div className="grid gap-3 rounded-[28px] border border-slate-200 bg-slate-50 p-4">
-            <IdeaFitStat label="Idea Fit 分" value={toScore(repository.ideaFitScore)} />
             <IdeaFitStat
-              label="Opportunity"
-              value={ideaFit?.opportunityLevel ?? repository.opportunityLevel ?? '--'}
+              label="当前状态"
+              value={status.label}
             />
-            <IdeaFitStat label="Decision" value={ideaFit?.decision ?? repository.decision} />
+            <IdeaFitStat
+              label="机会层级"
+              value={ideaFit?.opportunityLevel ?? summary.moneyPriority.label}
+            />
+            <IdeaFitStat label="建议动作" value={actionLabel} />
           </div>
         </div>
       </div>
@@ -75,17 +106,31 @@ export function RepositoryDetailIdeaFit({
             />
           </div>
         </>
+      ) : status.status === 'RUNNING' || status.status === 'PENDING' ? (
+        <IdeaFitSkeleton />
       ) : (
-        <MissingAnalysisCard
-          message="创业机会评分尚未生成，页面会先展示基础仓库信息和其他已有分析结果。"
-        />
+        <div className="mt-6 grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
+          <FallbackCard title="当前判断" content={fallback.whyItMatters} tone="dark" />
+          <FallbackCard title="下一步" content={fallback.nextStep} />
+          <FallbackCard title="用户是谁" content={fallback.targetUsers} />
+          <FallbackCard title="能不能收费" content={fallback.monetization} />
+        </div>
       )}
     </section>
   );
 }
 
-function toScore(value?: number | null) {
-  return typeof value === 'number' ? Math.round(value) : '--';
+function IdeaFitSkeleton() {
+  return (
+    <div className="mt-6 grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
+      {[0, 1, 2, 3].map((item) => (
+        <div
+          key={item}
+          className="h-28 animate-pulse rounded-[28px] border border-slate-200 bg-slate-100"
+        />
+      ))}
+    </div>
+  );
 }
 
 function IdeaFitStat({
@@ -163,10 +208,25 @@ function ListCard({
   );
 }
 
-function MissingAnalysisCard({ message }: { message: string }) {
+function FallbackCard({
+  title,
+  content,
+  tone = 'light',
+}: {
+  title: string;
+  content: string;
+  tone?: 'light' | 'dark';
+}) {
+  const classes =
+    tone === 'dark'
+      ? 'border-slate-950 bg-slate-950 text-white'
+      : 'border-slate-200 bg-slate-50 text-slate-900';
+  const textClasses = tone === 'dark' ? 'text-slate-300' : 'text-slate-600';
+
   return (
-    <div className="mt-6 rounded-[28px] border border-dashed border-slate-300 bg-slate-50 px-5 py-5 text-sm leading-7 text-slate-600">
-      {message}
+    <div className={`rounded-[28px] border p-5 ${classes}`}>
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">{title}</p>
+      <p className={`mt-4 text-sm leading-7 ${textClasses}`}>{content}</p>
     </div>
   );
 }

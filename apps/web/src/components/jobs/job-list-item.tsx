@@ -1,21 +1,22 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { cancelJobLog, retryJobLog } from '@/lib/api/job-logs';
 import { JobLogItem } from '@/lib/types/repository';
+import { getJobDisplayName } from './job-display';
 import { JobStatusBadge } from './job-status-badge';
 
 type JobListItemProps = {
   job: JobLogItem;
   currentRepositoryId?: string;
   isFocused?: boolean;
+  variant?: 'default' | 'priority';
 };
 
 function formatDateTime(value?: string | null) {
   if (!value) {
-    return '--';
+    return '待记录';
   }
 
   const date = new Date(value);
@@ -35,7 +36,7 @@ function formatDateTime(value?: string | null) {
 
 function summarizeObject(value?: Record<string, unknown> | null) {
   if (!value || Object.keys(value).length === 0) {
-    return '暂无摘要';
+    return '暂无关键信息';
   }
 
   return Object.entries(value)
@@ -62,6 +63,7 @@ export function JobListItem({
   job,
   currentRepositoryId,
   isFocused = false,
+  variant = 'default',
 }: JobListItemProps) {
   const router = useRouter();
   const [isExpanded, setIsExpanded] = useState(isFocused);
@@ -79,6 +81,11 @@ export function JobListItem({
     typeof job.canCancel === 'boolean'
       ? job.canCancel
       : job.jobStatus === 'PENDING';
+  const isPriority = variant === 'priority';
+  const executionSummary = getExecutionSummary(job);
+  const isChildJob = Boolean(job.parentJobId);
+  const allowInlineActions = isPriority || !isChildJob;
+  const displayName = getJobDisplayName(job.jobName);
 
   useEffect(() => {
     if (isFocused) {
@@ -134,16 +141,20 @@ export function JobListItem({
       className={`rounded-[28px] border bg-white p-6 shadow-sm ${
         isFocused
           ? 'border-sky-300 ring-2 ring-sky-100'
-          : 'border-slate-200'
+          : isPriority
+            ? 'border-slate-300 shadow-md shadow-slate-900/5'
+            : isChildJob
+              ? 'border-slate-200 bg-slate-50/70'
+              : 'border-slate-200'
       }`}
     >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Job
+            {job.parentJobId ? '子任务' : '关键任务'}
           </p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
-            {job.jobName}
+            {displayName}
           </h2>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em]">
             {isCurrentRepositoryContext ? (
@@ -151,18 +162,18 @@ export function JobListItem({
                 当前仓库
               </span>
             ) : null}
-            {!currentRepositoryId && relatedRepositoryId ? (
-              <Link
-                href={`/jobs?repositoryId=${relatedRepositoryId}`}
-                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-600 transition hover:border-slate-300 hover:bg-white"
-              >
-                仓库任务 · {relatedRepositoryId}
-              </Link>
+            {!job.parentJobId ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
+                Root 任务
+              </span>
             ) : null}
           </div>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+            {executionSummary}
+          </p>
           <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-slate-600">
-            <span>开始：{formatDateTime(job.startedAt)}</span>
-            <span>结束：{formatDateTime(job.finishedAt)}</span>
+            <span>开始于：{formatDateTime(job.startedAt)}</span>
+            <span>结束于：{formatDateTime(job.finishedAt)}</span>
           </div>
         </div>
 
@@ -175,26 +186,26 @@ export function JobListItem({
           onClick={() => setIsExpanded((value) => !value)}
           className="inline-flex rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
         >
-          {isExpanded ? '收起详情' : '查看详情'}
+          {isExpanded ? '收起执行信息' : '查看执行信息'}
         </button>
-        {canRetry ? (
+        {allowInlineActions && canRetry ? (
           <button
             type="button"
             onClick={handleRetry}
             disabled={isSubmitting}
             className="inline-flex rounded-full border border-slate-950 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSubmitting ? '处理中...' : 'Retry'}
+            {isSubmitting ? '处理中...' : '重新执行'}
           </button>
         ) : null}
-        {canCancel ? (
+        {allowInlineActions && canCancel ? (
           <button
             type="button"
             onClick={handleCancel}
             disabled={isSubmitting}
             className="inline-flex rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSubmitting ? '处理中...' : 'Cancel'}
+            {isSubmitting ? '处理中...' : '取消任务'}
           </button>
         ) : null}
       </div>
@@ -211,30 +222,10 @@ export function JobListItem({
         </div>
       ) : null}
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <section className="rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Payload 摘要
-          </p>
-          <p className="mt-3 text-sm leading-7 text-slate-700">
-            {summarizeObject(job.payload)}
-          </p>
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Result 摘要
-          </p>
-          <p className="mt-3 text-sm leading-7 text-slate-700">
-            {summarizeObject(job.result)}
-          </p>
-        </section>
-      </div>
-
       {job.errorMessage ? (
         <div className="mt-4 rounded-3xl border border-rose-200 bg-rose-50 px-5 py-4">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
-            Error
+            执行失败
           </p>
           <p className="mt-3 text-sm leading-7 text-rose-700">{job.errorMessage}</p>
         </div>
@@ -245,7 +236,7 @@ export function JobListItem({
           <div className="grid gap-4 xl:grid-cols-2">
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Payload JSON
+                执行输入
               </p>
               <pre className="overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
                 {JSON.stringify(job.payload ?? null, null, 2)}
@@ -254,7 +245,7 @@ export function JobListItem({
 
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Result JSON
+                执行输出
               </p>
               <pre className="overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
                 {JSON.stringify(job.result ?? null, null, 2)}
@@ -275,12 +266,6 @@ export function JobListItem({
               }
             />
           </div>
-
-          {job.errorMessage ? (
-            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {job.errorMessage}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </article>
@@ -302,6 +287,30 @@ function DetailMetric({
       <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
+}
+
+function getExecutionSummary(job: JobLogItem) {
+  if (job.jobStatus === 'FAILED') {
+    return (
+      job.errorMessage?.trim() ||
+      '这次执行失败了，建议先看错误原因，再决定是否重试。'
+    );
+  }
+
+  if (job.jobStatus === 'RUNNING') {
+    return '任务正在运行中，先判断它是不是关键链路，以及是否持续占住主要资源。';
+  }
+
+  if (job.jobStatus === 'PENDING') {
+    return '任务还在排队，先判断它是不是关键任务，以及是否已经等得太久。';
+  }
+
+  const resultSummary = summarizeObject(job.result);
+  if (resultSummary !== '暂无关键信息') {
+    return resultSummary;
+  }
+
+  return '这次任务已经完成，若要继续排查，可展开执行信息查看输入和输出。';
 }
 
 function extractRepositoryId(job: JobLogItem) {

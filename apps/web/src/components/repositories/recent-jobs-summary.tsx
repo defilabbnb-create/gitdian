@@ -16,7 +16,7 @@ export function RecentJobsSummary({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Recent Jobs
+            最近任务
           </p>
           <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
             最近系统任务摘要
@@ -35,7 +35,8 @@ export function RecentJobsSummary({
       </div>
 
       {errorMessage ? (
-        <div className="mt-6 rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-5 text-sm leading-7 text-rose-700">
+        <div className="mt-6 rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-5 text-sm leading-7 text-amber-800">
+          <span className="font-semibold">最近任务暂不可用：</span>
           {errorMessage}
         </div>
       ) : null}

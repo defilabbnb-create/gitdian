@@ -8,8 +8,15 @@ type AnalysisRunConfigProps = {
   onChange: (nextValue: RunAnalysisRequest) => void;
 };
 
+type AnalysisRunBooleanKey =
+  | 'runFastFilter'
+  | 'runCompleteness'
+  | 'runIdeaFit'
+  | 'runIdeaExtract'
+  | 'forceRerun';
+
 const fields: Array<{
-  key: keyof RunAnalysisRequest;
+  key: AnalysisRunBooleanKey;
   label: string;
   hint: string;
 }> = [

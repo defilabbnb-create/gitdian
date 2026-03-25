@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { startTransition, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getUserBehaviorSignalPayload } from '@/lib/action-loop';
 import { enqueueRepositoryAnalysis } from '@/lib/api/repositories';
 import {
   EnqueuedTaskResponse,
@@ -12,6 +13,17 @@ import {
 type AnalysisStepRunnerProps = {
   repositoryId: string;
   step: 'completeness' | 'ideaFit' | 'ideaExtract' | 'fastFilter';
+  labelOverride?: string;
+  runningLabelOverride?: string;
+  successLabelOverride?: string;
+  categoryLabel?: string | null;
+  projectType?: string | null;
+  targetUsersLabel?: string | null;
+  useCaseLabel?: string | null;
+  patternKeys?: string[];
+  hasRealUser?: boolean | null;
+  hasClearUseCase?: boolean | null;
+  isDirectlyMonetizable?: boolean | null;
 };
 
 const stepConfigMap: Record<
@@ -33,6 +45,14 @@ const stepConfigMap: Record<
       runIdeaFit: false,
       runIdeaExtract: false,
       forceRerun: true,
+      userSuccessPatterns: [],
+      userFailurePatterns: [],
+      preferredCategories: [],
+      avoidedCategories: [],
+      recentValidatedWins: [],
+      recentDroppedReasons: [],
+      userPreferencePriorityBoost: 0,
+      userPreferencePriorityReasons: [],
     },
   },
   ideaFit: {
@@ -45,6 +65,14 @@ const stepConfigMap: Record<
       runIdeaFit: true,
       runIdeaExtract: false,
       forceRerun: true,
+      userSuccessPatterns: [],
+      userFailurePatterns: [],
+      preferredCategories: [],
+      avoidedCategories: [],
+      recentValidatedWins: [],
+      recentDroppedReasons: [],
+      userPreferencePriorityBoost: 0,
+      userPreferencePriorityReasons: [],
     },
   },
   ideaExtract: {
@@ -57,6 +85,14 @@ const stepConfigMap: Record<
       runIdeaFit: false,
       runIdeaExtract: true,
       forceRerun: true,
+      userSuccessPatterns: [],
+      userFailurePatterns: [],
+      preferredCategories: [],
+      avoidedCategories: [],
+      recentValidatedWins: [],
+      recentDroppedReasons: [],
+      userPreferencePriorityBoost: 0,
+      userPreferencePriorityReasons: [],
     },
   },
   fastFilter: {
@@ -69,6 +105,14 @@ const stepConfigMap: Record<
       runIdeaFit: false,
       runIdeaExtract: false,
       forceRerun: true,
+      userSuccessPatterns: [],
+      userFailurePatterns: [],
+      preferredCategories: [],
+      avoidedCategories: [],
+      recentValidatedWins: [],
+      recentDroppedReasons: [],
+      userPreferencePriorityBoost: 0,
+      userPreferencePriorityReasons: [],
     },
   },
 };
@@ -76,6 +120,17 @@ const stepConfigMap: Record<
 export function AnalysisStepRunner({
   repositoryId,
   step,
+  labelOverride,
+  runningLabelOverride,
+  successLabelOverride,
+  categoryLabel,
+  projectType,
+  targetUsersLabel,
+  useCaseLabel,
+  patternKeys,
+  hasRealUser,
+  hasClearUseCase,
+  isDirectlyMonetizable,
 }: AnalysisStepRunnerProps) {
   const router = useRouter();
   const [isRunning, setIsRunning] = useState(false);
@@ -91,17 +146,30 @@ export function AnalysisStepRunner({
     setSuccessMessage(null);
 
     try {
-      const nextTask = await enqueueRepositoryAnalysis(repositoryId, config.payload);
+      const nextTask = await enqueueRepositoryAnalysis(repositoryId, {
+        ...config.payload,
+        ...getUserBehaviorSignalPayload({
+          categoryLabel,
+          projectType,
+          targetUsersLabel,
+          useCaseLabel,
+          patternKeys,
+          hasRealUser,
+          hasClearUseCase,
+          isDirectlyMonetizable,
+          currentActionStatus: 'NOT_STARTED',
+        }),
+      });
 
       setTask(nextTask);
-      setSuccessMessage(config.successLabel);
+      setSuccessMessage(successLabelOverride ?? config.successLabel);
 
       startTransition(() => {
         router.refresh();
       });
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : '重新运行分析失败，请稍后重试。',
+        error instanceof Error ? error.message : '补跑这一步失败，请稍后重试。',
       );
     } finally {
       setIsRunning(false);
@@ -116,7 +184,9 @@ export function AnalysisStepRunner({
         disabled={isRunning}
         className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {isRunning ? config.runningLabel : config.label}
+        {isRunning
+          ? runningLabelOverride ?? config.runningLabel
+          : labelOverride ?? config.label}
       </button>
 
       {successMessage ? (
@@ -141,7 +211,7 @@ export function AnalysisStepRunner({
           href={`/jobs?repositoryId=${repositoryId}&focusJobId=${task.jobId}#job-${task.jobId}`}
           className="inline-flex rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
         >
-          查看任务记录
+          查看执行记录
         </Link>
       ) : null}
     </div>

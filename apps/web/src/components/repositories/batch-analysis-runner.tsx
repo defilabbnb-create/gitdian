@@ -88,7 +88,7 @@ export function BatchAnalysisRunner({
       });
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : '批量分析失败，请稍后重试。',
+        error instanceof Error ? error.message : '批量补跑失败，请稍后重试。',
       );
     } finally {
       setIsRunning(false);
@@ -100,14 +100,13 @@ export function BatchAnalysisRunner({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Batch Analysis
+            批量补跑
           </p>
           <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
-            先用一个轻入口，把这一页或缺失结果的仓库批量补分析。
+            先用一个轻入口，把这一页需要的项目批量补跑判断。
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            当前支持两种模式：直接对“当前页仓库”执行，或者让后端按
-            `onlyIfMissing + limit` 自动挑选缺少分析结果的仓库。
+            你可以直接补跑当前页，也可以只补那些还缺判断结果的项目。
           </p>
         </div>
 
@@ -121,7 +120,7 @@ export function BatchAnalysisRunner({
             disabled={isRunning || selectedCount === 0}
             className="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isRunning ? '批量运行中...' : '批量运行分析'}
+            {isRunning ? '批量补跑中...' : '批量补跑判断'}
           </button>
           <button
             type="button"
@@ -170,10 +169,10 @@ export function BatchAnalysisRunner({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Batch Analysis Task
+                后台执行
               </p>
               <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
-                批量分析已进入后台队列
+                批量补跑已经进入后台
               </h3>
               <p className="mt-3 text-sm leading-7 text-slate-600">
                 任务 ID：{task.jobId}。这次不会阻塞首页等待整批跑完，你可以先继续浏览仓库，再去任务页看进度和重试结果。

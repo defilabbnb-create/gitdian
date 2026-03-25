@@ -4,11 +4,20 @@ import Link from 'next/link';
 import { startTransition, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnalysisRunConfig } from '@/components/repositories/analysis-run-config';
+import { getUserBehaviorSignalPayload } from '@/lib/action-loop';
 import { enqueueRepositoryAnalysis } from '@/lib/api/repositories';
 import { EnqueuedTaskResponse, RunAnalysisRequest } from '@/lib/types/repository';
 
 type AnalysisRunRunnerProps = {
   repositoryId: string;
+  categoryLabel?: string | null;
+  projectType?: string | null;
+  targetUsersLabel?: string | null;
+  useCaseLabel?: string | null;
+  patternKeys?: string[];
+  hasRealUser?: boolean | null;
+  hasClearUseCase?: boolean | null;
+  isDirectlyMonetizable?: boolean | null;
 };
 
 const defaultConfig: Required<RunAnalysisRequest> = {
@@ -17,9 +26,27 @@ const defaultConfig: Required<RunAnalysisRequest> = {
   runIdeaFit: true,
   runIdeaExtract: true,
   forceRerun: false,
+  userSuccessPatterns: [],
+  userFailurePatterns: [],
+  preferredCategories: [],
+  avoidedCategories: [],
+  recentValidatedWins: [],
+  recentDroppedReasons: [],
+  userPreferencePriorityBoost: 0,
+  userPreferencePriorityReasons: [],
 };
 
-export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
+export function AnalysisRunner({
+  repositoryId,
+  categoryLabel,
+  projectType,
+  targetUsersLabel,
+  useCaseLabel,
+  patternKeys,
+  hasRealUser,
+  hasClearUseCase,
+  isDirectlyMonetizable,
+}: AnalysisRunRunnerProps) {
   const router = useRouter();
   const [config, setConfig] = useState<RunAnalysisRequest>(defaultConfig);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -45,12 +72,25 @@ export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
     setSuccessMessage(null);
 
     try {
-      const nextTask = await enqueueRepositoryAnalysis(repositoryId, config);
+      const nextTask = await enqueueRepositoryAnalysis(repositoryId, {
+        ...config,
+        ...getUserBehaviorSignalPayload({
+          categoryLabel,
+          projectType,
+          targetUsersLabel,
+          useCaseLabel,
+          patternKeys,
+          hasRealUser,
+          hasClearUseCase,
+          isDirectlyMonetizable,
+          currentActionStatus: 'NOT_STARTED',
+        }),
+      });
       setTask(nextTask);
       setSuccessMessage(
         config.forceRerun
-          ? '分析任务已重新入队，详情页和关联任务记录正在刷新。'
-          : '分析任务已创建，详情页和关联任务记录正在刷新。',
+          ? '这个项目已重新进入判断队列，稍后回来查看新结论。'
+          : '这个项目已经进入判断队列，稍后回来查看新结论。',
       );
 
       startTransition(() => {
@@ -58,7 +98,7 @@ export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
       });
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : '运行分析失败，请稍后重试。',
+        error instanceof Error ? error.message : '补跑判断失败，请稍后重试。',
       );
     } finally {
       setIsRunning(false);
@@ -71,10 +111,10 @@ export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-              Analysis Runner
+              补跑判断
             </p>
             <p className="mt-2 text-sm leading-6 text-slate-200">
-              一键串行执行粗筛、完整性、创业机会评分和点子提取。
+              当你要重新核对这个项目时，用这里补跑主判断链路。
             </p>
           </div>
         </div>
@@ -85,7 +125,7 @@ export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
           </span>
           {config.forceRerun ? (
             <span className="rounded-full border border-amber-300/40 bg-amber-50/10 px-3 py-1 text-amber-100">
-              Force rerun
+              强制重跑
             </span>
           ) : null}
         </div>
@@ -97,7 +137,7 @@ export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
             disabled={isRunning || selectedCount === 0}
             className="inline-flex min-w-28 items-center justify-center rounded-full border border-sky-300/40 bg-sky-400/15 px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isRunning ? '分析运行中...' : config.forceRerun ? '重新分析' : '运行分析'}
+            {isRunning ? '补跑中...' : config.forceRerun ? '重新补跑判断' : '立即补跑判断'}
           </button>
           <button
             type="button"
@@ -135,7 +175,7 @@ export function AnalysisRunner({ repositoryId }: AnalysisRunRunnerProps) {
             href={`/jobs?repositoryId=${repositoryId}&focusJobId=${task.jobId}#job-${task.jobId}`}
             className="mt-4 inline-flex items-center rounded-full border border-white/10 bg-black/10 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/10"
           >
-            查看任务记录
+            查看执行记录
           </Link>
         ) : null}
       </div>

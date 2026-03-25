@@ -1,15 +1,10 @@
 import { notFound } from 'next/navigation';
-import { RepositoryDetailCompleteness } from '@/components/repositories/repository-detail-completeness';
-import { RepositoryDetailContentSummary } from '@/components/repositories/repository-detail-content-summary';
-import { RepositoryDetailFavorite } from '@/components/repositories/repository-detail-favorite';
+import { RepositoryAnalysisWorkbench } from '@/components/repositories/repository-analysis-workbench';
+import { RepositoryDetailConclusion } from '@/components/repositories/repository-detail-conclusion';
 import { RepositoryDetailHeader } from '@/components/repositories/repository-detail-header';
-import { RepositoryDetailIdeaExtract } from '@/components/repositories/repository-detail-idea-extract';
-import { RepositoryDetailIdeaFit } from '@/components/repositories/repository-detail-idea-fit';
-import { RepositoryDetailMetadata } from '@/components/repositories/repository-detail-metadata';
-import { RepositoryDetailMetrics } from '@/components/repositories/repository-detail-metrics';
-import { RepositoryWorkflowAdvice } from '@/components/repositories/repository-workflow-advice';
 import { RelatedRepositories } from '@/components/repositories/related-repositories';
 import { RepositoryRelatedJobs } from '@/components/repositories/repository-related-jobs';
+import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getJobLogsForRepository } from '@/lib/api/job-logs';
 import { getRepositories, getRepositoryById } from '@/lib/api/repositories';
 import {
@@ -39,31 +34,45 @@ export default async function RepositoryDetailPage({
   let relatedRepositoriesErrorMessage: string | null = null;
 
   try {
-    repository = await getRepositoryById(id);
+    repository = await getRepositoryById(id, { timeoutMs: 8_000 });
   } catch (error) {
     if (error instanceof ApiRequestError && error.status === 404) {
       notFound();
     }
 
-    errorMessage =
-      error instanceof Error
-        ? error.message
-        : '仓库详情暂时无法加载，请稍后重试。';
+    errorMessage = getFriendlyRuntimeError(
+      error,
+      '仓库详情暂时无法加载，请稍后重试。',
+    );
   }
 
   if (repository) {
-    try {
-      relatedJobs = await getJobLogsForRepository(repository.id, 5);
-    } catch (error) {
-      relatedJobsErrorMessage =
-        error instanceof Error ? error.message : '关联任务记录暂时无法加载。';
+    const [relatedJobsResult, relatedRepositoriesResult] =
+      await Promise.allSettled([
+        getJobLogsForRepository(repository.id, 5, {
+          timeoutMs: 4_000,
+        }),
+        getRelatedRepositories(repository, {
+          timeoutMs: 4_000,
+        }),
+      ]);
+
+    if (relatedJobsResult.status === 'fulfilled') {
+      relatedJobs = relatedJobsResult.value;
+    } else {
+      relatedJobsErrorMessage = getFriendlyRuntimeError(
+        relatedJobsResult.reason,
+        '关联任务记录暂时无法加载。',
+      );
     }
 
-    try {
-      relatedRepositories = await getRelatedRepositories(repository);
-    } catch (error) {
-      relatedRepositoriesErrorMessage =
-        error instanceof Error ? error.message : '相邻推荐项目暂时无法加载。';
+    if (relatedRepositoriesResult.status === 'fulfilled') {
+      relatedRepositories = relatedRepositoriesResult.value;
+    } else {
+      relatedRepositoriesErrorMessage = getFriendlyRuntimeError(
+        relatedRepositoriesResult.reason,
+        '相邻推荐项目暂时无法加载。',
+      );
     }
   }
 
@@ -73,32 +82,48 @@ export default async function RepositoryDetailPage({
         {repository ? (
           <>
             <RepositoryDetailHeader repository={repository} />
-            <RepositoryDetailMetrics repository={repository} />
-            <RepositoryWorkflowAdvice repository={repository} />
-            <RepositoryDetailIdeaFit repository={repository} />
-            <RepositoryDetailIdeaExtract repository={repository} />
-            <RepositoryDetailCompleteness repository={repository} />
-            <RelatedRepositories
-              items={relatedRepositories}
-              errorMessage={relatedRepositoriesErrorMessage}
+            <RepositoryDetailConclusion
+              repository={repository}
+              relatedJobs={relatedJobs?.items ?? []}
             />
-            <RepositoryRelatedJobs
-              repositoryId={repository.id}
-              jobs={relatedJobs}
-              errorMessage={relatedJobsErrorMessage}
+            <RepositoryAnalysisWorkbench
+              repository={repository}
+              relatedJobs={relatedJobs?.items ?? []}
             />
-            <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
-              <RepositoryDetailMetadata repository={repository} />
-              <div className="space-y-6">
-                <RepositoryDetailFavorite repository={repository} />
-                <RepositoryDetailContentSummary repository={repository} />
+            <details className="group rounded-[32px] border border-slate-200 bg-white/85 p-6 shadow-sm backdrop-blur">
+              <summary className="cursor-pointer list-none">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      延伸参考
+                    </p>
+                    <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                      只有当你要继续横向比较时，再展开相关机会和关联任务。
+                    </h2>
+                  </div>
+                  <span className="text-sm font-semibold text-slate-600 transition group-open:rotate-180">
+                    展开
+                  </span>
+                </div>
+              </summary>
+
+              <div className="mt-6 grid gap-6 xl:grid-cols-2">
+                <RelatedRepositories
+                  items={relatedRepositories}
+                  errorMessage={relatedRepositoriesErrorMessage}
+                />
+                <RepositoryRelatedJobs
+                  repositoryId={repository.id}
+                  jobs={relatedJobs}
+                  errorMessage={relatedJobsErrorMessage}
+                />
               </div>
-            </div>
+            </details>
           </>
         ) : (
           <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
-              Load Failed
+              加载失败
             </p>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight text-rose-950">
               仓库详情暂时加载失败
@@ -113,15 +138,23 @@ export default async function RepositoryDetailPage({
   );
 }
 
-async function getRelatedRepositories(repository: RepositoryDetail) {
+async function getRelatedRepositories(
+  repository: RepositoryDetail,
+  options: {
+    timeoutMs?: number;
+  } = {},
+) {
   const candidates = await getRepositories({
     page: 1,
     pageSize: 12,
     view: 'all',
+    displayMode: 'insight',
     language: repository.language ?? undefined,
     opportunityLevel: repository.opportunityLevel ?? undefined,
     sortBy: repository.ideaFitScore ? 'ideaFitScore' : 'latest',
     order: 'desc',
+  }, {
+    timeoutMs: options.timeoutMs ?? 6_000,
   });
 
   const currentTopics = new Set((repository.topics ?? []).map(normalizeTopic));

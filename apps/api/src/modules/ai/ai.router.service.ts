@@ -37,11 +37,16 @@ export class AiRouterService {
     const primaryProvider = this.providers[primaryProviderName];
     const enrichedInput: GenerateJsonInput = {
       ...input,
-      timeoutMs: settings.ai.timeoutMs || input.timeoutMs,
-      modelOverride:
-        primaryProviderName === 'omlx'
-          ? settings.ai.models.omlx
-          : settings.ai.models.openai,
+      timeoutMs: this.resolveTimeoutMs(
+        input.taskType,
+        input.timeoutMs,
+        settings.ai.timeoutMs,
+      ),
+      modelOverride: this.resolveModelOverride(
+        primaryProviderName,
+        input.taskType,
+        settings,
+      ),
     };
 
     try {
@@ -64,10 +69,11 @@ export class AiRouterService {
       try {
         const result = await fallbackProvider.generateJson<T>({
           ...enrichedInput,
-          modelOverride:
-            fallbackProviderName === 'omlx'
-              ? settings.ai.models.omlx
-              : settings.ai.models.openai,
+          modelOverride: this.resolveModelOverride(
+            fallbackProviderName,
+            input.taskType,
+            settings,
+          ),
         });
         return {
           ...result,
@@ -95,6 +101,7 @@ export class AiRouterService {
       case 'basic_analysis':
       case 'idea_fit':
       case 'idea_extract':
+      case 'idea_snapshot':
       default:
         return defaultProvider;
     }
@@ -115,5 +122,105 @@ export class AiRouterService {
     }
 
     return fallbackProvider;
+  }
+
+  private resolveModelOverride(
+    providerName: AiProviderName,
+    taskType: AiTaskType,
+    settings: Awaited<ReturnType<SettingsService['getSettings']>>,
+  ) {
+    if (providerName === 'openai') {
+      return settings.ai.models.openai;
+    }
+
+    switch (taskType) {
+      case 'idea_snapshot':
+        if (this.readBooleanFromEnv('USE_HEAVY_MODEL_FOR_SNAPSHOT', true)) {
+          return (
+            settings.ai.models.omlxDeep ??
+            settings.ai.models.omlx ??
+            settings.ai.models.omlxLight
+          );
+        }
+
+        return (
+          settings.ai.models.omlxLight ??
+          settings.ai.models.omlx ??
+          settings.ai.models.omlxDeep
+        );
+      case 'completeness':
+      case 'idea_fit':
+      case 'idea_extract':
+      case 'basic_analysis':
+        return settings.ai.models.omlxDeep ?? settings.ai.models.omlx;
+      case 'rough_filter':
+      default:
+        return (
+          settings.ai.models.omlx ??
+          settings.ai.models.omlxDeep ??
+          settings.ai.models.omlxLight
+        );
+    }
+  }
+
+  private resolveTimeoutMs(
+    taskType: AiTaskType,
+    inputTimeoutMs: number | undefined,
+    settingsTimeoutMs: number,
+  ) {
+    const snapshotTimeoutMs = this.readTimeoutFromEnv(
+      'OMLX_TIMEOUT_MS_SNAPSHOT',
+      60_000,
+    );
+    const deepTimeoutMs = this.readTimeoutFromEnv(
+      'OMLX_TIMEOUT_MS_DEEP',
+      180_000,
+    );
+    const ideaExtractTimeoutMs = this.readTimeoutFromEnv(
+      'OMLX_TIMEOUT_MS_IDEA_EXTRACT',
+      deepTimeoutMs,
+    );
+
+    switch (taskType) {
+      case 'idea_snapshot':
+        return snapshotTimeoutMs;
+      case 'completeness':
+      case 'idea_fit':
+      case 'basic_analysis':
+        return deepTimeoutMs;
+      case 'idea_extract':
+        return ideaExtractTimeoutMs;
+      case 'rough_filter':
+      default:
+        return inputTimeoutMs ?? settingsTimeoutMs;
+    }
+  }
+
+  private readTimeoutFromEnv(envName: string, fallback: number) {
+    const parsed = Number.parseInt(process.env[envName] ?? '', 10);
+
+    if (!Number.isFinite(parsed) || parsed < 1_000) {
+      return fallback;
+    }
+
+    return parsed;
+  }
+
+  private readBooleanFromEnv(envName: string, fallback: boolean) {
+    const raw = process.env[envName]?.trim().toLowerCase();
+
+    if (!raw) {
+      return fallback;
+    }
+
+    if (['1', 'true', 'yes', 'on'].includes(raw)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'off'].includes(raw)) {
+      return false;
+    }
+
+    return fallback;
   }
 }

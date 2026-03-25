@@ -15,8 +15,36 @@ export enum RepositorySortBy {
   STARS = 'stars',
   FINAL_SCORE = 'finalScore',
   IDEA_FIT_SCORE = 'ideaFitScore',
+  MONEY_PRIORITY = 'moneyPriority',
+  INSIGHT_PRIORITY = 'insightPriority',
   CREATED_AT = 'createdAt',
   CREATED_AT_GITHUB = 'createdAtGithub',
+}
+
+export enum RepositoryRecommendedAction {
+  BUILD = 'BUILD',
+  CLONE = 'CLONE',
+  IGNORE = 'IGNORE',
+}
+
+export enum RepositoryFinalVerdict {
+  GOOD = 'GOOD',
+  OK = 'OK',
+  BAD = 'BAD',
+}
+
+export enum RepositoryDecisionSource {
+  MANUAL = 'manual',
+  CLAUDE = 'claude',
+  LOCAL = 'local',
+  FALLBACK = 'fallback',
+}
+
+export enum RepositoryFounderPriority {
+  P0 = 'P0',
+  P1 = 'P1',
+  P2 = 'P2',
+  P3 = 'P3',
 }
 
 export enum SortOrder {
@@ -110,6 +138,56 @@ export class QueryRepositoriesDto {
   @Transform(booleanQueryTransform)
   @IsBoolean()
   hasExtractedIdea?: boolean;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  hasPromisingIdeaSnapshot?: boolean;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  hasGoodInsight?: boolean;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  hasManualInsight?: boolean;
+
+  @IsOptional()
+  @IsEnum(RepositoryRecommendedAction)
+  recommendedAction?: RepositoryRecommendedAction;
+
+  @IsOptional()
+  @IsEnum(RepositoryFinalVerdict)
+  finalVerdict?: RepositoryFinalVerdict;
+
+  @IsOptional()
+  @IsString()
+  finalCategory?: string;
+
+  @IsOptional()
+  @IsEnum(RepositoryFounderPriority)
+  moneyPriority?: RepositoryFounderPriority;
+
+  @IsOptional()
+  @IsEnum(RepositoryDecisionSource)
+  decisionSource?: RepositoryDecisionSource;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  hasConflict?: boolean;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  needsRecheck?: boolean;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  hasTrainingHints?: boolean;
 
   @IsOptional()
   @Type(() => Number)

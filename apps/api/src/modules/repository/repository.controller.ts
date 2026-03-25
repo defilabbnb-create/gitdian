@@ -1,10 +1,20 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CreateRepositoryDto } from './dto/create-repository.dto';
 import { QueryRepositoriesDto } from './dto/query-repositories.dto';
+import { UpdateManualInsightDto } from './dto/update-manual-insight.dto';
 import { UpdateRepositoryFavoriteDto } from './dto/update-repository-favorite.dto';
 import { UpdateRepositoryScoresDto } from './dto/update-repository-scores.dto';
 import { UpdateRepositoryDto } from './dto/update-repository.dto';
 import { RepositoryService } from './repository.service';
+
+type RunClaudeReviewDto = {
+  userSuccessPatterns?: string[];
+  userFailurePatterns?: string[];
+  preferredCategories?: string[];
+  avoidedCategories?: string[];
+  recentValidatedWins?: string[];
+  recentDroppedReasons?: string[];
+};
 
 @Controller('repositories')
 export class RepositoryController {
@@ -99,6 +109,37 @@ export class RepositoryController {
       success: true,
       data,
       message: 'Repository favorite status updated successfully.',
+    };
+  }
+
+  @Post(':id/manual-insight')
+  async updateManualInsight(
+    @Param('id') id: string,
+    @Body() updateManualInsightDto: UpdateManualInsightDto,
+  ) {
+    const data = await this.repositoryService.updateManualInsight(
+      id,
+      updateManualInsightDto,
+    );
+
+    return {
+      success: true,
+      data,
+      message: 'Repository manual insight updated successfully.',
+    };
+  }
+
+  @Post(':id/claude-review')
+  async runClaudeReview(
+    @Param('id') id: string,
+    @Body() runClaudeReviewDto: RunClaudeReviewDto = {},
+  ) {
+    const data = await this.repositoryService.runClaudeReview(id, runClaudeReviewDto);
+
+    return {
+      success: true,
+      data,
+      message: 'Repository Claude review attempted successfully.',
     };
   }
 }

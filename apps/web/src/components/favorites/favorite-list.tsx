@@ -1,3 +1,5 @@
+'use client';
+
 import {
   FavoriteListQueryState,
   FavoriteWithRepositorySummary,
@@ -17,13 +19,13 @@ export function FavoriteList({ items, pagination, query }: FavoriteListProps) {
     return (
       <section className="rounded-[32px] border border-dashed border-slate-300 bg-white/80 p-10 text-center shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-          Empty Result
+          暂无结果
         </p>
         <h2 className="mt-4 text-2xl font-semibold tracking-tight text-slate-950">
-          当前筛选条件下没有收藏项目
+          现在没有需要继续跟的收藏项
         </h2>
         <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-slate-600">
-          可以先回列表页收藏几个高价值仓库，或者放宽筛选条件查看已有收藏。
+          可以先回项目页收藏几个值得继续跟的项目，或者放宽筛选条件继续查看。
         </p>
       </section>
     );

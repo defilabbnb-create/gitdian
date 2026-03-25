@@ -50,7 +50,7 @@ export function JobFilters({ query }: JobFiltersProps) {
       <div className="grid gap-4 md:grid-cols-3">
         <label className="space-y-2">
           <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-            Job Name
+            任务类型
           </span>
           <input
             name="jobName"
@@ -62,7 +62,7 @@ export function JobFilters({ query }: JobFiltersProps) {
 
         <label className="space-y-2">
           <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-            Status
+            任务状态
           </span>
           <select
             name="jobStatus"

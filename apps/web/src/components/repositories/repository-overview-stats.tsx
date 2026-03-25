@@ -14,7 +14,7 @@ export function RepositoryOverviewStats({
     return (
       <section className="rounded-[32px] border border-dashed border-slate-300 bg-white/80 p-8 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-          Overview Unavailable
+          概览暂不可用
         </p>
         <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
           首页概览暂时不可用
@@ -31,7 +31,7 @@ export function RepositoryOverviewStats({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            System Overview
+            系统概览
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
             先看整体盘面，再决定往哪批项目继续钻。

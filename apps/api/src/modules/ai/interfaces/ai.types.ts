@@ -3,7 +3,8 @@ export type AiTaskType =
   | 'completeness'
   | 'basic_analysis'
   | 'idea_extract'
-  | 'idea_fit';
+  | 'idea_fit'
+  | 'idea_snapshot';
 
 export type AiProviderName = 'omlx' | 'openai';
 

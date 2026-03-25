@@ -123,6 +123,7 @@ model Repository {
   content               RepositoryContent?
   analysis              RepositoryAnalysis?
   favorite              Favorite?
+  cachedRanking         RepositoryCachedRanking?
 
   @@index([ownerLogin, name])
   @@index([status])
@@ -134,6 +135,28 @@ model Repository {
   @@index([updatedAtGithub])
   @@index([pushedAtGithub])
   @@index([categoryL1, categoryL2])
+}
+
+model RepositoryCachedRanking {
+  repoId            String     @id
+  moneyScore        Decimal    @db.Decimal(10, 4)
+  moneyDecision     String
+  moneyPriority     String
+  finalVerdict      String
+  finalAction       String
+  decisionSource    String
+  hasConflict       Boolean    @default(false)
+  needsRecheck      Boolean    @default(false)
+  hasTrainingHints  Boolean    @default(false)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  repository        Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([moneyScore(sort: Desc), updatedAt(sort: Desc)])
+  @@index([moneyPriority, moneyScore(sort: Desc)])
+  @@index([finalVerdict, finalAction, moneyScore(sort: Desc)])
+  @@index([decisionSource, moneyScore(sort: Desc)])
+  @@index([needsRecheck, hasConflict, moneyScore(sort: Desc)])
 }
 
 model RepositorySnapshot {
@@ -185,6 +208,19 @@ model RepositoryAnalysis {
   id                String     @id @default(cuid())
   repositoryId      String     @unique
   analysisJson      Json?
+  ideaSnapshotJson  Json?
+  insightJson       Json?
+  claudeReviewJson  Json?
+  claudeReviewStatus String?
+  claudeReviewProvider String?
+  claudeReviewModel String?
+  claudeReviewRequestHash String?
+  claudeReviewReviewedAt DateTime?
+  claudeReviewError String?
+  manualVerdict     String?
+  manualAction      String?
+  manualNote        String?
+  manualUpdatedAt   DateTime?
   completenessJson  Json?
   ideaFitJson       Json?
   extractedIdeaJson Json?
@@ -203,6 +239,7 @@ model RepositoryAnalysis {
 
   @@index([provider, modelName])
   @@index([analyzedAt(sort: Desc)])
+  @@index([claudeReviewReviewedAt(sort: Desc)])
 }
 
 model Favorite {
@@ -223,6 +260,33 @@ model SystemConfig {
   configValue Json
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model DailyRadarSummary {
+  id                  String   @id @default(cuid())
+  date                String   @unique
+  fetchedRepositories Int      @default(0)
+  snapshotGenerated   Int      @default(0)
+  deepAnalyzed        Int      @default(0)
+  promisingCandidates Int      @default(0)
+  goodIdeas           Int      @default(0)
+  cloneCandidates     Int      @default(0)
+  ignoredIdeas        Int      @default(0)
+  topCategories       Json?
+  topRepositoryIds    Json?
+  topGoodRepositoryIds   Json?
+  topCloneRepositoryIds  Json?
+  topIgnoredRepositoryIds Json?
+  topItems            Json?
+  telegramSentAt      DateTime?
+  telegramMessageId   String?
+  telegramSendStatus  String?
+  telegramSendError   String?
+  metadata            Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([date(sort: Desc)])
 }
 
 model JobLog {

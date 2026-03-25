@@ -6,7 +6,7 @@ type RepositoryDetailMetricsProps = {
 
 function formatScore(value?: number | null) {
   if (typeof value !== 'number') {
-    return '--';
+    return '待补分析';
   }
 
   return Math.round(value);

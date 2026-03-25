@@ -127,12 +127,24 @@ class UpdateAiTaskRoutingSettingsDto {
   @IsOptional()
   @IsIn(['omlx', 'openai'])
   idea_extract?: AiProviderName;
+
+  @IsOptional()
+  @IsIn(['omlx', 'openai'])
+  idea_snapshot?: AiProviderName;
 }
 
 class UpdateAiModelsSettingsDto {
   @IsOptional()
   @IsString()
   omlx?: string | null;
+
+  @IsOptional()
+  @IsString()
+  omlxLight?: string | null;
+
+  @IsOptional()
+  @IsString()
+  omlxDeep?: string | null;
 
   @IsOptional()
   @IsString()

@@ -35,6 +35,8 @@ export type SettingsPayload = {
     };
     models: {
       omlx: string | null;
+      omlxLight: string | null;
+      omlxDeep: string | null;
       openai: string | null;
     };
     timeoutMs: number;
@@ -62,6 +64,12 @@ export type ProviderHealthStatus = {
   error: string | null;
 };
 
+export type AiHealthPayload = {
+  omlx: ProviderHealthStatus;
+  openai: ProviderHealthStatus;
+  claude: ProviderHealthStatus;
+};
+
 export type SettingsHealthPayload = {
   database: {
     ok: boolean;
@@ -75,6 +83,19 @@ export type SettingsHealthPayload = {
   github: {
     ok: boolean;
     hasToken: boolean;
+    hasTokenPool: boolean;
+    tokenPoolSize: number;
+    usingMultiToken: boolean;
+    anonymousFallback: boolean;
+    lastKnownRateLimitStatus: {
+      tokenIndex: number | null;
+      requestType: 'search' | 'enrichment' | 'health';
+      limited: boolean;
+      remaining: number | null;
+      resetAt: string | null;
+      retryAfterMs: number | null;
+      updatedAt: string;
+    } | null;
     latencyMs: number | null;
     error: string | null;
   };

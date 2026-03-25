@@ -11,10 +11,15 @@ export type RepositorySortBy =
   | 'stars'
   | 'finalScore'
   | 'ideaFitScore'
+  | 'moneyPriority'
+  | 'insightPriority'
   | 'createdAt'
   | 'createdAtGithub';
 export type SortOrder = 'asc' | 'desc';
+export type RepositoryDisplayMode = 'insight' | 'detail';
 export type RepositoryRecommendedView =
+  | 'moneyFirst'
+  | 'bestIdeas'
   | 'all'
   | 'highOpportunity'
   | 'highOpportunityUnfavorited'
@@ -22,21 +27,111 @@ export type RepositoryRecommendedView =
   | 'ideaExtractionPending'
   | 'pendingAnalysis'
   | 'favoritedPendingAnalysis'
-  | 'newRadar';
+  | 'newRadar'
+  | 'backfilledPromising';
 export type FavoritePriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type FavoriteSortBy = 'createdAt' | 'updatedAt' | 'finalScore' | 'stars';
 export type JobStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+export type RepositoryIdeaMainCategory =
+  | 'tools'
+  | 'platform'
+  | 'ai'
+  | 'data'
+  | 'infra'
+  | 'content'
+  | 'game'
+  | 'other';
+export type RepositoryIdeaNextAction = 'KEEP' | 'SKIP' | 'DEEP_ANALYZE';
+export type RepositoryInsightVerdict = 'GOOD' | 'OK' | 'BAD';
+export type RepositoryInsightAction = 'BUILD' | 'CLONE' | 'IGNORE';
+export type RepositoryDecisionSource = 'manual' | 'claude' | 'local' | 'fallback';
+export type RepositoryFounderPriority = 'P0' | 'P1' | 'P2' | 'P3';
+export type RepositoryOneLinerStrength = 'STRONG' | 'MEDIUM' | 'WEAK';
+export type RepositoryAnalysisStatus =
+  | 'NOT_STARTED'
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'SKIPPED_BY_GATE'
+  | 'SKIPPED_BY_STRENGTH'
+  | 'FAILED';
+export type RepositoryDerivedAnalysisStatus =
+  | 'NOT_READY'
+  | 'SNAPSHOT_ONLY'
+  | 'INSIGHT_READY'
+  | 'DISPLAY_READY'
+  | 'DEEP_PENDING'
+  | 'DEEP_DONE'
+  | 'REVIEW_PENDING'
+  | 'REVIEW_DONE'
+  | 'SKIPPED_BY_GATE'
+  | 'FAILED';
+export type RepositoryDisplayStatus =
+  | 'HIDDEN'
+  | 'BASIC_READY'
+  | 'TRUSTED_READY'
+  | 'HIGH_CONFIDENCE_READY'
+  | 'UNSAFE';
+export type RepositoryIncompleteReason =
+  | 'NO_SNAPSHOT'
+  | 'NO_INSIGHT'
+  | 'NO_FINAL_DECISION'
+  | 'NO_DEEP_ANALYSIS'
+  | 'NO_CLAUDE_REVIEW'
+  | 'SKIPPED_BY_GATE'
+  | 'SKIPPED_BY_STRENGTH'
+  | 'SKIPPED_BY_SELF_TUNING'
+  | 'FALLBACK_ONLY'
+  | 'CONFLICT_HELD_BACK'
+  | 'QUEUED_NOT_FINISHED'
+  | 'FAILED_DURING_ANALYSIS'
+  | 'UNKNOWN';
+export type RepositoryIdeaExtractStatus =
+  | 'NOT_STARTED'
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'SKIPPED_BY_GATE'
+  | 'SKIPPED_BY_STRENGTH'
+  | 'FAILED';
+export type RepositoryIdeaExtractMode = 'full' | 'light' | 'skip';
+export type MoneyPriorityTier =
+  | 'MUST_LOOK'
+  | 'WORTH_BUILDING'
+  | 'WORTH_CLONING'
+  | 'LOW_PRIORITY'
+  | 'IGNORE';
+export type MoneyDecision =
+  | 'MUST_BUILD'
+  | 'HIGH_VALUE'
+  | 'CLONEABLE'
+  | 'LOW_VALUE'
+  | 'IGNORE'
+  | 'BUILDABLE'
+  | 'CLONE_ONLY'
+  | 'NOT_WORTH';
 
 const repositoryOpportunityLevels = ['LOW', 'MEDIUM', 'HIGH'] as const;
+const repositoryFounderPriorityValues = ['P0', 'P1', 'P2', 'P3'] as const;
+const repositoryDecisionSourceValues = [
+  'manual',
+  'claude',
+  'local',
+  'fallback',
+] as const;
 const repositorySortByValues = [
   'latest',
   'stars',
   'finalScore',
   'ideaFitScore',
+  'moneyPriority',
+  'insightPriority',
   'createdAt',
   'createdAtGithub',
 ] as const;
 const repositoryRecommendedViewValues = [
+  'moneyFirst',
+  'bestIdeas',
   'all',
   'highOpportunity',
   'highOpportunityUnfavorited',
@@ -45,7 +140,9 @@ const repositoryRecommendedViewValues = [
   'pendingAnalysis',
   'favoritedPendingAnalysis',
   'newRadar',
+  'backfilledPromising',
 ] as const;
+const repositoryDisplayModeValues = ['insight', 'detail'] as const;
 const sortOrderValues = ['asc', 'desc'] as const;
 const favoritePriorityValues = ['LOW', 'MEDIUM', 'HIGH'] as const;
 const favoriteSortByValues = [
@@ -67,6 +164,7 @@ export interface RepositoryExtractedIdea {
   ideaSummary?: string;
   productForm?: 'SAAS' | 'PLUGIN' | 'API' | 'TOOL_SITE' | 'INTERNAL_TOOL';
   confidence?: number;
+  extractMode?: RepositoryIdeaExtractMode;
   problem?: string;
   solution?: string;
   targetUsers?: string[];
@@ -113,9 +211,406 @@ export interface RepositoryIdeaFitAnalysis {
   opportunityTags: string[];
 }
 
+export interface RepositoryIdeaSnapshot {
+  oneLinerZh: string;
+  isPromising: boolean;
+  reason: string;
+  category: {
+    main: RepositoryIdeaMainCategory;
+    sub: string;
+  };
+  toolLike: boolean;
+  nextAction: RepositoryIdeaNextAction;
+}
+
+export interface RepositoryInsightRecord {
+  oneLinerZh: string;
+  oneLinerMeta?: {
+    confidence?: 'high' | 'medium' | 'low';
+    reasoning?: string[];
+    riskFlags?: string[];
+  } | null;
+  oneLinerStrength?: RepositoryOneLinerStrength;
+  verdict: RepositoryInsightVerdict;
+  verdictReason: string;
+  action: RepositoryInsightAction;
+  actionLabel?: string;
+  completenessScore: number;
+  completenessLevel: RepositoryCompletenessLevel;
+  category: {
+    main: RepositoryIdeaMainCategory;
+    sub: string;
+  };
+  categoryDisplay?: {
+    main: string;
+    sub: string;
+    label: string;
+  };
+  projectReality?: {
+    type: 'product' | 'tool' | 'model' | 'infra' | 'demo';
+    hasRealUser?: boolean;
+    hasClearUseCase?: boolean;
+    isDirectlyMonetizable?: boolean;
+    whyNotProduct?: string | null;
+  } | null;
+  anchorMatch?: 'GOOD' | 'CLONE' | 'BAD';
+  confidence?: number;
+  whyNotProduct?: string | null;
+  summaryTags: string[];
+}
+
+export interface RepositoryManualOverrideRecord {
+  verdict?: RepositoryInsightVerdict | null;
+  action?: RepositoryInsightAction | null;
+  note?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface RepositoryClaudeReviewPayload {
+  oneLinerZh: string;
+  oneLinerMeta?: {
+    confidence?: number;
+    confidenceLevel?: 'high' | 'medium' | 'low';
+    reasoning?: string[];
+    riskFlags?: string[];
+    strength?: RepositoryOneLinerStrength | null;
+  } | null;
+  projectType: 'product' | 'tool' | 'model' | 'infra' | 'demo';
+  hasRealUser: boolean;
+  hasClearUseCase: boolean;
+  isDirectlyMonetizable: boolean;
+  hasProductizationPath?: boolean;
+  businessJudgement?: RepositoryClaudeBusinessJudgement | null;
+  businessSignals?: RepositoryClaudeBusinessSignals | null;
+  moneyDecision?: MoneyDecision | null;
+  verdict: RepositoryInsightVerdict;
+  action: RepositoryInsightAction;
+  reason: string;
+  confidence: number;
+  whyNotProduct?: string | null;
+  reviewNotes?: string[];
+  reviewedAt?: string;
+  provider?: string;
+  model?: string | null;
+  promptVersion?: string;
+}
+
+export interface RepositoryClaudeReviewRecord {
+  status?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  reviewedAt?: string | null;
+  error?: string | null;
+  review?: RepositoryClaudeReviewPayload | null;
+}
+
+export interface RepositoryClaudeBusinessJudgement {
+  isFounderFit: boolean;
+  isSmallTeamFriendly: boolean;
+  hasNearTermMonetizationPath: boolean;
+  moneyPriorityHint: MoneyPriorityTier | MoneyDecision | null;
+  moneyReasonZh: string;
+}
+
+export interface RepositoryClaudeBusinessSignals {
+  targetUser: string;
+  willingnessToPay: 'high' | 'medium' | 'low';
+  monetizationModel: string;
+  urgency: 'high' | 'medium' | 'low';
+  founderFit: boolean;
+  buildDifficulty: 'low' | 'medium' | 'high';
+}
+
+export interface RepositoryMoneyPriorityRecord {
+  score: number;
+  moneyScore?: number;
+  tier: MoneyPriorityTier;
+  moneyDecision?: MoneyDecision;
+  moneyDecisionLabelZh?: string;
+  labelZh: string;
+  reasonZh: string;
+  recommendedMoveZh: string;
+  projectTypeLabelZh: string;
+  targetUsersZh: string;
+  monetizationSummaryZh: string;
+  source: 'manual_override' | 'claude_review' | 'local_insight' | 'fallback';
+  businessSignals?: RepositoryClaudeBusinessSignals | null;
+  moneySignals?: {
+    hasClearUser: boolean;
+    hasClearUseCase: boolean;
+    hasPainPoint: boolean;
+    hasMonetizationPath: boolean;
+    isRepeatUsage: boolean;
+    isSmallTeamBuildable: boolean;
+    isInfraOrModel: boolean;
+    isTemplateOrDemo: boolean;
+  } | null;
+  signals: {
+    projectType: 'product' | 'tool' | 'model' | 'infra' | 'demo';
+    hasRealUser: boolean;
+    hasClearUseCase: boolean;
+    hasProductizationPath: boolean;
+    isDirectlyMonetizable: boolean;
+    isFounderFit: boolean;
+    isSmallTeamFriendly: boolean;
+    hasNearTermMonetizationPath: boolean;
+    isDeveloperWorkflowTool: boolean;
+    isSaasLike: boolean;
+    looksTemplateOrDemo: boolean;
+    looksInfraLayer: boolean;
+    isSmallTeamExecutable: boolean;
+  };
+}
+
+export interface RepositoryFinalDecisionRecord {
+  repoId: string;
+  oneLinerZh: string;
+  oneLinerStrength?: RepositoryOneLinerStrength | null;
+  verdict: RepositoryInsightVerdict;
+  action: RepositoryInsightAction;
+  category: string;
+  categoryLabelZh: string;
+  categoryMain?: string | null;
+  categorySub?: string | null;
+  projectType?: 'product' | 'tool' | 'model' | 'infra' | 'demo' | null;
+  moneyPriority: RepositoryFounderPriority;
+  moneyPriorityLabelZh: string;
+  reasonZh: string;
+  source: RepositoryDecisionSource;
+  sourceLabelZh: string;
+  hasConflict: boolean;
+  needsRecheck: boolean;
+  hasTrainingHints: boolean;
+  hasClaudeReview: boolean;
+  hasManualOverride: boolean;
+  comparison: {
+    localVerdict?: RepositoryInsightVerdict | null;
+    localAction?: RepositoryInsightAction | null;
+    localOneLinerZh?: string | null;
+    claudeVerdict?: RepositoryInsightVerdict | null;
+    claudeAction?: RepositoryInsightAction | null;
+    claudeOneLinerZh?: string | null;
+    conflictReasons?: string[];
+  };
+  moneyDecision: {
+    labelZh: string;
+    score: number;
+    recommendedMoveZh: string;
+    targetUsersZh: string;
+    monetizationSummaryZh: string;
+    reasonZh: string;
+  };
+  decisionSummary: RepositoryFinalDecisionDisplaySummaryRecord;
+}
+
+export interface RepositoryFinalDecisionDisplaySummaryRecord {
+  headlineZh: string;
+  judgementLabelZh: string;
+  verdictLabelZh: string;
+  actionLabelZh: string;
+  finalDecisionLabelZh: string;
+  moneyPriorityLabelZh: string;
+  categoryLabelZh: string;
+  recommendedMoveZh: string;
+  worthDoingLabelZh: string;
+  reasonZh: string;
+  targetUsersZh: string;
+  monetizationSummaryZh: string;
+  sourceLabelZh: string;
+}
+
+export interface RepositoryLightAnalysisRecord {
+  targetUsers: string;
+  monetization: string;
+  whyItMatters: string;
+  nextStep: string;
+  caution?: string | null;
+  source: 'snapshot' | 'insight' | 'readme' | 'decision_fallback';
+}
+
+export interface RepositoryAnalysisStateRecord {
+  analysisStatus: RepositoryDerivedAnalysisStatus;
+  displayStatus: RepositoryDisplayStatus;
+  analysisStatusReason?: string | null;
+  displayStatusReason?: string | null;
+  incompleteReason?: RepositoryIncompleteReason | null;
+  incompleteReasons?: RepositoryIncompleteReason[];
+  displayReady: boolean;
+  trustedDisplayReady: boolean;
+  highConfidenceReady: boolean;
+  lightDeepReady: boolean;
+  fullDeepReady: boolean;
+  deepReady: boolean;
+  reviewEligible: boolean;
+  reviewReady: boolean;
+  fullyAnalyzed: boolean;
+  fallbackVisible: boolean;
+  unsafe: boolean;
+  lightAnalysis?: RepositoryLightAnalysisRecord | null;
+}
+
+export interface RepositoryCoreAssetRecord {
+  repoId: string;
+  repoFullName: string;
+  repoUrl: string;
+  oneLinerZh: string;
+  oneLinerStrength?: RepositoryOneLinerStrength | null;
+  finalVerdict: RepositoryInsightVerdict;
+  finalAction: RepositoryInsightAction;
+  finalCategory: string;
+  moneyPriorityTier?: RepositoryFounderPriority | null;
+  decisionSource: RepositoryDecisionSource;
+  lastReviewedAt?: string | null;
+}
+
+export interface RepositoryAnalysisAssetRecord {
+  assetType:
+    | 'idea_snapshot'
+    | 'completeness'
+    | 'idea_fit'
+    | 'idea_extract'
+    | 'insight';
+  analysisLevel: 'snapshot' | 'deep_l1' | 'deep_l2';
+  payload: Record<string, unknown>;
+  updatedAt?: string | null;
+}
+
+export interface RepositoryTrainingAssetRecord {
+  repoId: string;
+  localVerdict?: RepositoryInsightVerdict | null;
+  localAction?: RepositoryInsightAction | null;
+  claudeVerdict?: RepositoryInsightVerdict | null;
+  claudeAction?: RepositoryInsightAction | null;
+  mistakeTypes: string[];
+  suggestions: string[];
+  shouldTrain: boolean;
+  diffTypes?: string[];
+  auditProblemTypes?: string[];
+  auditSuggestions?: string[];
+  fallbackReplayDiff?: string[];
+}
+
+export interface RadarDailySummaryCategory {
+  main: RepositoryIdeaMainCategory;
+  sub: string;
+  count: number;
+}
+
+export interface RadarDailySummaryItem {
+  repositoryId: string;
+  fullName: string;
+  htmlUrl: string;
+  stars: number;
+  oneLinerZh: string;
+  oneLinerStrength?: RepositoryOneLinerStrength | null;
+  verdict: RepositoryInsightVerdict;
+  action: RepositoryInsightAction;
+  category: {
+    main: RepositoryIdeaMainCategory;
+    sub: string;
+  };
+  moneyPriorityScore: number;
+  moneyPriorityTier: MoneyPriorityTier;
+  moneyDecision?: MoneyDecision;
+  moneyDecisionLabelZh?: string;
+  moneyPriorityLabelZh: string;
+  moneyPriorityReasonZh: string;
+  recommendedMoveZh: string;
+  targetUsersZh: string;
+  monetizationSummaryZh: string;
+  hasManualOverride: boolean;
+  hasClaudeReview: boolean;
+  decisionSummary?: RepositoryFinalDecisionDisplaySummaryRecord | null;
+}
+
+export interface RadarDailyKeywordGroupSummary {
+  group: string;
+  fetchedRepositories: number;
+  snapshotQueued: number;
+  deepAnalyzed: number;
+  promisingCandidates: number;
+  goodIdeas: number;
+  cloneCandidates: number;
+  repositoryIds: string[];
+  lastRunAt?: string | null;
+}
+
+export interface RadarLatestClaudeAuditBrief {
+  auditedAt?: string | null;
+  severity: string;
+  summary?: string | null;
+  headline?: string | null;
+  overallBias?: string | null;
+}
+
+export interface RadarDailySummaryRecord {
+  id: string;
+  date: string;
+  fetchedRepositories: number;
+  snapshotGenerated: number;
+  deepAnalyzed: number;
+  promisingCandidates: number;
+  goodIdeas: number;
+  cloneCandidates: number;
+  ignoredIdeas: number;
+  topCategories: RadarDailySummaryCategory[];
+  topRepositoryIds: string[];
+  topGoodRepositoryIds: string[];
+  topCloneRepositoryIds: string[];
+  topIgnoredRepositoryIds: string[];
+  topItems: RadarDailySummaryItem[];
+  topMustBuildItems?: RadarDailySummaryItem[];
+  topHighValueItems?: RadarDailySummaryItem[];
+  topCloneableItems?: RadarDailySummaryItem[];
+  topGoodItems: RadarDailySummaryItem[];
+  topCloneItems: RadarDailySummaryItem[];
+  topIgnoredItems: RadarDailySummaryItem[];
+  keywordGroupStats?: RadarDailyKeywordGroupSummary[];
+  topKeywordGroups?: RadarDailyKeywordGroupSummary[];
+  latestClaudeAudit?: RadarLatestClaudeAuditBrief | null;
+  telegramSentAt?: string | null;
+  telegramMessageId?: string | null;
+  telegramSendStatus?: string | null;
+  telegramSendError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RadarRuntimeStatusRecord {
+  snapshotQueueSize: number;
+  deepQueueSize: number;
+  pendingBackfillJobs: number;
+  schedulerReason?: string | null;
+  runtimeUpdatedAt?: string | null;
+  maintenance?: {
+    timeoutStats?: {
+      ideaExtractTimeouts?: number;
+    } | null;
+    deepRuntimeStats?: {
+      ideaExtractMaxInflight?: number;
+      updatedAt?: string | null;
+    } | null;
+  } | null;
+}
+
 export interface RepositoryAnalysisRecord {
   id: string;
+  ideaSnapshotJson?: RepositoryIdeaSnapshot | null;
+  insightJson?: RepositoryInsightRecord | null;
+  manualOverride?: RepositoryManualOverrideRecord | null;
+  claudeReview?: RepositoryClaudeReviewRecord | null;
+  claudeReviewJson?: RepositoryClaudeReviewPayload | null;
+  claudeReviewStatus?: string | null;
+  claudeReviewProvider?: string | null;
+  claudeReviewModel?: string | null;
+  claudeReviewReviewedAt?: string | null;
+  claudeReviewError?: string | null;
   extractedIdeaJson?: RepositoryExtractedIdea | null;
+  ideaExtractStatus?: RepositoryIdeaExtractStatus | null;
+  ideaExtractStatusReason?: string | null;
+  ideaExtractMode?: RepositoryIdeaExtractMode | null;
+  deepAnalysisStatus?: RepositoryAnalysisStatus | null;
+  deepAnalysisStatusReason?: string | null;
   ideaFitJson?: RepositoryIdeaFitAnalysis | null;
   completenessJson?: RepositoryCompletenessAnalysis | null;
   negativeFlags?: string[] | null;
@@ -125,6 +620,7 @@ export interface RepositoryAnalysisRecord {
   analyzedAt?: string | null;
   promptVersion?: string | null;
   fallbackUsed?: boolean;
+  moneyPriority?: RepositoryMoneyPriorityRecord | null;
 }
 
 export interface RepositoryContentRecord {
@@ -185,12 +681,20 @@ export interface RepositoryListItem {
   ideaFitScore?: number | null;
   opportunityLevel?: RepositoryOpportunityLevel | null;
   finalScore?: number | null;
+  categoryL1?: string | null;
+  categoryL2?: string | null;
   decision: RepositoryDecision;
   isFavorited: boolean;
+  createdAtGithub?: string | null;
   createdAt: string;
   updatedAt: string;
   content?: RepositoryContentRecord | null;
   analysis?: RepositoryAnalysisRecord | null;
+  finalDecision?: RepositoryFinalDecisionRecord | null;
+  analysisState?: RepositoryAnalysisStateRecord | null;
+  coreAsset?: RepositoryCoreAssetRecord | null;
+  analysisAssets?: RepositoryAnalysisAssetRecord[] | null;
+  trainingAsset?: RepositoryTrainingAssetRecord | null;
   favorite?: RepositoryFavoriteRecord | null;
 }
 
@@ -253,6 +757,7 @@ export interface FetchRepositoriesRequest {
 }
 
 export interface FetchRepositoriesItemResult {
+  repositoryId?: string;
   githubRepoId: string;
   fullName: string;
   action: 'created' | 'updated' | 'failed';
@@ -267,6 +772,20 @@ export interface FetchRepositoriesResponse {
   updated: number;
   failed: number;
   items: FetchRepositoriesItemResult[];
+}
+
+export interface BackfillCreatedRepositoriesRequest {
+  days?: number;
+  perWindowLimit?: number;
+  language?: string;
+  starMin?: number;
+  runFastFilter?: boolean;
+  runIdeaSnapshot?: boolean;
+  runDeepAnalysis?: boolean;
+  deepAnalysisOnlyIfPromising?: boolean;
+  targetCategories?: Array<
+    'tools' | 'ai' | 'data' | 'infra' | 'platform' | 'content' | 'game' | 'other'
+  >;
 }
 
 export interface EnqueuedTaskResponse {
@@ -295,6 +814,14 @@ export interface RunAnalysisRequest {
   runIdeaFit?: boolean;
   runIdeaExtract?: boolean;
   forceRerun?: boolean;
+  userSuccessPatterns?: string[];
+  userFailurePatterns?: string[];
+  preferredCategories?: string[];
+  avoidedCategories?: string[];
+  recentValidatedWins?: string[];
+  recentDroppedReasons?: string[];
+  userPreferencePriorityBoost?: number;
+  userPreferencePriorityReasons?: string[];
 }
 
 export type RunAnalysisStepStatus = 'executed' | 'skipped' | 'failed';
@@ -338,6 +865,12 @@ export interface RunAnalysisStepResult {
 export interface RunAnalysisResponse {
   repositoryId: string;
   steps: RunAnalysisStepResult;
+}
+
+export interface UpdateManualInsightPayload {
+  verdict?: RepositoryInsightVerdict;
+  action?: RepositoryInsightAction;
+  note?: string;
 }
 
 export interface RunBatchAnalysisRequest extends RunAnalysisRequest {
@@ -404,6 +937,7 @@ export interface RepositoryListQueryState {
   page: number;
   pageSize: number;
   view: RepositoryRecommendedView;
+  displayMode: RepositoryDisplayMode;
   keyword?: string;
   language?: string;
   opportunityLevel?: RepositoryOpportunityLevel;
@@ -412,6 +946,17 @@ export interface RepositoryListQueryState {
   hasCompletenessAnalysis?: boolean;
   hasIdeaFitAnalysis?: boolean;
   hasExtractedIdea?: boolean;
+  hasPromisingIdeaSnapshot?: boolean;
+  hasGoodInsight?: boolean;
+  hasManualInsight?: boolean;
+  finalVerdict?: RepositoryInsightVerdict;
+  finalCategory?: string;
+  moneyPriority?: RepositoryFounderPriority;
+  decisionSource?: RepositoryDecisionSource;
+  hasConflict?: boolean;
+  needsRecheck?: boolean;
+  hasTrainingHints?: boolean;
+  recommendedAction?: RepositoryInsightAction;
   createdAfterDays?: number;
   minStars?: number;
   minFinalScore?: number;
@@ -521,15 +1066,37 @@ export function normalizeRepositoryListQuery(
   const language = toSingle(searchParams.language)?.trim();
   const viewRaw = toSingle(searchParams.view);
   const opportunityLevelRaw = toSingle(searchParams.opportunityLevel);
+  const finalVerdictRaw = toSingle(searchParams.finalVerdict);
+  const moneyPriorityRaw = toSingle(searchParams.moneyPriority);
+  const decisionSourceRaw = toSingle(searchParams.decisionSource);
   const view = repositoryRecommendedViewValues.includes(
-    viewRaw as RepositoryRecommendedView,
+    ((viewRaw === 'goodIdeas' ? 'bestIdeas' : viewRaw) as RepositoryRecommendedView),
   )
-    ? (viewRaw as RepositoryRecommendedView)
-    : 'all';
+    ? ((viewRaw === 'goodIdeas' ? 'bestIdeas' : viewRaw) as RepositoryRecommendedView)
+    : 'moneyFirst';
+  const displayModeRaw = toSingle(searchParams.displayMode);
+  const displayMode = repositoryDisplayModeValues.includes(
+    displayModeRaw as RepositoryDisplayMode,
+  )
+    ? (displayModeRaw as RepositoryDisplayMode)
+    : 'insight';
   const opportunityLevel = repositoryOpportunityLevels.includes(
     opportunityLevelRaw as RepositoryOpportunityLevel,
   )
     ? (opportunityLevelRaw as RepositoryOpportunityLevel)
+    : undefined;
+  const finalVerdict = ['GOOD', 'OK', 'BAD'].includes(String(finalVerdictRaw))
+    ? (String(finalVerdictRaw) as RepositoryInsightVerdict)
+    : undefined;
+  const moneyPriority = repositoryFounderPriorityValues.includes(
+    moneyPriorityRaw as RepositoryFounderPriority,
+  )
+    ? (moneyPriorityRaw as RepositoryFounderPriority)
+    : undefined;
+  const decisionSource = repositoryDecisionSourceValues.includes(
+    decisionSourceRaw as RepositoryDecisionSource,
+  )
+    ? (decisionSourceRaw as RepositoryDecisionSource)
     : undefined;
   const minStars = toPositiveNumber(searchParams.minStars);
   const minFinalScore = toPositiveNumber(searchParams.minFinalScore);
@@ -542,10 +1109,11 @@ export function normalizeRepositoryListQuery(
     ? (orderRaw as SortOrder)
     : 'desc';
 
-  return {
+  const baseQuery: RepositoryListQueryState = {
     page,
     pageSize,
     view,
+    displayMode,
     keyword: keyword || undefined,
     language: language || undefined,
     opportunityLevel,
@@ -554,17 +1122,56 @@ export function normalizeRepositoryListQuery(
     hasCompletenessAnalysis: toBoolean(searchParams.hasCompletenessAnalysis),
     hasIdeaFitAnalysis: toBoolean(searchParams.hasIdeaFitAnalysis),
     hasExtractedIdea: toBoolean(searchParams.hasExtractedIdea),
+    hasPromisingIdeaSnapshot: toBoolean(searchParams.hasPromisingIdeaSnapshot),
+    hasGoodInsight: toBoolean(searchParams.hasGoodInsight),
+    hasManualInsight: toBoolean(searchParams.hasManualInsight),
+    finalVerdict,
+    finalCategory: toSingle(searchParams.finalCategory)?.trim() || undefined,
+    moneyPriority,
+    decisionSource,
+    hasConflict: toBoolean(searchParams.hasConflict),
+    needsRecheck: toBoolean(searchParams.needsRecheck),
+    hasTrainingHints: toBoolean(searchParams.hasTrainingHints),
+    recommendedAction:
+      ['BUILD', 'CLONE', 'IGNORE'].includes(String(toSingle(searchParams.recommendedAction)))
+        ? (String(toSingle(searchParams.recommendedAction)) as RepositoryInsightAction)
+        : undefined,
     createdAfterDays: toPositiveNumber(searchParams.createdAfterDays),
     minStars,
     minFinalScore,
     sortBy,
     order,
   };
+
+  const shouldApplyBestIdeasPreset =
+    !viewRaw ||
+    (viewRaw === 'moneyFirst' &&
+      !searchParams.sortBy &&
+      !searchParams.hasGoodInsight &&
+      !searchParams.finalVerdict &&
+      !searchParams.moneyPriority &&
+      !searchParams.recommendedAction) ||
+    ((viewRaw === 'bestIdeas' || viewRaw === 'goodIdeas') &&
+      !searchParams.sortBy &&
+      !searchParams.hasGoodInsight &&
+      !searchParams.finalVerdict &&
+      !searchParams.moneyPriority &&
+      !searchParams.recommendedAction);
+
+  if (shouldApplyBestIdeasPreset) {
+    return applyRepositoryViewQuery(baseQuery, !viewRaw ? 'moneyFirst' : view);
+  }
+
+  return baseQuery;
 }
 
 export function buildRepositoryListSearchParams(
   query: Partial<RepositoryListQueryState>,
+  options: {
+    includeUiState?: boolean;
+  } = {},
 ) {
+  const includeUiState = options.includeUiState ?? true;
   const params = new URLSearchParams();
 
   if (query.page && query.page > 1) {
@@ -575,8 +1182,12 @@ export function buildRepositoryListSearchParams(
     params.set('pageSize', String(query.pageSize));
   }
 
-  if (query.view && query.view !== 'all') {
+  if (query.view && query.view !== 'moneyFirst') {
     params.set('view', query.view);
+  }
+
+  if (includeUiState && query.displayMode && query.displayMode !== 'insight') {
+    params.set('displayMode', query.displayMode);
   }
 
   if (query.keyword) {
@@ -611,6 +1222,50 @@ export function buildRepositoryListSearchParams(
     params.set('hasExtractedIdea', String(query.hasExtractedIdea));
   }
 
+  if (typeof query.hasPromisingIdeaSnapshot === 'boolean') {
+    params.set('hasPromisingIdeaSnapshot', String(query.hasPromisingIdeaSnapshot));
+  }
+
+  if (typeof query.hasGoodInsight === 'boolean') {
+    params.set('hasGoodInsight', String(query.hasGoodInsight));
+  }
+
+  if (typeof query.hasManualInsight === 'boolean') {
+    params.set('hasManualInsight', String(query.hasManualInsight));
+  }
+
+  if (query.finalVerdict) {
+    params.set('finalVerdict', query.finalVerdict);
+  }
+
+  if (query.finalCategory) {
+    params.set('finalCategory', query.finalCategory);
+  }
+
+  if (query.moneyPriority) {
+    params.set('moneyPriority', query.moneyPriority);
+  }
+
+  if (query.decisionSource) {
+    params.set('decisionSource', query.decisionSource);
+  }
+
+  if (typeof query.hasConflict === 'boolean') {
+    params.set('hasConflict', String(query.hasConflict));
+  }
+
+  if (typeof query.needsRecheck === 'boolean') {
+    params.set('needsRecheck', String(query.needsRecheck));
+  }
+
+  if (typeof query.hasTrainingHints === 'boolean') {
+    params.set('hasTrainingHints', String(query.hasTrainingHints));
+  }
+
+  if (query.recommendedAction) {
+    params.set('recommendedAction', query.recommendedAction);
+  }
+
   if (typeof query.createdAfterDays === 'number') {
     params.set('createdAfterDays', String(query.createdAfterDays));
   }
@@ -632,6 +1287,100 @@ export function buildRepositoryListSearchParams(
   }
 
   return params.toString();
+}
+
+export function applyRepositoryViewQuery(
+  query: RepositoryListQueryState,
+  view: RepositoryRecommendedView,
+) {
+  switch (view) {
+    case 'moneyFirst':
+      return {
+        ...query,
+        view,
+        sortBy: 'moneyPriority' as const,
+        order: 'desc' as const,
+      };
+    case 'bestIdeas':
+      return {
+        ...query,
+        view,
+        hasGoodInsight: true,
+        finalVerdict: 'GOOD' as const,
+        sortBy: 'insightPriority' as const,
+        order: 'desc' as const,
+      };
+    case 'all':
+      return {
+        ...query,
+        view,
+      };
+    case 'highOpportunity':
+      return {
+        ...query,
+        view,
+        opportunityLevel: 'HIGH' as const,
+      };
+    case 'highOpportunityUnfavorited':
+      return {
+        ...query,
+        view,
+        opportunityLevel: 'HIGH' as const,
+        isFavorited: false,
+        sortBy: 'ideaFitScore' as const,
+        order: 'desc' as const,
+      };
+    case 'extractedIdea':
+      return {
+        ...query,
+        view,
+        hasExtractedIdea: true,
+      };
+    case 'ideaExtractionPending':
+      return {
+        ...query,
+        view,
+        hasIdeaFitAnalysis: true,
+        hasExtractedIdea: false,
+        sortBy: 'ideaFitScore' as const,
+        order: 'desc' as const,
+      };
+    case 'pendingAnalysis':
+      return {
+        ...query,
+        view,
+        hasIdeaFitAnalysis: false,
+      };
+    case 'favoritedPendingAnalysis':
+      return {
+        ...query,
+        view,
+        isFavorited: true,
+        hasIdeaFitAnalysis: false,
+      };
+    case 'newRadar':
+      return {
+        ...query,
+        view,
+        createdAfterDays: 30,
+        sortBy: 'createdAtGithub' as const,
+        order: 'desc' as const,
+      };
+    case 'backfilledPromising':
+      return {
+        ...query,
+        view,
+        createdAfterDays: 365,
+        hasPromisingIdeaSnapshot: true,
+        sortBy: 'createdAtGithub' as const,
+        order: 'desc' as const,
+      };
+    default:
+      return {
+        ...query,
+        view,
+      };
+  }
 }
 
 export function normalizeFavoriteListQuery(

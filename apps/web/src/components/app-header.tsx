@@ -15,7 +15,7 @@ export function AppHeader() {
                 GitDian
               </span>
               <span className="block text-xs uppercase tracking-[0.18em] text-slate-500">
-                Opportunity Console
+                创业决策台
               </span>
             </span>
           </Link>
@@ -24,7 +24,7 @@ export function AppHeader() {
             href="/settings"
             className="inline-flex items-center rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 lg:hidden"
           >
-            Settings
+            配置页
           </Link>
         </div>
 

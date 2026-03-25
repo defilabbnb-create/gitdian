@@ -3,20 +3,31 @@ import {
   ApiRequestError,
   ApiSuccessResponse,
   EnqueuedTaskResponse,
-  RepositoryOverviewSummary,
+  RepositoryDetail,
   RepositoryListItem,
+  RepositoryListQueryState,
+  RepositoryListResponse,
+  RepositoryManualOverrideRecord,
+  RepositoryOverviewSummary,
   RunBatchAnalysisRequest,
   RunBatchAnalysisResponse,
   RunAnalysisRequest,
   RunAnalysisResponse,
+  UpdateManualInsightPayload,
   buildRepositoryListSearchParams,
-  RepositoryDetail,
-  RepositoryListQueryState,
-  RepositoryListResponse,
 } from '@/lib/types/repository';
+import { normalizeRepositoryItem } from '@/lib/api/normalizers';
 
 function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+}
+
+function buildTimeoutSignal(timeoutMs?: number) {
+  if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
+    return undefined;
+  }
+
+  return AbortSignal.timeout(timeoutMs);
 }
 
 function toNullableNumber(value: unknown) {
@@ -32,7 +43,7 @@ function toNullableNumber(value: unknown) {
   return null;
 }
 
-function normalizeRepositoryItem<T extends RepositoryListItem>(item: T): T {
+function normalizeRepositoryNumbers<T extends RepositoryListItem>(item: T): T {
   return {
     ...item,
     toolLikeScore: toNullableNumber(item.toolLikeScore),
@@ -46,18 +57,45 @@ function normalizeRepositoryItem<T extends RepositoryListItem>(item: T): T {
       ? {
           ...item.analysis,
           confidence: toNullableNumber(item.analysis.confidence),
+          moneyPriority: item.analysis.moneyPriority
+            ? {
+                ...item.analysis.moneyPriority,
+                score: toNullableNumber(item.analysis.moneyPriority.score) ?? 0,
+                moneyScore:
+                  toNullableNumber(item.analysis.moneyPriority.moneyScore) ??
+                  toNullableNumber(item.analysis.moneyPriority.score) ??
+                  0,
+              }
+            : item.analysis.moneyPriority,
         }
       : item.analysis,
+    finalDecision: item.finalDecision
+      ? {
+          ...item.finalDecision,
+          moneyDecision: {
+            ...item.finalDecision.moneyDecision,
+            score: toNullableNumber(item.finalDecision.moneyDecision?.score) ?? 0,
+          },
+        }
+      : item.finalDecision,
   };
 }
 
-export async function getRepositories(query: RepositoryListQueryState) {
-  const search = buildRepositoryListSearchParams(query);
+export async function getRepositories(
+  query: RepositoryListQueryState,
+  options: {
+    timeoutMs?: number;
+  } = {},
+) {
+  const search = buildRepositoryListSearchParams(query, {
+    includeUiState: false,
+  });
   const url = `${getApiBaseUrl()}/api/repositories${search ? `?${search}` : ''}`;
 
   const response = await fetch(url, {
     method: 'GET',
     cache: 'no-store',
+    signal: buildTimeoutSignal(options.timeoutMs),
     headers: {
       Accept: 'application/json',
     },
@@ -82,14 +120,22 @@ export async function getRepositories(query: RepositoryListQueryState) {
 
   return {
     ...payload.data,
-    items: payload.data.items.map((item) => normalizeRepositoryItem(item)),
+    items: payload.data.items.map((item) =>
+      normalizeRepositoryItem(normalizeRepositoryNumbers(item)),
+    ),
   };
 }
 
-export async function getRepositoryById(id: string) {
+export async function getRepositoryById(
+  id: string,
+  options: {
+    timeoutMs?: number;
+  } = {},
+) {
   const response = await fetch(`${getApiBaseUrl()}/api/repositories/${id}`, {
     method: 'GET',
     cache: 'no-store',
+    signal: buildTimeoutSignal(options.timeoutMs),
     headers: {
       Accept: 'application/json',
     },
@@ -112,13 +158,47 @@ export async function getRepositoryById(id: string) {
     );
   }
 
-  return normalizeRepositoryItem(payload.data);
+  return normalizeRepositoryItem(normalizeRepositoryNumbers(payload.data));
 }
 
-export async function getRepositoryOverviewSummary() {
+export async function updateRepositoryManualInsight(
+  id: string,
+  payload: UpdateManualInsightPayload,
+) {
+  const response = await fetch(`${getApiBaseUrl()}/api/repositories/${id}/manual-insight`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const body = (await response.json()) as
+    | (ApiSuccessResponse<RepositoryManualOverrideRecord | null> & {
+        message?: string;
+      })
+    | ApiErrorShape;
+
+  if (!response.ok || !('success' in body && body.success)) {
+    const message = Array.isArray(body.message)
+      ? body.message.join(', ')
+      : body.message;
+
+    throw new ApiRequestError(
+      message ?? 'Failed to update repository manual insight.',
+      response.status,
+    );
+  }
+
+  return body.data;
+}
+
+export async function getRepositoryOverviewSummary(options: { timeoutMs?: number } = {}) {
   const response = await fetch(`${getApiBaseUrl()}/api/repositories/summary`, {
     method: 'GET',
     cache: 'no-store',
+    signal: buildTimeoutSignal(options.timeoutMs),
     headers: {
       Accept: 'application/json',
     },
