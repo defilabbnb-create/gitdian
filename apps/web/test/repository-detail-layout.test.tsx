@@ -25,21 +25,9 @@ function renderDetailPrimaryFlow(
         decisionViewModel={decisionView}
       />
       <RepositoryDetailConclusion decisionViewModel={decisionView} />
-      <RepositoryDetailIdeaFit
-        repository={repository}
-        decisionViewModel={decisionView}
-        showRunner={false}
-      />
-      <RepositoryDetailIdeaExtract
-        repository={repository}
-        decisionViewModel={decisionView}
-        showRunner={false}
-      />
-      <RepositoryDetailCompleteness
-        repository={repository}
-        decisionViewModel={decisionView}
-        showRunner={false}
-      />
+      <RepositoryDetailIdeaFit decisionViewModel={decisionView} />
+      <RepositoryDetailIdeaExtract decisionViewModel={decisionView} />
+      <RepositoryDetailCompleteness decisionViewModel={decisionView} />
       <RepositoryNextStepsPanel
         htmlUrl={repository.htmlUrl}
         decisionViewModel={decisionView}
@@ -99,6 +87,25 @@ function createDeepCompleteConflictRepository() {
   });
 }
 
+function createRepositoryWithEnglishAnalysis() {
+  return createRepositoryFixture({
+    analysis: {
+      ideaFitJson: {
+        coreJudgement:
+          'This repository looks promising for small teams, but the monetization path still needs validation across real user demand.',
+      },
+      extractedIdeaJson: {
+        ideaSummary:
+          'This tool helps solo founders automate deployment workflows and package them as a repeatable service.',
+      },
+      completenessJson: {
+        summary:
+          'The repository structure is clean and the setup path is understandable, but production readiness still depends on additional validation.',
+      },
+    },
+  });
+}
+
 test('detail page renders only one priority label for the same repository', () => {
   const repository = createRepositoryFixture();
   const decisionView = buildRepositoryDecisionViewModel(repository, {
@@ -108,6 +115,14 @@ test('detail page renders only one priority label for the same repository', () =
   const matches = html.match(new RegExp(decisionView.display.priorityLabel, 'g')) ?? [];
 
   assert.equal(matches.length, 1);
+});
+
+test('detail page keeps only one main judgement row in the primary flow', () => {
+  const repository = createRepositoryFixture();
+  const html = renderDetailPrimaryFlow(repository);
+  const judgementRows = html.match(/现在结论/g) ?? [];
+
+  assert.equal(judgementRows.length, 1);
 });
 
 test('detail page renders exactly one primary CTA', () => {
@@ -162,4 +177,32 @@ test('analysis modules render as collapsed summary cards by default', () => {
 
   assert.equal(matches.length, 3);
   assert.doesNotMatch(html, /<details[^>]*open/);
+});
+
+test('detail primary flow does not render raw English analysis paragraphs', () => {
+  const repository = createRepositoryWithEnglishAnalysis();
+  const html = renderDetailPrimaryFlow(repository);
+
+  assert.doesNotMatch(
+    html,
+    /This repository looks promising for small teams/,
+  );
+  assert.doesNotMatch(
+    html,
+    /This tool helps solo founders automate deployment workflows/,
+  );
+  assert.doesNotMatch(
+    html,
+    /The repository structure is clean and the setup path is understandable/,
+  );
+  assert.match(html, /查看原始分析/);
+});
+
+test('detail primary flow does not surface internal rerun actions', () => {
+  const repository = createRepositoryFixture();
+  const html = renderDetailPrimaryFlow(repository);
+
+  assert.doesNotMatch(html, /补创业评分/);
+  assert.doesNotMatch(html, /补点子提取/);
+  assert.doesNotMatch(html, /补完整性分析/);
 });

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { SettingsBuildInfo } from '../src/components/settings/settings-build-info';
 import { SettingsForm } from '../src/components/settings/settings-form';
 import { SettingsHealthOverview } from '../src/components/settings/settings-health-overview';
+import { SettingsPrimaryConfigOverview } from '../src/components/settings/settings-primary-config-overview';
 import { SettingsRuntimeSummary } from '../src/components/settings/settings-runtime-summary';
 import { SettingsTechnicalDetails } from '../src/components/settings/settings-technical-details';
 import type {
@@ -121,6 +122,7 @@ test('settings first screen shows runtime summary and health summary', () => {
         health={healthFixture}
         aiHealth={aiHealthFixture}
       />
+      <SettingsPrimaryConfigOverview />
       <SettingsHealthOverview
         health={healthFixture}
         aiHealth={aiHealthFixture}
@@ -130,19 +132,26 @@ test('settings first screen shows runtime summary and health summary', () => {
 
   assert.match(html, /当前运行模式/);
   assert.match(html, /系统健康摘要/);
+  assert.match(html, /最常改配置入口/);
   assert.match(html, /Git SHA:/);
   assert.match(html, /Environment:/);
   assert.match(html, /Build Time:/);
+  assert.match(html, /data-settings-build-info="true"/);
+  assert.match(html, /data-settings-runtime-summary="true"/);
 });
 
 test('settings form keeps only one configuration group expanded by default', () => {
   const html = renderToStaticMarkup(<SettingsForm initialSettings={settingsFixture} />);
   const sectionMatches = html.match(/data-settings-section=/g) ?? [];
   const openMatches = html.match(/open=""/g) ?? [];
+  const defaultClosedMatches = html.match(/默认折叠，按需展开/g) ?? [];
 
   assert.equal(sectionMatches.length, 3);
   assert.equal(openMatches.length, 1);
   assert.match(html, /id="settings-github"/);
+  assert.equal(defaultClosedMatches.length, 2);
+  assert.match(html, /Fast Filter 配置/);
+  assert.match(html, /AI 路由与模型配置/);
 });
 
 test('behavior notes no longer occupy the first screen by default', () => {

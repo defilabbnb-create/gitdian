@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { FavoritesExpandedPool } from '../src/components/favorites/favorites-expanded-pool';
 import { FavoriteListItem } from '../src/components/favorites/favorite-list-item';
 import { FavoritesFollowUpBoard } from '../src/components/favorites/favorites-follow-up-board';
 import type { FavoriteWithRepositorySummary } from '../src/lib/types/repository';
@@ -118,4 +119,31 @@ test('favorite cards keep the first screen compact while preserving the next ste
   assert.doesNotMatch(html, /跟进优先级/);
   assert.doesNotMatch(html, /当前状态/);
   assert.doesNotMatch(html, /当前阶段/);
+});
+
+test('expanded favorites pool stays collapsed on the first screen by default', () => {
+  const html = renderToStaticMarkup(
+    <FavoritesExpandedPool
+      items={[createFavoriteFixture()]}
+      pagination={{
+        page: 1,
+        pageSize: 20,
+        total: 1,
+        totalPages: 1,
+      }}
+      query={{
+        page: 1,
+        pageSize: 20,
+        sortBy: 'createdAt',
+        order: 'desc',
+      }}
+    />,
+  );
+
+  assert.match(html, /data-testid="favorites-expanded-pool"/);
+  assert.match(html, /data-favorites-expanded-state="collapsed"/);
+  assert.match(html, /展开完整收藏池/);
+  assert.doesNotMatch(html, /应用筛选/);
+  assert.doesNotMatch(html, /导出收藏 CSV/);
+  assert.doesNotMatch(html, /acme\/repo-1/);
 });

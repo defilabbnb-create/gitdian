@@ -135,6 +135,26 @@ test('the first screen includes stable aggregate text and selectors in SSR html'
   assert.match(html, /data-testid="jobs-aggregated-group"/);
 });
 
+test('the first screen renders one aggregate card for repeated same-type pending tasks', () => {
+  const html = renderPriorityBoard([
+    createJobFixture({ id: 'pending-1', jobName: 'snapshot.collect_seed' }),
+    createJobFixture({
+      id: 'pending-2',
+      jobName: 'snapshot.collect_seed',
+      createdAt: '2026-03-26T08:01:00.000Z',
+    }),
+    createJobFixture({
+      id: 'pending-3',
+      jobName: 'snapshot.collect_seed',
+      createdAt: '2026-03-26T08:02:00.000Z',
+    }),
+  ]);
+  const aggregateCards = html.match(/data-testid="jobs-aggregated-group"/g) ?? [];
+
+  assert.equal(aggregateCards.length, 1);
+  assert.match(html, /3 个任务/);
+});
+
 test('cancel task is not a first-screen high-priority action', () => {
   const html = renderPriorityBoard([
     createJobFixture({ id: 'pending-1' }),

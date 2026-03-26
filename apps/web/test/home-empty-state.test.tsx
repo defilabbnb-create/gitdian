@@ -63,6 +63,7 @@ test('homepage SSR shell keeps the empty-state CTA and secondary links crawlable
   assert.equal(primaryMatches.length, 1);
   assert.match(html, /data-home-empty-state="true"/);
   assert.match(html, /去完整机会池继续筛/);
+  assert.doesNotMatch(html, /去收藏页继续收口/);
   assert.match(html, /其他入口/);
   assert.match(html, /全部项目/);
   assert.match(html, /收藏/);

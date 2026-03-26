@@ -24,7 +24,11 @@ export function FavoritesExpandedPool({
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
-    <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur">
+    <section
+      data-testid="favorites-expanded-pool"
+      data-favorites-expanded-state={isExpanded ? 'expanded' : 'collapsed'}
+      className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur"
+    >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
