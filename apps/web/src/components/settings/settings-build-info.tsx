@@ -8,6 +8,11 @@ export function SettingsBuildInfo({
   variant = 'full',
 }: SettingsBuildInfoProps) {
   const buildInfo = getWebBuildInfo();
+  const buildInfoLines = [
+    `Git SHA: ${buildInfo.gitSha}`,
+    `Environment: ${buildInfo.environment}`,
+    `Build Time: ${buildInfo.buildTime}`,
+  ];
 
   if (variant === 'compact') {
     return (
@@ -30,28 +35,16 @@ export function SettingsBuildInfo({
           </a>
         </div>
 
-        <dl className="mt-4 grid gap-3 text-sm text-emerald-950 md:grid-cols-3">
-          <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
-            <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-              Git SHA
-            </dt>
-            <dd className="mt-2 font-mono text-sm">{buildInfo.gitSha}</dd>
+        <div className="mt-4 rounded-2xl border border-emerald-200 bg-white px-4 py-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+            Plain Text
+          </p>
+          <div className="mt-3 space-y-1 font-mono text-sm text-emerald-950">
+            {buildInfoLines.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
           </div>
-
-          <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
-            <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-              Environment
-            </dt>
-            <dd className="mt-2 font-mono text-sm">{buildInfo.environment}</dd>
-          </div>
-
-          <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
-            <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-              Build Time
-            </dt>
-            <dd className="mt-2 font-mono text-sm">{buildInfo.buildTime}</dd>
-          </div>
-        </dl>
+        </div>
       </section>
     );
   }
@@ -72,6 +65,17 @@ export function SettingsBuildInfo({
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
             人工验收时只需要看这里，就能确认线上页面到底跑的是哪个构建版本。
           </p>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          Plain Text
+        </p>
+        <div className="mt-3 space-y-1 font-mono text-sm text-slate-950">
+          {buildInfoLines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
         </div>
       </div>
 
