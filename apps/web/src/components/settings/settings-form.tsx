@@ -55,7 +55,10 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
     <form onSubmit={handleSubmit} className="space-y-6">
       <SettingsSection
         title="GitHub 采集配置"
+        summary="最常改的一组。先改这里，就能最快改变首页先抓什么、抓多少，以及采集后要不要先做降噪。"
         description="控制默认搜索方式、分页大小、星数范围，以及采集完成后是否默认执行规则粗筛。"
+        anchorId="settings-github"
+        defaultOpen
       >
         <SelectField
           label="默认采集模式"
@@ -123,6 +126,7 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
 
       <SettingsSection
         title="Fast Filter 配置"
+        summary="只在你要调整降噪力度时再展开。它会影响批处理规模、优先级阈值和 stale 判定。"
         description="控制规则粗筛的默认批处理规模、是否只筛未筛项目，以及分数阈值和 stale 判定。"
       >
         <NumberField
@@ -163,6 +167,7 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
 
       <SettingsSection
         title="AI 路由与模型配置"
+        summary="只在你要调整判断链路时再展开。它会影响主 provider、fallback 和各 taskType 路由。"
         description="控制默认 provider、fallback 策略、各 taskType 路由以及 OMLX / OpenAI 的模型名和超时。当前推荐默认保持在纯本地 OMLX 模式，OpenAI 作为可选增强。"
       >
         <SelectField

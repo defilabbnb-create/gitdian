@@ -1,6 +1,8 @@
 import { Suspense } from 'react';
 import { SettingsBuildInfo } from '@/components/settings/settings-build-info';
 import { SettingsForm } from '@/components/settings/settings-form';
+import { SettingsHealthOverview } from '@/components/settings/settings-health-overview';
+import { SettingsPrimaryConfigOverview } from '@/components/settings/settings-primary-config-overview';
 import { SettingsRuntimeSummary } from '@/components/settings/settings-runtime-summary';
 import { SettingsTechnicalDetails } from '@/components/settings/settings-technical-details';
 import { getAiHealth, getSettings, getSettingsHealth } from '@/lib/api/settings';
@@ -22,31 +24,30 @@ export default function SettingsPage() {
 }
 
 async function SettingsPageContent() {
-  let settings = null;
-  let errorMessage: string | null = null;
-  let health = null;
-  let healthErrorMessage: string | null = null;
-  let aiHealth = null;
+  const [settingsResult, healthResult, aiHealthResult] = await Promise.allSettled([
+    getSettings(),
+    getSettingsHealth(),
+    getAiHealth({ timeoutMs: 4_000 }),
+  ]);
 
-  try {
-    settings = await getSettings();
-  } catch (error) {
-    errorMessage =
-      error instanceof Error ? error.message : '配置读取失败，请稍后重试。';
-  }
-
-  try {
-    health = await getSettingsHealth();
-  } catch (error) {
-    healthErrorMessage =
-      error instanceof Error ? error.message : '健康检查读取失败，请稍后重试。';
-  }
-
-  try {
-    aiHealth = await getAiHealth({ timeoutMs: 4_000 });
-  } catch {
-    aiHealth = null;
-  }
+  const settings =
+    settingsResult.status === 'fulfilled' ? settingsResult.value : null;
+  const errorMessage =
+    settingsResult.status === 'rejected'
+      ? settingsResult.reason instanceof Error
+        ? settingsResult.reason.message
+        : '配置读取失败，请稍后重试。'
+      : null;
+  const health =
+    healthResult.status === 'fulfilled' ? healthResult.value : null;
+  const healthErrorMessage =
+    healthResult.status === 'rejected'
+      ? healthResult.reason instanceof Error
+        ? healthResult.reason.message
+        : '健康检查读取失败，请稍后重试。'
+      : null;
+  const aiHealth =
+    aiHealthResult.status === 'fulfilled' ? aiHealthResult.value : null;
 
   return (
     <>
@@ -56,18 +57,27 @@ async function SettingsPageContent() {
         aiHealth={aiHealth}
       />
 
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+        <SettingsHealthOverview
+          health={health}
+          aiHealth={aiHealth}
+          healthErrorMessage={healthErrorMessage}
+        />
+        <SettingsPrimaryConfigOverview />
+      </div>
+
       {settings ? (
         <section className="space-y-6">
           <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur">
             <div className="max-w-3xl">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                核心运行模式配置
+                配置修改
               </p>
               <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                先调会直接改变系统行为的配置。
+                先按需展开，再改会直接影响系统行为的那一组。
               </h2>
               <p className="mt-3 text-sm leading-7 text-slate-600">
-                这里先放会直接影响采集入口、粗筛和 AI 路由的关键默认值。先决定系统接下来怎么跑，再决定要不要下钻排查。
+                GitHub 采集配置默认展开，因为它最常改变首页供给和采集节奏。Fast Filter 与 AI 路由默认折叠，只有当你需要改判断链路时再展开。
               </p>
             </div>
             <div className="mt-6">
@@ -78,7 +88,6 @@ async function SettingsPageContent() {
             health={health}
             healthErrorMessage={healthErrorMessage}
           />
-          <SettingsBuildInfo />
         </section>
       ) : (
         <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
@@ -100,8 +109,11 @@ async function SettingsPageContent() {
 function SettingsPageContentFallback() {
   return (
     <>
-      <div className="h-40 animate-pulse rounded-[32px] bg-white/80 shadow-sm" />
-      <div className="h-80 animate-pulse rounded-[32px] bg-white/80 shadow-sm" />
+      <div className="h-56 animate-pulse rounded-[32px] bg-white/80 shadow-sm" />
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+        <div className="h-72 animate-pulse rounded-[32px] bg-white/80 shadow-sm" />
+        <div className="h-72 animate-pulse rounded-[32px] bg-white/80 shadow-sm" />
+      </div>
       <div className="h-80 animate-pulse rounded-[32px] bg-white/80 shadow-sm" />
     </>
   );

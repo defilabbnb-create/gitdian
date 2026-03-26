@@ -1,5 +1,3 @@
-'use client';
-
 import { AiHealthPayload, SettingsHealthPayload, SettingsPayload } from '@/lib/types/settings';
 
 type SettingsRuntimeSummaryProps = {
@@ -19,7 +17,10 @@ export function SettingsRuntimeSummary({
   const fallbackLabel = resolveFallbackLabel(settings);
 
   return (
-    <section className="rounded-[36px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(14,116,144,0.86)_100%)] px-8 py-8 text-white shadow-xl shadow-slate-900/10">
+    <section
+      data-settings-runtime-summary="true"
+      className="rounded-[36px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(14,116,144,0.86)_100%)] px-8 py-8 text-white shadow-xl shadow-slate-900/10"
+    >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-4xl">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">

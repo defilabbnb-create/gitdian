@@ -1,8 +1,6 @@
-'use client';
-
 export function SettingsBehaviorNotes() {
   return (
-    <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur">
+    <section className="rounded-[28px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">

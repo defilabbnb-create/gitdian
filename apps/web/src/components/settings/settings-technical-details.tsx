@@ -46,7 +46,27 @@ export function SettingsTechnicalDetails({
             initialHealth={health}
             initialError={healthErrorMessage}
           />
-          <SettingsBehaviorNotes />
+          <details className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-sm backdrop-blur">
+            <summary className="cursor-pointer list-none">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    帮助说明
+                  </p>
+                  <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+                    只有当你要理解运行规则时，再展开 Behavior Notes。
+                  </h3>
+                </div>
+                <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                  默认折叠
+                </span>
+              </div>
+            </summary>
+
+            <div className="mt-5">
+              <SettingsBehaviorNotes />
+            </div>
+          </details>
         </div>
       ) : null}
     </section>
