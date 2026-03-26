@@ -2,11 +2,16 @@ import { notFound } from 'next/navigation';
 import { RepositoryAnalysisWorkbench } from '@/components/repositories/repository-analysis-workbench';
 import { RepositoryDetailConclusion } from '@/components/repositories/repository-detail-conclusion';
 import { RepositoryDetailHeader } from '@/components/repositories/repository-detail-header';
+import { RepositoryDetailCompleteness } from '@/components/repositories/repository-detail-completeness';
+import { RepositoryDetailIdeaExtract } from '@/components/repositories/repository-detail-idea-extract';
+import { RepositoryDetailIdeaFit } from '@/components/repositories/repository-detail-idea-fit';
+import { RepositoryNextSteps } from '@/components/repositories/repository-next-steps';
 import { RelatedRepositories } from '@/components/repositories/related-repositories';
 import { RepositoryRelatedJobs } from '@/components/repositories/repository-related-jobs';
 import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getJobLogsForRepository } from '@/lib/api/job-logs';
 import { getRepositories, getRepositoryById } from '@/lib/api/repositories';
+import { buildRepositoryDecisionViewModel } from '@/lib/repository-decision-view-model';
 import {
   ApiRequestError,
   RelatedRepositoryItem,
@@ -76,29 +81,79 @@ export default async function RepositoryDetailPage({
     }
   }
 
+  const relatedJobItems = relatedJobs?.items ?? [];
+  const decisionView = repository
+    ? buildRepositoryDecisionViewModel(repository, {
+        relatedJobs: relatedJobItems,
+      })
+    : null;
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)] px-6 py-8 text-slate-950">
       <div className="mx-auto max-w-7xl space-y-6">
         {repository ? (
           <>
-            <RepositoryDetailHeader repository={repository} />
-            <RepositoryDetailConclusion
-              repository={repository}
-              relatedJobs={relatedJobs?.items ?? []}
-            />
-            <RepositoryAnalysisWorkbench
-              repository={repository}
-              relatedJobs={relatedJobs?.items ?? []}
-            />
-            <details className="group rounded-[32px] border border-slate-200 bg-white/85 p-6 shadow-sm backdrop-blur">
+            {decisionView ? (
+              <>
+                <RepositoryDetailHeader
+                  repository={repository}
+                  decisionViewModel={decisionView}
+                />
+                <RepositoryDetailConclusion decisionViewModel={decisionView} />
+              </>
+            ) : null}
+
+            {decisionView ? (
+              <section className="grid gap-6 xl:grid-cols-3">
+                <RepositoryDetailIdeaFit
+                  repository={repository}
+                  decisionViewModel={decisionView}
+                />
+                <RepositoryDetailIdeaExtract
+                  repository={repository}
+                  decisionViewModel={decisionView}
+                />
+                <RepositoryDetailCompleteness
+                  repository={repository}
+                  decisionViewModel={decisionView}
+                />
+              </section>
+            ) : null}
+
+            {decisionView ? (
+              <RepositoryNextSteps
+                repoId={repository.id}
+                name={repository.name}
+                fullName={repository.fullName}
+                htmlUrl={repository.htmlUrl}
+                headline={decisionView.display.headline}
+                reason={decisionView.display.reason}
+                decisionViewModel={decisionView}
+                isFavorited={repository.isFavorited}
+                favoriteNote={repository.favorite?.note ?? null}
+                categoryLabel={decisionView.behaviorContext.categoryLabel}
+                projectType={decisionView.behaviorContext.projectType}
+                targetUsersLabel={decisionView.behaviorContext.targetUsersLabel}
+                useCaseLabel={decisionView.behaviorContext.useCaseLabel}
+                patternKeys={decisionView.behaviorContext.patternKeys}
+                hasRealUser={decisionView.behaviorContext.hasRealUser}
+                hasClearUseCase={decisionView.behaviorContext.hasClearUseCase}
+                isDirectlyMonetizable={decisionView.behaviorContext.isDirectlyMonetizable}
+              />
+            ) : null}
+
+            <details
+              id="repository-evidence"
+              className="group rounded-[32px] border border-slate-200 bg-white/85 p-6 shadow-sm backdrop-blur"
+            >
               <summary className="cursor-pointer list-none">
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      延伸参考
+                      证据区
                     </p>
                     <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                      只有当你要继续横向比较时，再展开相关机会和关联任务。
+                      判断对比、补跑入口、校准信息和相邻机会全部下沉到这里。
                     </h2>
                   </div>
                   <span className="text-sm font-semibold text-slate-600 transition group-open:rotate-180">
@@ -107,16 +162,24 @@ export default async function RepositoryDetailPage({
                 </div>
               </summary>
 
-              <div className="mt-6 grid gap-6 xl:grid-cols-2">
-                <RelatedRepositories
-                  items={relatedRepositories}
-                  errorMessage={relatedRepositoriesErrorMessage}
+              <div className="mt-6 space-y-6">
+                <RepositoryAnalysisWorkbench
+                  repository={repository}
+                  relatedJobs={relatedJobItems}
+                  decisionViewModel={decisionView!}
                 />
-                <RepositoryRelatedJobs
-                  repositoryId={repository.id}
-                  jobs={relatedJobs}
-                  errorMessage={relatedJobsErrorMessage}
-                />
+
+                <div className="grid gap-6 xl:grid-cols-2">
+                  <RelatedRepositories
+                    items={relatedRepositories}
+                    errorMessage={relatedRepositoriesErrorMessage}
+                  />
+                  <RepositoryRelatedJobs
+                    repositoryId={repository.id}
+                    jobs={relatedJobs}
+                    errorMessage={relatedJobsErrorMessage}
+                  />
+                </div>
               </div>
             </details>
           </>

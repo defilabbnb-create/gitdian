@@ -3,14 +3,15 @@
 import { startTransition, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createFavorite, updateFavorite } from '@/lib/api/favorites';
+import { enqueueRepositoryAnalysis } from '@/lib/api/repositories';
 import {
   appendActionLog,
   createOrMergeActionLoopEntry,
   getExecutionStatusLabel,
-  markValidationFailed,
-  markValidationPassed,
+  getUserBehaviorSignalPayload,
   readActionLoopEntry,
 } from '@/lib/action-loop';
+import type { RepositoryDecisionViewModel } from '@/lib/repository-decision-view-model';
 
 type RepositoryNextStepsProps = {
   repoId: string;
@@ -19,6 +20,7 @@ type RepositoryNextStepsProps = {
   htmlUrl: string;
   headline: string;
   reason: string;
+  decisionViewModel: RepositoryDecisionViewModel;
   isFavorited: boolean;
   favoriteNote?: string | null;
   categoryLabel?: string | null;
@@ -31,6 +33,18 @@ type RepositoryNextStepsProps = {
   isDirectlyMonetizable?: boolean | null;
 };
 
+type RepositoryNextStepsPanelProps = {
+  decisionViewModel: RepositoryDecisionViewModel;
+  statusLabel: string;
+  htmlUrl: string;
+  isSubmitting: boolean;
+  isActiveFollowUp: boolean;
+  feedback: string | null;
+  errorMessage: string | null;
+  onPrimaryAction?: () => void;
+  onAddFollowUp?: () => void;
+};
+
 export function RepositoryNextSteps({
   repoId,
   name,
@@ -38,6 +52,7 @@ export function RepositoryNextSteps({
   htmlUrl,
   headline,
   reason,
+  decisionViewModel,
   isFavorited,
   favoriteNote,
   categoryLabel,
@@ -98,22 +113,6 @@ export function RepositoryNextSteps({
     ],
   );
 
-  async function handleStartProject() {
-    setErrorMessage(null);
-    setFeedback(null);
-    createOrMergeActionLoopEntry(entryBase, {
-      actionStatus: 'IN_PROGRESS',
-      followUpStage: 'TRY',
-      isActiveFollowUp: readActionLoopEntry(repoId)?.isActiveFollowUp ?? false,
-      source: 'manual_click',
-      confidence: 'medium',
-    });
-    appendActionLog('start_project_clicked', repoId);
-    setStatusLabel('进行中');
-    setFeedback('现在开始推进，先去仓库确认范围和落地方式。');
-    window.open(htmlUrl, '_blank', 'noopener,noreferrer');
-  }
-
   async function handleQuickValidate() {
     setErrorMessage(null);
     setFeedback(null);
@@ -126,8 +125,46 @@ export function RepositoryNextSteps({
     });
     appendActionLog('quick_validate_clicked', repoId);
     setStatusLabel('验证中');
-    setFeedback('现在用 1 小时验证这个想法，先从 README 和关键路径下手。');
+    setFeedback('已开始验证，先从 README 和关键路径确认最关键证据。');
     window.open(`${htmlUrl}#readme-ov-file`, '_blank', 'noopener,noreferrer');
+  }
+
+  async function handleAnalyze() {
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setFeedback(null);
+
+    try {
+      await enqueueRepositoryAnalysis(repoId, {
+        runFastFilter: false,
+        runCompleteness: true,
+        runIdeaFit: true,
+        runIdeaExtract: true,
+        forceRerun: true,
+        ...getUserBehaviorSignalPayload({
+          categoryLabel,
+          projectType,
+          targetUsersLabel,
+          useCaseLabel,
+          patternKeys,
+          hasRealUser,
+          hasClearUseCase,
+          isDirectlyMonetizable,
+          currentActionStatus: 'NOT_STARTED',
+        }),
+      });
+
+      setFeedback('已加入 deep 补分析队列，稍后刷新就能看到更完整的判断。');
+      startTransition(() => {
+        router.refresh();
+      });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : '补分析失败，请稍后重试。',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   async function handleAddFollowUp() {
@@ -181,44 +218,68 @@ export function RepositoryNextSteps({
     }
   }
 
-  function handleValidationPassed() {
+  function handleReviewEvidence() {
     setErrorMessage(null);
-    setFeedback(null);
-    if (!readActionLoopEntry(repoId)) {
-      createOrMergeActionLoopEntry(entryBase, {
-        actionStatus: 'VALIDATING',
-        followUpStage: 'VALIDATE',
-        isActiveFollowUp: isActiveFollowUp || isFavoritedState,
-        source: 'manual_click',
+    setFeedback('先看证据和复核口径，再决定是否继续投入。');
+    const evidenceSection = document.getElementById(
+      'repository-evidence',
+    ) as HTMLDetailsElement | null;
+
+    if (evidenceSection) {
+      evidenceSection.open = true;
+      evidenceSection.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
       });
+      return;
     }
-    const updated = markValidationPassed(repoId);
-    if (updated) {
-      setStatusLabel(getExecutionStatusLabel(updated.actionStatus));
-      setIsActiveFollowUp(true);
-      setFeedback('验证通过，先把它当成已完成机会，接下来去收藏页做最终决定。');
-    }
+
+    window.location.hash = 'repository-evidence';
   }
 
-  function handleValidationFailed() {
-    setErrorMessage(null);
-    setFeedback(null);
-    if (!readActionLoopEntry(repoId)) {
-      createOrMergeActionLoopEntry(entryBase, {
-        actionStatus: 'VALIDATING',
-        followUpStage: 'VALIDATE',
-        isActiveFollowUp: isActiveFollowUp || isFavoritedState,
-        source: 'manual_click',
-      });
+  async function handlePrimaryAction() {
+    if (decisionViewModel.detail.primaryActionIntent === 'analyze') {
+      return handleAnalyze();
     }
-    const updated = markValidationFailed(repoId);
-    if (updated) {
-      setStatusLabel(getExecutionStatusLabel(updated.actionStatus));
-      setIsActiveFollowUp(false);
-      setFeedback('验证失败，首页会停止推荐它，后续只在需要时再回看。');
+
+    if (decisionViewModel.detail.primaryActionIntent === 'review') {
+      handleReviewEvidence();
+      return;
     }
+
+    return handleQuickValidate();
   }
 
+  return (
+    <RepositoryNextStepsPanel
+      decisionViewModel={decisionViewModel}
+      statusLabel={statusLabel}
+      htmlUrl={htmlUrl}
+      isSubmitting={isSubmitting}
+      isActiveFollowUp={isActiveFollowUp}
+      feedback={feedback}
+      errorMessage={errorMessage}
+      onPrimaryAction={() => {
+        void handlePrimaryAction();
+      }}
+      onAddFollowUp={() => {
+        void handleAddFollowUp();
+      }}
+    />
+  );
+}
+
+export function RepositoryNextStepsPanel({
+  decisionViewModel,
+  statusLabel,
+  htmlUrl,
+  isSubmitting,
+  isActiveFollowUp,
+  feedback,
+  errorMessage,
+  onPrimaryAction,
+  onAddFollowUp,
+}: RepositoryNextStepsPanelProps) {
   return (
     <section
       id="next-steps"
@@ -227,44 +288,55 @@ export function RepositoryNextSteps({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            下一步
+            行动区
           </p>
           <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            现在就开始行动
+            只保留一个主动作，避免 CTA 互相竞争。
           </h3>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+            {decisionViewModel.detail.primaryActionDescription}
+          </p>
         </div>
         <span className="text-sm font-medium text-slate-600">
           当前状态：{statusLabel}
         </span>
       </div>
 
-      <div className="mt-5 grid gap-3 xl:grid-cols-3">
-        <ActionButton
-          title="开始做这个项目"
-          description="立即打开 GitHub，开始确认范围和落地方式。"
-          onClick={handleStartProject}
-        />
-        <ActionButton
-          title="用 1 小时验证这个想法"
-          description="现在先读 README，确认用户、场景和收费路径。"
-          onClick={handleQuickValidate}
-        />
-        <ActionButton
-          title={isActiveFollowUp ? '已加入跟进列表' : '加入跟进列表'}
-          description="把它放进你的长期推进池，并同步到任务页。"
-          onClick={handleAddFollowUp}
+      <div className="mt-5 rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Primary CTA
+        </p>
+        <button
+          type="button"
+          onClick={onPrimaryAction}
+          disabled={isSubmitting}
+          data-detail-primary-cta="true"
+          className="mt-4 inline-flex items-center rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {decisionViewModel.detail.primaryActionLabel}
+        </button>
+        <p className="mt-4 text-sm leading-7 text-slate-600">
+          {decisionViewModel.display.reason}
+        </p>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={onAddFollowUp}
           disabled={isSubmitting || isActiveFollowUp}
-        />
-        <ActionButton
-          title="验证通过（可做）"
-          description="确认这个项目值得继续投入，并把它推进到已完成状态。"
-          onClick={handleValidationPassed}
-        />
-        <ActionButton
-          title="验证失败（不做）"
-          description="明确停止投入，这个项目会从首页推荐区退出。"
-          onClick={handleValidationFailed}
-        />
+          className="inline-flex items-center rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isActiveFollowUp ? '已加入跟进' : '加入跟进'}
+        </button>
+        <a
+          href={htmlUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+        >
+          查看 GitHub
+        </a>
       </div>
 
       {feedback ? (
@@ -274,29 +346,5 @@ export function RepositoryNextSteps({
         <p className="mt-4 text-sm font-medium text-rose-700">{errorMessage}</p>
       ) : null}
     </section>
-  );
-}
-
-function ActionButton({
-  title,
-  description,
-  onClick,
-  disabled = false,
-}: {
-  title: string;
-  description: string;
-  onClick: () => void | Promise<void>;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-    >
-      <p className="text-base font-semibold tracking-tight text-slate-950">{title}</p>
-      <p className="mt-3 text-sm leading-7 text-slate-600">{description}</p>
-    </button>
   );
 }

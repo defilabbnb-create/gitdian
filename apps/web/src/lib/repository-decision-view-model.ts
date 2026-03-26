@@ -1,0 +1,1172 @@
+import { detectRepositoryConflicts } from '@/lib/repository-data-guard';
+import {
+  getRepositoryActionBehaviorContext,
+  getRepositoryAnalysisLayerLabel,
+  getRepositoryClaudeReviewLabel,
+  getRepositoryDecisionHeadline,
+  getRepositoryDecisionSummary,
+  getRepositoryDeepAnalysisStatus,
+  getRepositoryDisplayMonetizationLabel,
+  getRepositoryDisplayTargetUsersLabel,
+  getRepositoryHomepageDecisionReason,
+  getRepositoryHomepageHeadline,
+  getRepositoryHomepageMonetizationAnswer,
+  getRepositoryIdeaExtractStatus,
+  isRepositoryDecisionLowConfidence,
+  type RepositoryDecisionSummary,
+} from '@/lib/repository-decision';
+import {
+  JobLogItem,
+  RepositoryFounderPriority,
+  RepositoryIncompleteReason,
+  RepositoryInsightAction,
+  RepositoryInsightVerdict,
+  RepositoryListItem,
+} from '@/lib/types/repository';
+
+type RepositoryDecisionSourceTarget = RepositoryListItem;
+
+type RepositoryDecisionViewModelTarget = Partial<RepositoryListItem> &
+  Pick<
+    RepositoryListItem,
+    'id' | 'fullName' | 'name' | 'stars' | 'isFavorited'
+  >;
+
+export type RepositoryDecisionDisplayState =
+  | 'trusted'
+  | 'provisional'
+  | 'degraded';
+
+export type RepositoryDecisionConfidenceLevel = 'high' | 'medium' | 'low';
+
+export type RepositoryDecisionCtaIntent =
+  | 'start'
+  | 'validate'
+  | 'follow_up'
+  | 'reference'
+  | 'pass'
+  | 'fail';
+
+export type RepositoryDecisionCtaOption = {
+  title: string;
+  description: string;
+  intent: RepositoryDecisionCtaIntent;
+};
+
+export type RepositoryDecisionDetailActionIntent =
+  | 'validate'
+  | 'analyze'
+  | 'review';
+
+export type RepositoryDecisionAnalysisModuleKey =
+  | 'ideaFit'
+  | 'ideaExtract'
+  | 'completeness';
+
+export type RepositoryDecisionAnalysisModuleViewModel = {
+  key: RepositoryDecisionAnalysisModuleKey;
+  title: string;
+  subtitle: string;
+  statusLabel: string;
+  coreGapLabel: string;
+  evidenceNeededLabel: string;
+  detailSummary: string;
+  detailMetrics: Array<{
+    label: string;
+    value: string;
+  }>;
+  runner: {
+    step: 'ideaFit' | 'ideaExtract' | 'completeness';
+    label: string;
+    runningLabel: string;
+    successLabel: string;
+  };
+};
+
+export type RepositoryDecisionViewModel = {
+  displayState: RepositoryDecisionDisplayState;
+  display: {
+    headline: string;
+    homepageHeadline: string;
+    finalDecisionLabel: string;
+    actionLabel: string;
+    actionSentence: string;
+    priorityLabel: string;
+    worthDoingLabel: string;
+    targetUsersLabel: string;
+    monetizationLabel: string;
+    homepageMonetizationLabel: string;
+    reason: string;
+    caution: string;
+  };
+  detail: {
+    statusLabel: RepositoryDecisionDisplayState;
+    primaryActionLabel: string;
+    primaryActionDescription: string;
+    primaryActionIntent: RepositoryDecisionDetailActionIntent;
+    baseJudgementNotice: string | null;
+    missingEvidenceLabel: string;
+  };
+  analysisModules: Record<
+    RepositoryDecisionAnalysisModuleKey,
+    RepositoryDecisionAnalysisModuleViewModel
+  >;
+  evidence: {
+    comparison: {
+      localVerdict: string;
+      claudeVerdict: string;
+      localOneLiner: string;
+      claudeOneLiner: string;
+      conflictSummary: string;
+    };
+  };
+  verdict: {
+    code: RepositoryInsightVerdict;
+    judgementLabel: string;
+    label: string;
+    displayLabel: string;
+  };
+  action: {
+    code: RepositoryInsightAction;
+    toneKey: RepositoryInsightAction;
+    label: string;
+    sentence: string;
+  };
+  priority: {
+    tier: RepositoryFounderPriority;
+    toneTier: RepositoryFounderPriority;
+    sourceLabel: string;
+    displayLabel: string;
+  };
+  confidence: {
+    level: RepositoryDecisionConfidenceLevel;
+    label: string;
+    isLow: boolean;
+  };
+  deep: ReturnType<typeof getRepositoryDeepAnalysisStatus> & {
+    hasDeepAnalysis: boolean;
+    needsAdditionalAnalysis: boolean;
+  };
+  behaviorContext: ReturnType<typeof getRepositoryActionBehaviorContext>;
+  badges: {
+    analysisLayerLabel: string;
+    claudeReviewLabel: string;
+    hasManualOverride: boolean;
+    hasConflict: boolean;
+    needsRecheck: boolean;
+    hasTrainingHints: boolean;
+  };
+  flags: {
+    fallback: boolean;
+    conflict: boolean;
+    incomplete: boolean;
+    missingKeyAnalysis: boolean;
+    hasFinalDecision: boolean;
+    hasDeepAnalysis: boolean;
+    hasFinalDecisionWithoutDeep: boolean;
+    hideFromHomepage: boolean;
+    allowStrongClaims: boolean;
+    allowStrongMonetization: boolean;
+    allowStrongUserPersona: boolean;
+    allowStrongAction: boolean;
+  };
+  cta: {
+    heading: string;
+    primary: RepositoryDecisionCtaOption;
+    secondary: RepositoryDecisionCtaOption;
+    tertiary: RepositoryDecisionCtaOption;
+    showValidationActions: boolean;
+  };
+};
+
+const SAFE_TARGET_USERS_LABEL =
+  '先确认谁会持续使用它，再决定要不要继续投入。';
+const SAFE_MONETIZATION_LABEL =
+  '收费路径先按未确认处理，补分析后再判断是否具备收费空间。';
+const SAFE_WORTH_DOING_LABEL =
+  '先观察，等补分析或关键冲突收口后再决定要不要继续投入。';
+const SAFE_CAUTION_LABEL =
+  '当前信号还不够稳定，先按更保守的动作处理。';
+
+const DEGRADE_INCOMPLETE_REASONS = new Set<RepositoryIncompleteReason>([
+  'NO_SNAPSHOT',
+  'NO_INSIGHT',
+  'NO_FINAL_DECISION',
+  'FALLBACK_ONLY',
+  'CONFLICT_HELD_BACK',
+  'FAILED_DURING_ANALYSIS',
+  'UNKNOWN',
+]);
+
+function getRepositoryIncompleteReasons(
+  repository: RepositoryDecisionViewModelTarget,
+) {
+  const analysisState = repository.analysisState;
+
+  if (!analysisState) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      [
+        analysisState.incompleteReason,
+        ...(analysisState.incompleteReasons ?? []),
+      ].filter(
+        (value): value is RepositoryIncompleteReason => typeof value === 'string',
+      ),
+    ),
+  );
+}
+
+function hasRepositoryDeepAnalysis(
+  repository: RepositoryDecisionViewModelTarget,
+  deepStatus: ReturnType<typeof getRepositoryDeepAnalysisStatus>,
+) {
+  return (
+    repository.analysisState?.deepReady === true ||
+    (deepStatus.status === 'COMPLETED' && deepStatus.missingSteps.length === 0)
+  );
+}
+
+function buildDisplayState(args: {
+  hasDeepAnalysis: boolean;
+  hasFinalDecisionWithoutDeep: boolean;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  if (
+    args.hasDeepAnalysis &&
+    !args.fallback &&
+    !args.conflict &&
+    !args.missingKeyAnalysis
+  ) {
+    return 'trusted' as const;
+  }
+
+  if (
+    args.hasFinalDecisionWithoutDeep &&
+    !args.fallback &&
+    !args.conflict &&
+    !args.missingKeyAnalysis
+  ) {
+    return 'provisional' as const;
+  }
+
+  return 'degraded' as const;
+}
+
+function getTrustedActionLabel(action: RepositoryInsightAction) {
+  if (action === 'BUILD') {
+    return '立即做';
+  }
+
+  if (action === 'CLONE') {
+    return '快速验证';
+  }
+
+  return '暂不投入';
+}
+
+function getTrustedActionSentence(action: RepositoryInsightAction) {
+  if (action === 'BUILD') {
+    return '立即做，优先继续确认范围和落地方式。';
+  }
+
+  if (action === 'CLONE') {
+    return '快速验证，重点借鉴结构、流程和收费路径。';
+  }
+
+  return '暂不投入，除非后面出现新的强信号。';
+}
+
+function buildDisplayAction(args: {
+  displayState: RepositoryDecisionDisplayState;
+  action: RepositoryInsightAction;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  if (args.displayState === 'trusted') {
+    return {
+      toneKey: args.action,
+      label: getTrustedActionLabel(args.action),
+      sentence: getTrustedActionSentence(args.action),
+    };
+  }
+
+  if (
+    args.displayState === 'provisional' ||
+    (!args.fallback && !args.conflict && args.missingKeyAnalysis)
+  ) {
+    return {
+      toneKey: 'IGNORE' as const,
+      label: '先补分析',
+      sentence: '当前只有基础判断，先补深分析，再决定要不要继续投入。',
+    };
+  }
+
+  return {
+    toneKey: 'IGNORE' as const,
+    label: '先观察',
+    sentence: '当前信号还不稳定，先观察，等证据补齐后再决定要不要继续投入。',
+  };
+}
+
+function buildDisplayPriority(
+  displayState: RepositoryDecisionDisplayState,
+  tier: RepositoryFounderPriority,
+  sourceLabel: string,
+) {
+  if (displayState === 'trusted') {
+    return {
+      toneTier: tier,
+      displayLabel: sourceLabel,
+    };
+  }
+
+  if (displayState === 'provisional') {
+    return {
+      toneTier: 'P3' as const,
+      displayLabel: `${tier} · 待补分析`,
+    };
+  }
+
+  return {
+    toneTier: 'P3' as const,
+    displayLabel: `${tier} · 仅供参考`,
+  };
+}
+
+function buildDisplayConfidence(
+  displayState: RepositoryDecisionDisplayState,
+  lowConfidence: boolean,
+) {
+  if (displayState === 'trusted' && !lowConfidence) {
+    return {
+      level: 'high' as const,
+      label: '高信任',
+      isLow: false,
+    };
+  }
+
+  if (displayState === 'provisional') {
+    return {
+      level: 'medium' as const,
+      label: '中信任',
+      isLow: false,
+    };
+  }
+
+  return {
+    level: 'low' as const,
+    label: '低信任',
+    isLow: true,
+  };
+}
+
+function buildDisplayReason(args: {
+  displayState: RepositoryDecisionDisplayState;
+  repository: RepositoryDecisionViewModelTarget;
+  summary: RepositoryDecisionSummary;
+  fallback: boolean;
+  conflict: boolean;
+  hasFinalDecisionWithoutDeep: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  if (args.displayState === 'trusted') {
+    return getRepositoryHomepageDecisionReason(
+      args.repository as RepositoryDecisionSourceTarget,
+      args.summary,
+    );
+  }
+
+  if (args.fallback) {
+    return '当前仍是 fallback 或兜底判断，先别把它当成已经稳定的产品结论。';
+  }
+
+  if (args.conflict) {
+    return '当前信号存在冲突，先按保守口径处理，等关键证据补齐后再决定。';
+  }
+
+  if (args.hasFinalDecisionWithoutDeep) {
+    return '当前只有基础判断，深分析还没补齐，先别把它当成已验证机会。';
+  }
+
+  if (args.missingKeyAnalysis) {
+    return '关键分析还没补齐，先补分析后再决定要不要继续投入。';
+  }
+
+  return '当前结论还不够稳定，先按保守动作处理。';
+}
+
+function buildDisplayCaution(displayState: RepositoryDecisionDisplayState) {
+  if (displayState === 'trusted') {
+    return '当前没有明显冲突，可以继续进入行动层。';
+  }
+
+  return SAFE_CAUTION_LABEL;
+}
+
+function buildDisplayWorthDoing(
+  displayState: RepositoryDecisionDisplayState,
+  summary: RepositoryDecisionSummary,
+) {
+  return displayState === 'trusted'
+    ? summary.worthDoingLabel
+    : SAFE_WORTH_DOING_LABEL;
+}
+
+function buildDisplayTargetUsers(args: {
+  displayState: RepositoryDecisionDisplayState;
+  repository: RepositoryDecisionViewModelTarget;
+  summary: RepositoryDecisionSummary;
+}) {
+  return args.displayState === 'trusted'
+    ? getRepositoryDisplayTargetUsersLabel(
+        args.repository as RepositoryDecisionSourceTarget,
+        args.summary,
+      )
+    : SAFE_TARGET_USERS_LABEL;
+}
+
+function buildDisplayMonetization(args: {
+  displayState: RepositoryDecisionDisplayState;
+  repository: RepositoryDecisionViewModelTarget;
+  summary: RepositoryDecisionSummary;
+}) {
+  if (args.displayState !== 'trusted') {
+    return {
+      monetizationLabel: SAFE_MONETIZATION_LABEL,
+      homepageMonetizationLabel: SAFE_MONETIZATION_LABEL,
+    };
+  }
+
+  return {
+    monetizationLabel: getRepositoryDisplayMonetizationLabel(
+      args.repository as RepositoryDecisionSourceTarget,
+      args.summary,
+    ),
+    homepageMonetizationLabel: getRepositoryHomepageMonetizationAnswer(
+      args.repository as RepositoryDecisionSourceTarget,
+      args.summary,
+    ),
+  };
+}
+
+function buildDisplayVerdict(
+  displayState: RepositoryDecisionDisplayState,
+  summary: RepositoryDecisionSummary,
+) {
+  if (displayState === 'trusted') {
+    return summary.finalDecisionLabel;
+  }
+
+  if (displayState === 'provisional') {
+    return '基础判断 · 仅供参考';
+  }
+
+  return '保守判断 · 仅供参考';
+}
+
+function mapMissingStepLabel(step: 'ideaFit' | 'ideaExtract' | 'completeness') {
+  if (step === 'ideaFit') {
+    return 'Idea Fit';
+  }
+
+  if (step === 'ideaExtract') {
+    return 'Idea Extraction';
+  }
+
+  return 'Completeness';
+}
+
+function getDetailEvidenceLabel(args: {
+  deep: ReturnType<typeof getRepositoryDeepAnalysisStatus>;
+  fallback: boolean;
+  conflict: boolean;
+  hasFinalDecisionWithoutDeep: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  if (args.deep.missingSteps.length > 0) {
+    return `还缺 ${args.deep.missingSteps.map(mapMissingStepLabel).join('、')}`;
+  }
+
+  if (args.hasFinalDecisionWithoutDeep || args.missingKeyAnalysis) {
+    return '还缺稳定的 deep 证据，先补齐后再决定是否继续投入。';
+  }
+
+  if (args.conflict) {
+    return '关键分析已补齐，但当前还缺冲突校准和复核结论。';
+  }
+
+  if (args.fallback) {
+    return '关键分析已补齐，但当前仍命中 fallback，需要补稳定的非兜底结论。';
+  }
+
+  return '关键 deep 证据已经补齐';
+}
+
+function selectDetailPrimaryAction(args: {
+  displayState: RepositoryDecisionDisplayState;
+  deep: ReturnType<typeof getRepositoryDeepAnalysisStatus>;
+  fallback: boolean;
+  conflict: boolean;
+  hasFinalDecisionWithoutDeep: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  const needsAdditionalAnalysis =
+    args.deep.missingSteps.length > 0 ||
+    args.hasFinalDecisionWithoutDeep ||
+    args.missingKeyAnalysis;
+
+  if (args.displayState === 'trusted' && !needsAdditionalAnalysis) {
+    return {
+      label: '开始验证',
+      description: '先用最短路径验证这个判断是否值得继续推进。',
+      intent: 'validate' as const,
+      baseJudgementNotice: null,
+    };
+  }
+
+  if (needsAdditionalAnalysis) {
+    return {
+      label: '先补分析',
+      description: '这是基础判断，不是最终可信结论，先补 deep 再决定是否继续投入。',
+      intent: 'analyze' as const,
+      baseJudgementNotice: '这是基础判断，不是最终可信结论。',
+    };
+  }
+
+  if (args.conflict) {
+    return {
+      label: '先观察',
+      description: '关键分析已补齐，但当前结论存在冲突，先看证据和复核口径，不进入强推进。',
+      intent: 'review' as const,
+      baseJudgementNotice: '当前存在冲突，先按保守结论展示。',
+    };
+  }
+
+  if (args.fallback) {
+    return {
+      label: '先观察',
+      description: '关键分析已补齐，但当前仍命中 fallback，先按参考信息处理，不进入强推进。',
+      intent: 'review' as const,
+      baseJudgementNotice: '当前仍命中 fallback，先按保守结论展示。',
+    };
+  }
+
+  return {
+    label: '先观察',
+    description: '当前结论暂不进入强推进，先看证据，再决定是否继续投入。',
+    intent: 'review' as const,
+    baseJudgementNotice: '当前先按保守结论展示。',
+  };
+}
+
+function buildDetailFields(args: {
+  displayState: RepositoryDecisionDisplayState;
+  deep: ReturnType<typeof getRepositoryDeepAnalysisStatus>;
+  fallback: boolean;
+  conflict: boolean;
+  hasFinalDecisionWithoutDeep: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  const primaryAction = selectDetailPrimaryAction(args);
+
+  return {
+    statusLabel: args.displayState,
+    primaryActionLabel: primaryAction.label,
+    primaryActionDescription: primaryAction.description,
+    primaryActionIntent: primaryAction.intent,
+    baseJudgementNotice: primaryAction.baseJudgementNotice,
+    missingEvidenceLabel: getDetailEvidenceLabel(args),
+  };
+}
+
+function getIdeaExtractStatusLabel(
+  status: ReturnType<typeof getRepositoryIdeaExtractStatus>['status'],
+) {
+  switch (status) {
+    case 'COMPLETED':
+      return '证据已补齐';
+    case 'RUNNING':
+      return '补跑中';
+    case 'PENDING':
+      return '排队中';
+    case 'FAILED':
+      return '补跑失败';
+    case 'SKIPPED_BY_GATE':
+      return '基础判断已完成';
+    case 'SKIPPED_BY_STRENGTH':
+      return '已按强度跳过';
+    case 'NOT_STARTED':
+    default:
+      return '待补分析';
+  }
+}
+
+function getCollapsedModuleStatusLabel(args: {
+  completed: boolean;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+  defaultMissingLabel: string;
+}) {
+  if (!args.completed) {
+    return args.defaultMissingLabel;
+  }
+
+  if (args.displayState === 'trusted') {
+    return '证据已补齐';
+  }
+
+  if (args.missingKeyAnalysis) {
+    return '局部已补齐，仍缺其他证据';
+  }
+
+  if (args.conflict) {
+    return '证据已补齐，但结论受限';
+  }
+
+  if (args.fallback) {
+    return '证据已补齐，但当前仅供参考';
+  }
+
+  return '证据已补齐';
+}
+
+function getHeldBackModuleSummary(args: {
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  if (args.displayState === 'trusted') {
+    return null;
+  }
+
+  if (args.missingKeyAnalysis) {
+    return '这一层就算局部补齐，整页仍缺关键证据，先按保守口径展示。';
+  }
+
+  if (args.conflict) {
+    return '这一层已有结果，但当前冲突未解，先不要把它当成可推进判断。';
+  }
+
+  if (args.fallback) {
+    return '这一层已有结果，但当前仍命中 fallback，先按参考信息处理。';
+  }
+
+  return '当前先按保守口径展示，不把这一层结果直接升级成行动结论。';
+}
+
+function buildIdeaFitModule(args: {
+  repository: RepositoryDecisionViewModelTarget;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+  detail: {
+    missingEvidenceLabel: string;
+  };
+}) {
+  const ideaFit = args.repository.analysis?.ideaFitJson;
+  const completed = Boolean(ideaFit);
+  const statusLabel = getCollapsedModuleStatusLabel({
+    completed,
+    displayState: args.displayState,
+    fallback: args.fallback,
+    conflict: args.conflict,
+    missingKeyAnalysis: args.missingKeyAnalysis,
+    defaultMissingLabel: '待补分析',
+  });
+
+  return {
+    key: 'ideaFit' as const,
+    title: 'Idea Fit',
+    subtitle: '创业价值判断',
+    statusLabel,
+    coreGapLabel: completed
+      ? args.displayState === 'trusted'
+        ? `机会层级 ${ideaFit?.opportunityLevel ?? '已补齐'}`
+        : '这一层结果已回填，但当前整页仍按保守口径展示'
+      : '还缺创业评分、机会层级和负向信号',
+    evidenceNeededLabel: completed
+      ? args.displayState === 'trusted'
+        ? '这层关键证据已经补齐'
+        : args.detail.missingEvidenceLabel
+      : '补创业评分、机会层级和负向信号',
+    detailSummary:
+      (args.displayState === 'trusted'
+        ? ideaFit?.coreJudgement
+        : getHeldBackModuleSummary(args)) ??
+      '这层分析还没开始，先补齐创业评分和机会层级。',
+    detailMetrics: [
+      {
+        label: '机会层级',
+        value: ideaFit?.opportunityLevel ?? '待补齐',
+      },
+      {
+        label: '证据状态',
+        value: statusLabel,
+      },
+    ],
+    runner: {
+      step: 'ideaFit' as const,
+      label: '补创业评分',
+      runningLabel: '创业评分补跑中...',
+      successLabel: '创业评分已加入队列，稍后刷新就能看到新的判断。',
+    },
+  };
+}
+
+function buildIdeaExtractModule(args: {
+  repository: RepositoryDecisionViewModelTarget;
+  relatedJobs?: JobLogItem[] | null;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+  detail: {
+    missingEvidenceLabel: string;
+  };
+}) {
+  const extractedIdea = args.repository.analysis?.extractedIdeaJson;
+  const ideaExtractStatus = getRepositoryIdeaExtractStatus(
+    args.repository as RepositoryDecisionSourceTarget,
+    args.relatedJobs,
+  );
+  const completed = Boolean(extractedIdea);
+  const statusLabel = completed
+    ? getCollapsedModuleStatusLabel({
+        completed,
+        displayState: args.displayState,
+        fallback: args.fallback,
+        conflict: args.conflict,
+        missingKeyAnalysis: args.missingKeyAnalysis,
+        defaultMissingLabel: '待补分析',
+      })
+    : getIdeaExtractStatusLabel(ideaExtractStatus.status);
+
+  return {
+    key: 'ideaExtract' as const,
+    title: 'Idea Extraction',
+    subtitle: '用户、场景和收费表述',
+    statusLabel,
+    coreGapLabel: completed
+      ? args.displayState === 'trusted'
+        ? '一句话点子、用户场景和收费表述已补齐'
+        : '这一层结果已回填，但当前整页仍按保守口径展示'
+      : '还缺一句话点子、用户场景和收费表述',
+    evidenceNeededLabel: completed
+      ? args.displayState === 'trusted'
+        ? '这层关键证据已经补齐'
+        : args.detail.missingEvidenceLabel
+      : '补一句话点子、用户场景和收费表述',
+    detailSummary:
+      (args.displayState === 'trusted'
+        ? extractedIdea?.ideaSummary
+        : getHeldBackModuleSummary(args)) ??
+      ideaExtractStatus.helperText,
+    detailMetrics: [
+      {
+        label: '提取模式',
+        value: extractedIdea?.extractMode ?? ideaExtractStatus.mode ?? '待补齐',
+      },
+      {
+        label: '证据状态',
+        value: statusLabel,
+      },
+    ],
+    runner: {
+      step: 'ideaExtract' as const,
+      label: '补点子提取',
+      runningLabel: '点子提取补跑中...',
+      successLabel: '点子提取已加入队列，稍后刷新就能看到新的结果。',
+    },
+  };
+}
+
+function buildCompletenessModule(args: {
+  repository: RepositoryDecisionViewModelTarget;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+  detail: {
+    missingEvidenceLabel: string;
+  };
+}) {
+  const completeness = args.repository.analysis?.completenessJson;
+  const completed = Boolean(completeness);
+  const statusLabel = getCollapsedModuleStatusLabel({
+    completed,
+    displayState: args.displayState,
+    fallback: args.fallback,
+    conflict: args.conflict,
+    missingKeyAnalysis: args.missingKeyAnalysis,
+    defaultMissingLabel: '待补分析',
+  });
+
+  return {
+    key: 'completeness' as const,
+    title: 'Completeness',
+    subtitle: '完整性与可落地性',
+    statusLabel,
+    coreGapLabel: completed
+      ? args.displayState === 'trusted'
+        ? `完整性等级 ${completeness?.completenessLevel ?? args.repository.completenessLevel ?? '已补齐'}`
+        : '这一层结果已回填，但当前整页仍按保守口径展示'
+      : '还缺完整性等级、工程成熟度和可落地成本判断',
+    evidenceNeededLabel: completed
+      ? args.displayState === 'trusted'
+        ? '这层关键证据已经补齐'
+        : args.detail.missingEvidenceLabel
+      : '补完整性等级、工程成熟度和可落地成本判断',
+    detailSummary:
+      (args.displayState === 'trusted'
+        ? completeness?.summary
+        : getHeldBackModuleSummary(args)) ??
+      '完整性分析还没回填，这里先按缺证据处理。',
+    detailMetrics: [
+      {
+        label: '完整性等级',
+        value:
+          completeness?.completenessLevel ??
+          args.repository.completenessLevel ??
+          '待补齐',
+      },
+      {
+        label: '证据状态',
+        value: statusLabel,
+      },
+    ],
+    runner: {
+      step: 'completeness' as const,
+      label: '补完整性分析',
+      runningLabel: '完整性分析补跑中...',
+      successLabel: '完整性分析已加入队列，稍后刷新就能看到新的结果。',
+    },
+  };
+}
+
+function buildEvidenceComparison(args: {
+  summary: RepositoryDecisionSummary;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+}) {
+  return {
+    localVerdict: args.summary.comparison.localVerdict,
+    claudeVerdict: args.summary.comparison.claudeVerdict,
+    localOneLiner: args.summary.comparison.localOneLiner,
+    claudeOneLiner: args.summary.comparison.claudeOneLiner,
+    conflictSummary: args.conflict
+      ? args.summary.conflictReasons.length
+        ? args.summary.conflictReasons.join('、')
+        : '当前存在冲突或复核未收口，先按保守口径处理。'
+      : args.fallback
+        ? '当前仍命中 fallback，先不要把这组比较当成最终可信结论。'
+        : args.missingKeyAnalysis
+          ? '关键分析还没补齐，这里的比较先按参考信息处理。'
+          : '当前没有明显冲突',
+  };
+}
+
+function buildHeadline(
+  repository: RepositoryDecisionViewModelTarget,
+  summary: RepositoryDecisionSummary,
+  displayState: RepositoryDecisionDisplayState,
+) {
+  const forceDegrade = displayState !== 'trusted';
+
+  return {
+    headline: getRepositoryDecisionHeadline(
+      repository as RepositoryDecisionSourceTarget,
+      summary,
+      {
+      forceDegrade,
+      },
+    ),
+    homepageHeadline: getRepositoryHomepageHeadline(
+      repository as RepositoryDecisionSourceTarget,
+      summary,
+      {
+      forceDegrade,
+      },
+    ),
+  };
+}
+
+function buildCta(displayState: RepositoryDecisionDisplayState) {
+  if (displayState === 'trusted') {
+    return {
+      heading: '现在就开始行动',
+      primary: {
+        title: '开始验证',
+        description: '先进入详情页验证最关键的证据和路径。',
+        intent: 'validate' as const,
+      },
+      secondary: {
+        title: '加入跟进列表',
+        description: '把它放进你的长期推进池，并同步到任务页。',
+        intent: 'follow_up' as const,
+      },
+      tertiary: {
+        title: '查看详情',
+        description: '先保留为参考，再去详情页看完整证据。',
+        intent: 'reference' as const,
+      },
+      showValidationActions: false,
+    };
+  }
+
+  if (displayState === 'provisional') {
+    return {
+      heading: '先补分析，再决定下一步',
+      primary: {
+        title: '先补分析',
+        description: '先确认用户、场景和收费路径，再决定要不要继续投入。',
+        intent: 'validate' as const,
+      },
+      secondary: {
+        title: '加入跟进列表',
+        description: '先把它放进观察列表，等深分析补齐后再回看。',
+        intent: 'follow_up' as const,
+      },
+      tertiary: {
+        title: '查看详情',
+        description: '先按未验证机会处理，后面有新信号再回看。',
+        intent: 'reference' as const,
+      },
+      showValidationActions: false,
+    };
+  }
+
+  return {
+    heading: '先按保守口径处理',
+    primary: {
+      title: '先观察',
+      description: '当前信号还不稳定，先别把它当成已验证机会。',
+      intent: 'reference' as const,
+    },
+    secondary: {
+      title: '加入跟进列表',
+      description: '补齐冲突或缺失分析后，再决定是否继续投入。',
+      intent: 'follow_up' as const,
+    },
+    tertiary: {
+      title: '查看详情',
+      description: '暂时只保留参考价值，不进入强推进流程。',
+      intent: 'reference' as const,
+    },
+    showValidationActions: false,
+  };
+}
+
+export function buildRepositoryDecisionViewModel(
+  repository: RepositoryDecisionViewModelTarget,
+  options: {
+    relatedJobs?: JobLogItem[] | null;
+    summary?: RepositoryDecisionSummary;
+  } = {},
+): RepositoryDecisionViewModel {
+  const repositoryRecord = repository as RepositoryDecisionSourceTarget;
+  const summary = options.summary ?? getRepositoryDecisionSummary(repositoryRecord);
+  const guard = detectRepositoryConflicts(repositoryRecord, {
+    summary,
+    relatedJobs: options.relatedJobs ?? [],
+  });
+  const behaviorContext = getRepositoryActionBehaviorContext(
+    repositoryRecord,
+    summary,
+  );
+  const deep = getRepositoryDeepAnalysisStatus(
+    repositoryRecord,
+    options.relatedJobs,
+  );
+  const incompleteReasons = getRepositoryIncompleteReasons(repository);
+  const hasFinalDecision = Boolean(repository.finalDecision);
+  const hasDeepAnalysis = hasRepositoryDeepAnalysis(repository, deep);
+  const hasFinalDecisionWithoutDeep = hasFinalDecision && !hasDeepAnalysis;
+  const fallback =
+    guard.fallback ||
+    summary.source === 'fallback' ||
+    repository.analysis?.fallbackUsed === true;
+  const conflict =
+    summary.hasConflict ||
+    summary.needsRecheck ||
+    guard.snapshotConflict ||
+    repository.analysisState?.unsafe === true;
+  const missingKeyAnalysis =
+    repository.analysisState?.unsafe === true ||
+    !repository.analysis?.insightJson ||
+    !hasFinalDecision ||
+    incompleteReasons.some((reason) => DEGRADE_INCOMPLETE_REASONS.has(reason)) ||
+    deep.status === 'FAILED';
+  const displayState = buildDisplayState({
+    hasDeepAnalysis,
+    hasFinalDecisionWithoutDeep,
+    fallback,
+    conflict,
+    missingKeyAnalysis,
+  });
+  const lowConfidence =
+    isRepositoryDecisionLowConfidence(repositoryRecord, summary) ||
+    displayState === 'degraded';
+  const confidence = buildDisplayConfidence(displayState, lowConfidence);
+  const actionDisplay = buildDisplayAction({
+    displayState,
+    action: summary.action,
+    fallback,
+    conflict,
+    missingKeyAnalysis,
+  });
+  const priorityDisplay = buildDisplayPriority(
+    displayState,
+    summary.moneyPriority.tier,
+    summary.moneyPriority.label,
+  );
+  const reason = buildDisplayReason({
+    displayState,
+    repository,
+    summary,
+    fallback,
+    conflict,
+    hasFinalDecisionWithoutDeep,
+    missingKeyAnalysis,
+  });
+  const caution = buildDisplayCaution(displayState);
+  const verdictLabel = buildDisplayVerdict(displayState, summary);
+  const headlines = buildHeadline(repository, summary, displayState);
+  const monetization = buildDisplayMonetization({
+    displayState,
+    repository,
+    summary,
+  });
+  const targetUsersLabel = buildDisplayTargetUsers({
+    displayState,
+    repository,
+    summary,
+  });
+  const worthDoingLabel = buildDisplayWorthDoing(displayState, summary);
+  const cta = buildCta(displayState);
+  const detail = buildDetailFields({
+    displayState,
+    deep,
+    fallback,
+    conflict,
+    hasFinalDecisionWithoutDeep,
+    missingKeyAnalysis,
+  });
+  const analysisModules = {
+    ideaFit: buildIdeaFitModule({
+      repository,
+      displayState,
+      fallback,
+      conflict,
+      missingKeyAnalysis,
+      detail,
+    }),
+    ideaExtract: buildIdeaExtractModule({
+      repository,
+      relatedJobs: options.relatedJobs,
+      displayState,
+      fallback,
+      conflict,
+      missingKeyAnalysis,
+      detail,
+    }),
+    completeness: buildCompletenessModule({
+      repository,
+      displayState,
+      fallback,
+      conflict,
+      missingKeyAnalysis,
+      detail,
+    }),
+  };
+  const evidence = {
+    comparison: buildEvidenceComparison({
+      summary,
+      fallback,
+      conflict,
+      missingKeyAnalysis,
+    }),
+  };
+
+  return {
+    displayState,
+    display: {
+      headline: headlines.headline,
+      homepageHeadline: headlines.homepageHeadline,
+      finalDecisionLabel: verdictLabel,
+      actionLabel: actionDisplay.label,
+      actionSentence: actionDisplay.sentence,
+      priorityLabel: priorityDisplay.displayLabel,
+      worthDoingLabel,
+      targetUsersLabel,
+      monetizationLabel: monetization.monetizationLabel,
+      homepageMonetizationLabel: monetization.homepageMonetizationLabel,
+      reason,
+      caution,
+    },
+    detail,
+    analysisModules,
+    evidence,
+    verdict: {
+      code: summary.verdict,
+      judgementLabel: summary.judgementLabel,
+      label: summary.verdictLabel,
+      displayLabel: verdictLabel,
+    },
+    action: {
+      code: summary.action,
+      toneKey: actionDisplay.toneKey,
+      label: actionDisplay.label,
+      sentence: actionDisplay.sentence,
+    },
+    priority: {
+      tier: summary.moneyPriority.tier,
+      toneTier: priorityDisplay.toneTier,
+      sourceLabel: summary.moneyPriority.label,
+      displayLabel: priorityDisplay.displayLabel,
+    },
+    confidence,
+    deep: {
+      ...deep,
+      hasDeepAnalysis,
+      needsAdditionalAnalysis: !hasDeepAnalysis,
+    },
+    behaviorContext,
+    badges: {
+      analysisLayerLabel: getRepositoryAnalysisLayerLabel(
+        repositoryRecord,
+        options.relatedJobs,
+      ),
+      claudeReviewLabel: getRepositoryClaudeReviewLabel(repositoryRecord),
+      hasManualOverride: summary.hasManualOverride,
+      hasConflict: summary.hasConflict,
+      needsRecheck: summary.needsRecheck,
+      hasTrainingHints: summary.hasTrainingHints,
+    },
+    flags: {
+      fallback,
+      conflict,
+      incomplete: missingKeyAnalysis,
+      missingKeyAnalysis,
+      hasFinalDecision,
+      hasDeepAnalysis,
+      hasFinalDecisionWithoutDeep,
+      hideFromHomepage: guard.hideFromHomepage || displayState !== 'trusted',
+      allowStrongClaims: displayState === 'trusted',
+      allowStrongMonetization: displayState === 'trusted',
+      allowStrongUserPersona: displayState === 'trusted',
+      allowStrongAction: displayState === 'trusted',
+    },
+    cta,
+  };
+}

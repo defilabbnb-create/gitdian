@@ -1,3 +1,4 @@
+import { SettingsBuildInfo } from '@/components/settings/settings-build-info';
 import { SettingsForm } from '@/components/settings/settings-form';
 import { SettingsRuntimeSummary } from '@/components/settings/settings-runtime-summary';
 import { SettingsTechnicalDetails } from '@/components/settings/settings-technical-details';
@@ -63,6 +64,7 @@ export default async function SettingsPage() {
               health={health}
               healthErrorMessage={healthErrorMessage}
             />
+            <SettingsBuildInfo />
           </section>
         ) : (
           <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
