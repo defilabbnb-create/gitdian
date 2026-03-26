@@ -36,6 +36,7 @@ export type JobsPriorityViewModel = {
   attentionGroups: JobPriorityGroup[];
   hiddenGroupCount: number;
   hiddenJobCount: number;
+  visibleGroupCount: number;
   summaryTitle: string;
   summaryDescription: string;
 };
@@ -91,6 +92,7 @@ export function buildJobsPriorityViewModel(
     attentionGroups: visibleAttentionGroups,
     hiddenGroupCount: hiddenGroups.length,
     hiddenJobCount: hiddenGroups.reduce((sum, group) => sum + group.count, 0),
+    visibleGroupCount: anomalyGroups.slice(0, 6).length + visibleAttentionGroups.length,
     summaryTitle: anomalyGroups.length
       ? '先处理失败、卡住和排队过久的任务。'
       : '当前无异常，首屏只保留值得盯的任务分组。',

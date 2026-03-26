@@ -1,5 +1,3 @@
-'use client';
-
 import Link from 'next/link';
 import {
   buildJobsPriorityViewModel,
@@ -23,7 +21,7 @@ export function JobsPriorityBoard({
   const viewModel = buildJobsPriorityViewModel(items, query);
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6" data-testid="jobs-priority-board">
       <section className="rounded-[32px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(3,105,161,0.86)_100%)] px-7 py-8 text-white shadow-xl shadow-slate-900/10">
         <div className="max-w-4xl">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200/70">
@@ -35,6 +33,16 @@ export function JobsPriorityBoard({
           <p className="mt-4 text-sm leading-7 text-slate-200 md:text-base">
             {viewModel.summaryTitle} {viewModel.summaryDescription}
           </p>
+
+          <div className="mt-5 rounded-2xl border border-white/15 bg-white/5 px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80">
+              Plain Text
+            </p>
+            <div className="mt-2 space-y-1 font-mono text-xs text-sky-50">
+              <p>当前视图：聚合摘要</p>
+              <p>聚合组数：{viewModel.visibleGroupCount}</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -118,6 +126,7 @@ function JobPriorityGroupCard({
     <article
       data-job-aggregate-card="true"
       data-job-group-state={group.state}
+      data-testid="jobs-aggregated-group"
       className={`rounded-[28px] border bg-white p-6 shadow-sm ${
         isFocused
           ? 'border-sky-300 ring-2 ring-sky-100'

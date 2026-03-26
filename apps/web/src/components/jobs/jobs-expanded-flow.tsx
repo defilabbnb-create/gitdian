@@ -56,6 +56,7 @@ export function JobsExpandedFlow({
       id="jobs-expanded-flow"
       className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur"
       data-jobs-expanded-flow={isExpanded ? 'expanded' : 'collapsed'}
+      data-testid="jobs-expanded-flow"
     >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>

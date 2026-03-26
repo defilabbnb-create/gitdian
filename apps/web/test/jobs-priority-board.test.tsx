@@ -119,6 +119,22 @@ test('the first screen no longer repeats 待记录 placeholders', () => {
   assert.doesNotMatch(html, /待记录/);
 });
 
+test('the first screen includes stable aggregate text and selectors in SSR html', () => {
+  const html = renderPriorityBoard([
+    createJobFixture({ id: 'pending-1' }),
+    createJobFixture({
+      id: 'running-1',
+      jobStatus: 'RUNNING',
+      startedAt: '2026-03-26T08:05:00.000Z',
+    }),
+  ]);
+
+  assert.match(html, /data-testid="jobs-priority-board"/);
+  assert.match(html, /当前视图：聚合摘要/);
+  assert.match(html, /聚合组数：2/);
+  assert.match(html, /data-testid="jobs-aggregated-group"/);
+});
+
 test('cancel task is not a first-screen high-priority action', () => {
   const html = renderPriorityBoard([
     createJobFixture({ id: 'pending-1' }),
@@ -159,6 +175,7 @@ test('expanded full task flow still renders raw task details after drill-in', ()
   );
 
   assert.match(html, /data-jobs-expanded-flow="expanded"/);
+  assert.match(html, /data-testid="jobs-expanded-flow"/);
   assert.match(html, /analysis.run_single/);
   assert.match(html, /执行输入/);
   assert.match(html, /repositoryId/);
