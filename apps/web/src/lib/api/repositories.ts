@@ -22,6 +22,14 @@ function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
 }
 
+function getRepositoryListApiUrl(search: string) {
+  if (typeof window !== 'undefined') {
+    return `/api/repositories${search ? `?${search}` : ''}`;
+  }
+
+  return `${getApiBaseUrl()}/api/repositories${search ? `?${search}` : ''}`;
+}
+
 function buildTimeoutSignal(timeoutMs?: number) {
   if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
     return undefined;
@@ -85,17 +93,21 @@ export async function getRepositories(
   query: RepositoryListQueryState,
   options: {
     timeoutMs?: number;
+    signal?: AbortSignal;
   } = {},
 ) {
   const search = buildRepositoryListSearchParams(query, {
     includeUiState: false,
   });
-  const url = `${getApiBaseUrl()}/api/repositories${search ? `?${search}` : ''}`;
+  const url = getRepositoryListApiUrl(search);
+  const signal =
+    options.signal ??
+    buildTimeoutSignal(options.timeoutMs);
 
   const response = await fetch(url, {
     method: 'GET',
     cache: 'no-store',
-    signal: buildTimeoutSignal(options.timeoutMs),
+    signal,
     headers: {
       Accept: 'application/json',
     },
