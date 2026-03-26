@@ -38,10 +38,6 @@ import {
   getRepositoryDecisionConflictAudit,
   getRepositoryDecisionSummary,
   getRepositoryHeadlineValidation,
-  getRepositoryHomepageDecisionReason,
-  getRepositoryHomepageHeadline,
-  getRepositoryHomepageMonetizationAnswer,
-  getRepositoryDisplayTargetUsersLabel,
   getRepositoryOneLinerStrength,
   hasStrongHomepageHeadline,
   isRepositoryDecisionLowConfidence,
@@ -49,6 +45,12 @@ import {
   shouldDegradeHomepageHeadline,
   validateRepositoryHeadlineBatch,
 } from '@/lib/repository-decision';
+import {
+  buildRepositoryDecisionViewModel,
+  type RepositoryDecisionViewModel,
+  type RepositoryDecisionCtaIntent,
+} from '@/lib/repository-decision-view-model';
+import { buildHomeEmptyStateViewModel } from '@/lib/home-empty-state-view-model';
 import { RepositoryListItem } from '@/lib/types/repository';
 
 type HomeFeaturedRepositoriesProps = {
@@ -58,6 +60,7 @@ type HomeFeaturedRepositoriesProps = {
 type Candidate = {
   repository: RepositoryListItem;
   summary: ReturnType<typeof getRepositoryDecisionSummary>;
+  decisionView: RepositoryDecisionViewModel;
   headline: string;
   isLowConfidence: boolean;
   isStructurallyWeak: boolean;
@@ -155,16 +158,12 @@ export function HomeFeaturedRepositories({
   }
 
   const top1 = selection.top1;
-  const top1Reason = top1.guard.hideWhy
-    ? '先确认这个项目到底值不值得继续补分析，再决定要不要继续投入。'
-    : getRepositoryHomepageDecisionReason(top1.repository, top1.summary);
+  const top1Reason = top1.decisionView.display.reason;
   const top1Users = sanitizeTopSignalValue(
-    getRepositoryDisplayTargetUsersLabel(top1.repository, top1.summary),
+    top1.decisionView.display.targetUsersLabel,
     '目标用户已经比较明确，进详情页确认细分人群。',
   );
-  const top1Monetization = top1.guard.hideMonetization
-    ? '收费路径还不够清楚，建议先确认真实用户和场景。'
-    : getRepositoryHomepageMonetizationAnswer(top1.repository, top1.summary);
+  const top1Monetization = top1.decisionView.display.homepageMonetizationLabel;
 
   return (
     <section className="space-y-6 overflow-hidden rounded-[40px] border border-slate-200 bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(248,250,252,0.98)_100%)] p-6 shadow-lg shadow-slate-900/5 backdrop-blur md:p-8">
@@ -294,20 +293,15 @@ export function HomeFeaturedRepositories({
                   {item.headline}
                 </Link>
                 <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-600">
-                  {item.guard.hideWhy
-                    ? '先确认用户、场景和收费路径，再决定要不要继续投入。'
-                    : getRepositoryHomepageDecisionReason(
-                        item.repository,
-                        item.summary,
-                      )}
+                  {item.decisionView.display.reason}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
                   <span
                     className={`rounded-full border px-3 py-1 ${getActionTone(
-                      item.summary.action,
+                      item.decisionView.action.toneKey,
                     )}`}
                   >
-                    {toHomepageActionLabel(item.summary.action)}
+                    {item.decisionView.display.actionLabel}
                   </span>
                 </div>
                 {item.behaviorExplanation.influenced ? (
@@ -366,10 +360,7 @@ function HomepageTopActionStrip({
       htmlUrl: candidate.repository.htmlUrl,
       detailPath: `/repositories/${candidate.repository.id}`,
       headline: candidate.headline,
-      reason: getRepositoryHomepageDecisionReason(
-        candidate.repository,
-        candidate.summary,
-      ),
+      reason: candidate.decisionView.display.reason,
       categoryLabel: candidate.behaviorContext.categoryLabel,
       projectType: candidate.behaviorContext.projectType,
       targetUsersLabel: candidate.behaviorContext.targetUsersLabel,
@@ -381,6 +372,35 @@ function HomepageTopActionStrip({
     }),
     [candidate],
   );
+
+  function handleKeepAsReference() {
+    setErrorMessage(null);
+    setFeedback(null);
+    createOrMergeActionLoopEntry(entryBase, {
+      actionStatus: 'NOT_STARTED',
+      followUpStage: 'OBSERVE',
+      isActiveFollowUp: false,
+      source: 'manual_click',
+      confidence: 'medium',
+    });
+    setFeedback('已按仅供参考处理，后面有新信号再回看。');
+  }
+
+  function handleIntent(intent: RepositoryDecisionCtaIntent) {
+    if (intent === 'start') {
+      return handleStart();
+    }
+
+    if (intent === 'follow_up') {
+      return handleFollowUp();
+    }
+
+    if (intent === 'validate') {
+      return handleValidate();
+    }
+
+    return handleKeepAsReference();
+  }
 
   async function handleStart() {
     setErrorMessage(null);
@@ -469,31 +489,27 @@ function HomepageTopActionStrip({
         <span className="text-slate-300">现在就开始：</span>
         <button
           type="button"
-          onClick={handleStart}
+          onClick={() => handleIntent(candidate.decisionView.cta.primary.intent)}
           className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
         >
-          {status === 'NOT_STARTED'
-            ? '开始做这个项目'
-            : status === 'IN_PROGRESS'
-              ? '继续推进'
-              : status === 'VALIDATING'
-                ? '查看验证结果'
-                : '已完成'}
+          {candidate.decisionView.cta.primary.title}
         </button>
         <button
           type="button"
-          onClick={handleFollowUp}
-          disabled={isSubmitting}
+          onClick={() => handleIntent(candidate.decisionView.cta.tertiary.intent)}
+          disabled={isSubmitting || (isActiveFollowUp && candidate.decisionView.cta.tertiary.intent === 'follow_up')}
           className="inline-flex items-center rounded-full border border-sky-400/40 bg-sky-500/10 px-4 py-2 font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isActiveFollowUp ? '已加入跟进' : '加入跟进'}
+          {candidate.decisionView.cta.tertiary.intent === 'follow_up' && isActiveFollowUp
+            ? '已加入跟进'
+            : candidate.decisionView.cta.tertiary.title}
         </button>
         <button
           type="button"
-          onClick={handleValidate}
+          onClick={() => handleIntent(candidate.decisionView.cta.secondary.intent)}
           className="inline-flex items-center rounded-full border border-amber-400/40 bg-amber-500/10 px-4 py-2 font-semibold text-amber-100 transition hover:border-amber-300 hover:bg-amber-500/20"
         >
-          快速验证
+          {candidate.decisionView.cta.secondary.title}
         </button>
       </div>
       {feedback ? (
@@ -603,8 +619,8 @@ function buildCandidate(
   profile: BehaviorMemoryProfile,
 ): Candidate | null {
   const summary = getRepositoryDecisionSummary(repository);
-  const headline =
-    validation?.sanitized ?? getRepositoryHomepageHeadline(repository, summary);
+  const decisionView = buildRepositoryDecisionViewModel(repository, { summary });
+  const headline = decisionView.display.homepageHeadline;
   const signals = repository.analysis?.moneyPriority?.signals;
   const projectType = repository.finalDecision?.projectType ?? signals?.projectType ?? null;
   const isLowConfidence = isRepositoryDecisionLowConfidence(repository, summary);
@@ -674,6 +690,7 @@ function buildCandidate(
   return {
     repository,
     summary,
+    decisionView,
     headline,
     isLowConfidence,
     isStructurallyWeak,
@@ -750,6 +767,10 @@ function passesHomepageTerminalGuard(candidate: Candidate) {
     candidate.actionStatus === 'COMPLETED' ||
     candidate.actionStatus === 'DROPPED'
   ) {
+    return false;
+  }
+
+  if (candidate.decisionView.displayState !== 'trusted') {
     return false;
   }
 
@@ -926,18 +947,6 @@ function hasLowValueHomepageSignal(summary: Candidate['summary']) {
   );
 }
 
-function toHomepageActionLabel(action: Candidate['summary']['action']) {
-  if (action === 'BUILD') {
-    return '立即做';
-  }
-
-  if (action === 'CLONE') {
-    return '快速验证';
-  }
-
-  return '暂不投入';
-}
-
 function getActionPriorityWeight(status: Candidate['actionStatus']) {
   if (status === 'VALIDATING') {
     return 3;
@@ -978,6 +987,18 @@ export function HomeNewOpportunitiesStrip({
     () => selectHomepageDecisionTerminal(items, actionMap, memoryProfile),
     [items, actionMap, memoryProfile],
   );
+  const emptyStateView = useMemo(
+    () =>
+      buildHomeEmptyStateViewModel({
+        trackedCandidates: [selection.top1, ...selection.top3]
+          .filter((item): item is Candidate => Boolean(item))
+          .map((item) => ({
+            isFavorited: item.repository.isFavorited,
+            actionStatus: item.actionStatus,
+          })),
+      }),
+    [selection],
+  );
 
   return (
     <section className="rounded-[28px] border border-slate-200 bg-white/90 px-5 py-5 shadow-sm backdrop-blur">
@@ -1004,17 +1025,15 @@ export function HomeNewOpportunitiesStrip({
                 {item.headline}
               </Link>
               <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-600">
-                {item.guard.hideWhy
-                  ? '先确认这条新方向的用户、场景和收费路径，再决定要不要继续投入。'
-                  : getRepositoryHomepageDecisionReason(item.repository, item.summary)}
+                {item.decisionView.display.reason}
               </p>
               <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
                 <span
                   className={`rounded-full border px-3 py-1 ${getActionTone(
-                    item.summary.action,
+                    item.decisionView.action.toneKey,
                   )}`}
                 >
-                  {toHomepageActionLabel(item.summary.action)}
+                  {item.decisionView.display.actionLabel}
                 </span>
               </div>
               {item.behaviorExplanation.influenced ? (
@@ -1031,9 +1050,29 @@ export function HomeNewOpportunitiesStrip({
           ))}
         </div>
       ) : (
-        <div className="mt-5 rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-5 text-sm leading-7 text-slate-600">
-          当前没有新的高价值方向，先把已经开始推进的项目做出结果。
-        </div>
+        <section
+          data-home-empty-state="true"
+          className="mt-5 rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-5"
+        >
+          <p className="text-sm font-semibold text-slate-900">
+            {emptyStateView.statusLabel}
+          </p>
+          <p className="mt-3 text-sm leading-7 text-slate-600">
+            {emptyStateView.guidanceLabel}
+          </p>
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Link
+              href={emptyStateView.primaryAction.href}
+              data-home-empty-primary-cta="true"
+              className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              {emptyStateView.primaryAction.label}
+            </Link>
+            <p className="max-w-xl text-sm leading-6 text-slate-500">
+              {emptyStateView.primaryAction.description}
+            </p>
+          </div>
+        </section>
       )}
     </section>
   );
