@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { HomePageShellFallback } from '../src/components/repositories/home-empty-state-fallback';
 import { HomeNewOpportunitiesStrip } from '../src/components/repositories/home-featured-repositories';
 import { HomeSecondaryLinks } from '../src/components/repositories/home-runtime-status';
 import { buildHomeEmptyStateViewModel } from '../src/lib/home-empty-state-view-model';
@@ -53,6 +54,21 @@ test('home empty state keeps secondary entry links visible without competing wit
   assert.match(html, /任务/);
   assert.match(html, /设置/);
   assert.match(html, /全部项目/);
+});
+
+test('homepage SSR shell keeps the empty-state CTA and secondary links crawlable', () => {
+  const html = renderToStaticMarkup(<HomePageShellFallback />);
+  const primaryMatches = html.match(/data-home-empty-primary-cta="true"/g) ?? [];
+
+  assert.equal(primaryMatches.length, 1);
+  assert.match(html, /data-home-empty-state="true"/);
+  assert.match(html, /去完整机会池继续筛/);
+  assert.match(html, /其他入口/);
+  assert.match(html, /全部项目/);
+  assert.match(html, /收藏/);
+  assert.match(html, /任务/);
+  assert.match(html, /设置/);
+  assert.match(html, /id="all-projects"/);
 });
 
 test('homepage with new opportunities does not fall back to the empty state card', () => {

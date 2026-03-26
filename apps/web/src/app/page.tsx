@@ -1,8 +1,10 @@
+import { Suspense } from 'react';
 import {
   HomeFeaturedRepositories,
   HomeNewOpportunitiesStrip,
 } from '@/components/repositories/home-featured-repositories';
 import { HomeActiveProjectsStrip } from '@/components/repositories/home-active-projects-strip';
+import { HomePageShellFallback } from '@/components/repositories/home-empty-state-fallback';
 import { HomeOpportunityPool } from '@/components/repositories/home-opportunity-pool';
 import { HomeSecondaryLinks } from '@/components/repositories/home-runtime-status';
 import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
@@ -15,7 +17,19 @@ type HomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function HomePage({ searchParams }: HomePageProps) {
+export default function HomePage({ searchParams }: HomePageProps) {
+  return (
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)] px-6 py-8 text-slate-950">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <Suspense fallback={<HomePageShellFallback />}>
+          <HomePageContent searchParams={searchParams} />
+        </Suspense>
+      </div>
+    </main>
+  );
+}
+
+async function HomePageContent({ searchParams }: HomePageProps) {
   const rawSearchParams = ((await searchParams) ?? {}) as Record<
     string,
     string | string[] | undefined
@@ -47,41 +61,37 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)] px-6 py-8 text-slate-950">
-      <div className="mx-auto max-w-7xl space-y-6">
-        {repositories ? (
-          <section id="focus-board">
-            <HomeFeaturedRepositories items={repositories.items} />
-          </section>
-        ) : null}
+    <>
+      {repositories ? (
+        <section id="focus-board">
+          <HomeFeaturedRepositories items={repositories.items} />
+        </section>
+      ) : null}
 
-        <HomeActiveProjectsStrip />
+      <HomeActiveProjectsStrip />
 
-        {repositories ? <HomeNewOpportunitiesStrip items={repositories.items} /> : null}
+      {repositories ? <HomeNewOpportunitiesStrip items={repositories.items} /> : null}
 
-        <HomeSecondaryLinks />
+      <HomeSecondaryLinks />
 
-        {errorMessage ? (
-          <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
-              加载失败
-            </p>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-rose-950">
-              项目列表暂时加载失败
-            </h2>
-            <p className="mt-3 text-sm leading-7 text-rose-800">{errorMessage}</p>
-          </section>
-        ) : repositories ? (
-          <>
-            <HomeOpportunityPool
-              query={repositoriesQuery}
-              notice={repositoriesNotice}
-              collapsedByDefault={isDefaultLandingState}
-            />
-          </>
-        ) : null}
-      </div>
-    </main>
+      {errorMessage ? (
+        <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
+            加载失败
+          </p>
+          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-rose-950">
+            项目列表暂时加载失败
+          </h2>
+          <p className="mt-3 text-sm leading-7 text-rose-800">{errorMessage}</p>
+        </section>
+      ) : repositories ? (
+        <HomeOpportunityPool
+          query={repositoriesQuery}
+          notice={repositoriesNotice}
+          collapsedByDefault={isDefaultLandingState}
+        />
+      ) : null}
+    </>
   );
 }
 
