@@ -219,8 +219,12 @@ function FollowUpCard({
   }
 
   return (
-    <article className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
+    <article
+      data-testid="favorites-follow-up-card"
+      className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm"
+    >
       <p
+        data-favorite-status-summary="true"
         className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${getPriorityTone(favorite.priority)}`}
       >
         {cardView.statusSummary}
@@ -360,7 +364,10 @@ function RecentChangeCard({
   const cardView = buildFavoriteCardViewModel(favorite, actionEntry);
 
   return (
-    <article className="rounded-[26px] border border-slate-200 bg-slate-50 p-5">
+    <article
+      data-testid="favorites-follow-up-card"
+      className="rounded-[26px] border border-slate-200 bg-slate-50 p-5"
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold tracking-tight text-slate-950">
@@ -369,6 +376,7 @@ function RecentChangeCard({
           <p className="mt-2 text-sm text-slate-500">{cardView.recentChangeLabel}</p>
         </div>
         <span
+          data-favorite-status-summary="true"
           className={`rounded-full border px-3 py-1 text-xs font-semibold ${getPriorityTone(favorite.priority)}`}
         >
           {cardView.statusSummary}

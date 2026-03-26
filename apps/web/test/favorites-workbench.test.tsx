@@ -58,6 +58,33 @@ test('each favorite follow-up card renders exactly one primary CTA', () => {
   assert.equal(matches.length, 1);
 });
 
+test('follow-up board main card uses one merged status summary instead of separate badges', () => {
+  const html = renderToStaticMarkup(
+    <FavoritesFollowUpBoard items={[createProvisionalFavorite()]} />,
+  );
+
+  assert.match(html, /data-testid="favorites-follow-up-card"/);
+  assert.match(html, /data-favorite-status-summary="true"/);
+  assert.doesNotMatch(html, /跟进优先级/);
+  assert.doesNotMatch(html, /当前状态 ·/);
+  assert.doesNotMatch(html, /当前阶段 ·/);
+  assert.doesNotMatch(html, /保守判断 · 仅供参考/);
+});
+
+test('follow-up board main card does not flatten edit, github, or state-change actions', () => {
+  const html = renderToStaticMarkup(
+    <FavoritesFollowUpBoard items={[createProvisionalFavorite()]} />,
+  );
+
+  assert.match(html, /data-testid="favorites-follow-up-card"/);
+  assert.match(html, /调整跟进状态与更多操作/);
+  assert.doesNotMatch(html, /编辑收藏/);
+  assert.doesNotMatch(html, /去 GitHub/);
+  assert.doesNotMatch(html, /推进到尝试/);
+  assert.doesNotMatch(html, /暂停观察/);
+  assert.doesNotMatch(html, /放弃/);
+});
+
 test('favorite cards no longer flatten state-change actions on the first screen', () => {
   const html = renderToStaticMarkup(
     <FavoriteListItem favorite={createProvisionalFavorite()} showRemoveAction={false} />,
