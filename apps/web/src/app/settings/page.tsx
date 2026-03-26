@@ -41,6 +41,7 @@ export default async function SettingsPage() {
           health={health}
           aiHealth={aiHealth}
         />
+        <SettingsBuildInfo variant="compact" />
 
         {settings ? (
           <section className="space-y-6">

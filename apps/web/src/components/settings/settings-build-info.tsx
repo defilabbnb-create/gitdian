@@ -1,10 +1,66 @@
 import { getWebBuildInfo } from '@/lib/build-info';
 
-export function SettingsBuildInfo() {
+type SettingsBuildInfoProps = {
+  variant?: 'compact' | 'full';
+};
+
+export function SettingsBuildInfo({
+  variant = 'full',
+}: SettingsBuildInfoProps) {
   const buildInfo = getWebBuildInfo();
 
+  if (variant === 'compact') {
+    return (
+      <section className="rounded-[24px] border border-emerald-200 bg-emerald-50/90 p-4 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+              当前构建版本
+            </p>
+            <p className="mt-2 text-sm leading-6 text-emerald-950">
+              先看这里，直接确认线上当前跑的是哪个前端构建。
+            </p>
+          </div>
+
+          <a
+            href="#build-info"
+            className="inline-flex items-center justify-center rounded-full border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-100"
+          >
+            查看完整构建信息
+          </a>
+        </div>
+
+        <dl className="mt-4 grid gap-3 text-sm text-emerald-950 md:grid-cols-3">
+          <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
+            <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+              Git SHA
+            </dt>
+            <dd className="mt-2 font-mono text-sm">{buildInfo.gitSha}</dd>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
+            <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+              Environment
+            </dt>
+            <dd className="mt-2 font-mono text-sm">{buildInfo.environment}</dd>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
+            <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+              Build Time
+            </dt>
+            <dd className="mt-2 font-mono text-sm">{buildInfo.buildTime}</dd>
+          </div>
+        </dl>
+      </section>
+    );
+  }
+
   return (
-    <section className="rounded-[28px] border border-slate-200 bg-white/75 p-5 shadow-sm backdrop-blur">
+    <section
+      id="build-info"
+      className="rounded-[28px] border border-slate-200 bg-white/75 p-5 shadow-sm backdrop-blur"
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
