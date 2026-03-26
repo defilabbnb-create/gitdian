@@ -14,6 +14,7 @@ type JobListProps = {
   query: JobLogQueryState;
   currentRepositoryId?: string;
   focusedJobId?: string;
+  showActions?: boolean;
 };
 
 export function JobList({
@@ -22,6 +23,7 @@ export function JobList({
   query,
   currentRepositoryId,
   focusedJobId,
+  showActions = true,
 }: JobListProps) {
   if (items.length === 0) {
     return (
@@ -47,6 +49,7 @@ export function JobList({
           job={job}
           currentRepositoryId={currentRepositoryId}
           isFocused={focusedJobId === job.id}
+          showActions={showActions}
         />
       ))}
       <JobPagination pagination={pagination} query={query} />

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { JobContextBanner } from '@/components/jobs/job-context-banner';
 import { JobFilters } from '@/components/jobs/job-filters';
 import { JobList } from '@/components/jobs/job-list';
@@ -19,6 +19,8 @@ type JobsExpandedFlowProps = {
   focusedJobId?: string;
   repositoryContext?: Pick<RepositoryDetail, 'id' | 'name' | 'fullName'> | null;
   repositoryContextErrorMessage?: string | null;
+  showFilters?: boolean;
+  showActions?: boolean;
 };
 
 export function JobsExpandedFlow({
@@ -29,11 +31,32 @@ export function JobsExpandedFlow({
   focusedJobId,
   repositoryContext,
   repositoryContextErrorMessage,
+  showFilters = true,
+  showActions = true,
 }: JobsExpandedFlowProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(Boolean(focusedJobId));
+
+  useEffect(() => {
+    if (focusedJobId) {
+      setIsExpanded(true);
+      return;
+    }
+
+    if (
+      typeof window !== 'undefined' &&
+      (window.location.hash === '#jobs-expanded-flow' ||
+        window.location.hash.startsWith('#job-'))
+    ) {
+      setIsExpanded(true);
+    }
+  }, [focusedJobId]);
 
   return (
-    <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur">
+    <section
+      id="jobs-expanded-flow"
+      className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur"
+      data-jobs-expanded-flow={isExpanded ? 'expanded' : 'collapsed'}
+    >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -58,7 +81,7 @@ export function JobsExpandedFlow({
 
       {isExpanded ? (
         <div className="mt-6 space-y-6">
-          <JobFilters query={query} />
+          {showFilters ? <JobFilters query={query} /> : null}
 
           {query.repositoryId ? (
             <JobContextBanner
@@ -75,6 +98,7 @@ export function JobsExpandedFlow({
             query={query}
             currentRepositoryId={currentRepositoryId}
             focusedJobId={focusedJobId}
+            showActions={showActions}
           />
         </div>
       ) : null}

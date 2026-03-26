@@ -58,6 +58,7 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
           <section className="space-y-6">
             <JobsPriorityBoard
               items={jobs.items}
+              query={resolvedSearchParams}
               currentRepositoryId={resolvedSearchParams.repositoryId}
               focusedJobId={resolvedSearchParams.focusJobId}
             />

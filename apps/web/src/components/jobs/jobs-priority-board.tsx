@@ -1,47 +1,40 @@
 'use client';
 
-import { JobLogItem } from '@/lib/types/repository';
-import { JobsActiveProjects } from './jobs-active-projects';
-import { JobListItem } from './job-list-item';
+import Link from 'next/link';
+import {
+  buildJobsPriorityViewModel,
+  JobPriorityGroup,
+} from '@/lib/job-priority-view-model';
+import { JobLogItem, JobLogQueryState } from '@/lib/types/repository';
 
 type JobsPriorityBoardProps = {
   items: JobLogItem[];
+  query: JobLogQueryState;
   currentRepositoryId?: string;
   focusedJobId?: string;
 };
 
-const LONG_PENDING_MINUTES = 20;
-const LONG_RUNNING_MINUTES = 25;
-
 export function JobsPriorityBoard({
   items,
+  query,
   currentRepositoryId,
   focusedJobId,
 }: JobsPriorityBoardProps) {
-  const now = Date.now();
-  const anomalies = prioritizeVisibleJobs(items.filter((job) => isAnomaly(job, now))).slice(0, 6);
-  const anomalyIds = new Set(anomalies.map((job) => job.id));
-  const keyRunningJobs = prioritizeVisibleJobs(
-    items
-    .filter((job) => !anomalyIds.has(job.id))
-    .filter((job) => isKeyRunningJob(job))
-  ).slice(0, 6);
+  const viewModel = buildJobsPriorityViewModel(items, query);
 
   return (
     <section className="space-y-6">
       <section className="rounded-[32px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(3,105,161,0.86)_100%)] px-7 py-8 text-white shadow-xl shadow-slate-900/10">
-        <div className="flex flex-col gap-4">
-          <div className="max-w-4xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200/70">
-              异常与执行台
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-white md:text-[3rem]">
-              先看现在有没有问题，再决定先处理哪个。
-            </h1>
-            <p className="mt-4 text-sm leading-7 text-slate-200 md:text-base">
-              先看异常和关键运行中任务，完整任务流后置。
-            </p>
-          </div>
+        <div className="max-w-4xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200/70">
+            任务工作台
+          </p>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-white md:text-[3rem]">
+            先看现在有没有异常，再决定先处理哪一类任务。
+          </h1>
+          <p className="mt-4 text-sm leading-7 text-slate-200 md:text-base">
+            {viewModel.summaryTitle} {viewModel.summaryDescription}
+          </p>
         </div>
       </section>
 
@@ -51,26 +44,25 @@ export function JobsPriorityBoard({
             当前异常
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            先看失败、卡住或排队过久的任务。
+            失败、卡住和排队过久的任务先看这里。
           </h2>
         </div>
 
-        {anomalies.length ? (
-          <div className="space-y-4">
-            {anomalies.map((job) => (
-              <JobListItem
-                key={job.id}
-                job={job}
-                currentRepositoryId={currentRepositoryId}
-                isFocused={focusedJobId === job.id}
-                variant="priority"
+        {viewModel.anomalyGroups.length ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {viewModel.anomalyGroups.map((group) => (
+              <JobPriorityGroupCard
+                key={group.key}
+                group={group}
+                isFocused={Boolean(focusedJobId && group.primaryJobId === focusedJobId)}
+                isCurrentRepositoryContext={Boolean(currentRepositoryId)}
               />
             ))}
           </div>
         ) : (
           <QuietEmptyState
-            title="现在没有需要立刻处理的异常任务"
-            description="最近这批任务没有明显失败或卡住，先看关键运行中的任务就够了。"
+            title="当前无异常，仅有排队任务"
+            description="首屏现在没有失败或卡住的任务，剩下的是排队中或正常运行中的任务，先看下面哪些会影响主链路。"
           />
         )}
       </section>
@@ -78,123 +70,151 @@ export function JobsPriorityBoard({
       <section className="space-y-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            关键运行中任务
+            值得立即关注的任务
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            这些任务正在占资源，值得优先盯住。
+            这些分组正在占住链路或积压得更明显。
           </h2>
         </div>
 
-        {keyRunningJobs.length ? (
-          <div className="space-y-4">
-            {keyRunningJobs.map((job) => (
-              <JobListItem
-                key={job.id}
-                job={job}
-                currentRepositoryId={currentRepositoryId}
-                isFocused={focusedJobId === job.id}
-                variant="priority"
+        {viewModel.attentionGroups.length ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {viewModel.attentionGroups.map((group) => (
+              <JobPriorityGroupCard
+                key={group.key}
+                group={group}
+                isFocused={Boolean(focusedJobId && group.primaryJobId === focusedJobId)}
+                isCurrentRepositoryContext={Boolean(currentRepositoryId)}
               />
             ))}
           </div>
         ) : (
           <QuietEmptyState
-            title="现在没有需要盯住的关键运行中任务"
-            description="如果刚触发过分析，可以稍后再回来看；否则说明当前系统运行比较平稳。"
+            title="现在没有需要首屏盯住的运行中任务"
+            description="如果你只是想回看上下文，可以直接展开完整任务流；首屏不再重复平铺正常排队任务。"
           />
         )}
-      </section>
 
-      <JobsActiveProjects />
+        {viewModel.hiddenGroupCount ? (
+          <p className="text-sm leading-7 text-slate-500">
+            另外还有 {viewModel.hiddenGroupCount} 组、共 {viewModel.hiddenJobCount} 条任务已经下沉到完整任务流里，只有全量排查时再展开。
+          </p>
+        ) : null}
+      </section>
     </section>
   );
 }
 
-function isAnomaly(job: JobLogItem, now: number) {
-  if (job.jobStatus === 'FAILED') {
-    return true;
-  }
+function JobPriorityGroupCard({
+  group,
+  isFocused,
+  isCurrentRepositoryContext,
+}: {
+  group: JobPriorityGroup;
+  isFocused: boolean;
+  isCurrentRepositoryContext: boolean;
+}) {
+  return (
+    <article
+      data-job-aggregate-card="true"
+      data-job-group-state={group.state}
+      className={`rounded-[28px] border bg-white p-6 shadow-sm ${
+        isFocused
+          ? 'border-sky-300 ring-2 ring-sky-100'
+          : group.state === 'FAILED'
+            ? 'border-rose-200'
+            : group.state === 'STALLED' || group.state === 'LONG_PENDING'
+              ? 'border-amber-200'
+              : 'border-slate-200'
+      }`}
+    >
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em]">
+            <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-slate-700">
+              {getStateLabel(group.state)}
+            </span>
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-700">
+              {group.count} 个任务
+            </span>
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-700">
+              {group.impactLabel}
+            </span>
+            {isCurrentRepositoryContext ? (
+              <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-sky-700">
+                当前仓库上下文
+              </span>
+            ) : null}
+          </div>
 
-  const ageMinutes = getAgeMinutes(job.startedAt ?? job.createdAt, now);
+          <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+            {group.displayName}
+          </h3>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+            {group.summary}
+          </p>
+        </div>
 
-  if (job.jobStatus === 'PENDING' && ageMinutes >= LONG_PENDING_MINUTES) {
-    return true;
-  }
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-right">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            当前建议动作
+          </p>
+          <p className="mt-2 text-sm font-semibold text-slate-950">
+            {group.recommendation}
+          </p>
+        </div>
+      </div>
 
-  if (job.jobStatus === 'RUNNING' && ageMinutes >= LONG_RUNNING_MINUTES) {
-    return true;
-  }
+      <dl className="mt-5 grid gap-3 md:grid-cols-3">
+        <PriorityMetric label="任务类型" value={group.displayName} />
+        <PriorityMetric label="最老等待" value={group.oldestAgeLabel} />
+        <PriorityMetric label="主链路" value={group.impactLabel} />
+      </dl>
 
-  return false;
+      <div className="mt-5 flex flex-wrap gap-3">
+        <Link
+          href={group.detailHref}
+          className="inline-flex items-center rounded-full border border-slate-950 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+        >
+          查看任务详情
+        </Link>
+      </div>
+    </article>
+  );
 }
 
-function isKeyRunningJob(job: JobLogItem) {
-  if (!(job.jobStatus === 'RUNNING' || job.jobStatus === 'PENDING')) {
-    return false;
-  }
-
-  if (!job.parentJobId) {
-    return true;
-  }
-
-  const name = job.jobName.toLowerCase();
-  const importantKeywords = ['backfill', 'deep', 'claude', 'analysis', 'radar'];
-
-  return importantKeywords.some((keyword) => name.includes(keyword));
+function PriorityMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+      <dt className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {label}
+      </dt>
+      <dd className="mt-2 text-sm font-semibold text-slate-900">{value}</dd>
+    </div>
+  );
 }
 
-function prioritizeVisibleJobs(items: JobLogItem[]) {
-  return [...items].sort((left, right) => {
-    const parentDelta = Number(Boolean(left.parentJobId)) - Number(Boolean(right.parentJobId));
-
-    if (parentDelta !== 0) {
-      return parentDelta;
-    }
-
-    const leftWeight = getJobPriorityWeight(left.jobName);
-    const rightWeight = getJobPriorityWeight(right.jobName);
-
-    if (rightWeight !== leftWeight) {
-      return rightWeight - leftWeight;
-    }
-
-    return (
-      new Date(right.startedAt ?? right.createdAt).getTime() -
-      new Date(left.startedAt ?? left.createdAt).getTime()
-    );
-  });
-}
-
-function getJobPriorityWeight(jobName: string) {
-  const normalized = jobName.toLowerCase();
-
-  if (normalized.includes('backfill') || normalized.includes('radar')) {
-    return 4;
+function getStateLabel(state: JobPriorityGroup['state']) {
+  switch (state) {
+    case 'FAILED':
+      return 'FAILED';
+    case 'STALLED':
+      return 'RUNNING · 超时';
+    case 'LONG_PENDING':
+      return 'PENDING · 等待过久';
+    case 'RUNNING':
+      return 'RUNNING';
+    case 'PENDING':
+      return 'PENDING';
+    default:
+      return state;
   }
-
-  if (normalized.includes('claude') || normalized.includes('deep')) {
-    return 3;
-  }
-
-  if (normalized.includes('idea_extract') || normalized.includes('idea_fit')) {
-    return 2;
-  }
-
-  if (normalized.includes('idea_snapshot')) {
-    return 1;
-  }
-
-  return 0;
-}
-
-function getAgeMinutes(value: string, now: number) {
-  const time = new Date(value).getTime();
-
-  if (Number.isNaN(time)) {
-    return 0;
-  }
-
-  return Math.floor((now - time) / (60 * 1000));
 }
 
 function QuietEmptyState({

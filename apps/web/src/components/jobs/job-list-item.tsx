@@ -12,6 +12,7 @@ type JobListItemProps = {
   currentRepositoryId?: string;
   isFocused?: boolean;
   variant?: 'default' | 'priority';
+  showActions?: boolean;
 };
 
 function formatDateTime(value?: string | null) {
@@ -64,12 +65,9 @@ export function JobListItem({
   currentRepositoryId,
   isFocused = false,
   variant = 'default',
+  showActions = true,
 }: JobListItemProps) {
-  const router = useRouter();
   const [isExpanded, setIsExpanded] = useState(isFocused);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const relatedRepositoryId = extractRepositoryId(job);
   const isCurrentRepositoryContext =
     currentRepositoryId && relatedRepositoryId === currentRepositoryId;
@@ -92,48 +90,6 @@ export function JobListItem({
       setIsExpanded(true);
     }
   }, [isFocused]);
-
-  async function handleRetry() {
-    setIsSubmitting(true);
-    setFeedback(null);
-    setErrorMessage(null);
-
-    try {
-      const nextTask = await retryJobLog(job.id);
-      setFeedback(`已创建重试任务：${nextTask.jobId}`);
-
-      startTransition(() => {
-        router.refresh();
-      });
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : '重试任务创建失败。',
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  async function handleCancel() {
-    setIsSubmitting(true);
-    setFeedback(null);
-    setErrorMessage(null);
-
-    try {
-      await cancelJobLog(job.id);
-      setFeedback('任务已取消。');
-
-      startTransition(() => {
-        router.refresh();
-      });
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : '取消任务失败。',
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
 
   return (
     <article
@@ -188,39 +144,14 @@ export function JobListItem({
         >
           {isExpanded ? '收起执行信息' : '查看执行信息'}
         </button>
-        {allowInlineActions && canRetry ? (
-          <button
-            type="button"
-            onClick={handleRetry}
-            disabled={isSubmitting}
-            className="inline-flex rounded-full border border-slate-950 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSubmitting ? '处理中...' : '重新执行'}
-          </button>
-        ) : null}
-        {allowInlineActions && canCancel ? (
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={isSubmitting}
-            className="inline-flex rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSubmitting ? '处理中...' : '取消任务'}
-          </button>
+        {showActions && allowInlineActions ? (
+          <JobItemActions
+            job={job}
+            canRetry={canRetry}
+            canCancel={canCancel}
+          />
         ) : null}
       </div>
-
-      {feedback ? (
-        <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {feedback}
-        </div>
-      ) : null}
-
-      {errorMessage ? (
-        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {errorMessage}
-        </div>
-      ) : null}
 
       {job.errorMessage ? (
         <div className="mt-4 rounded-3xl border border-rose-200 bg-rose-50 px-5 py-4">
@@ -269,6 +200,100 @@ export function JobListItem({
         </div>
       ) : null}
     </article>
+  );
+}
+
+function JobItemActions({
+  job,
+  canRetry,
+  canCancel,
+}: {
+  job: JobLogItem;
+  canRetry: boolean;
+  canCancel: boolean;
+}) {
+  const router = useRouter();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  async function handleRetry() {
+    setIsSubmitting(true);
+    setFeedback(null);
+    setErrorMessage(null);
+
+    try {
+      const nextTask = await retryJobLog(job.id);
+      setFeedback(`已创建重试任务：${nextTask.jobId}`);
+
+      startTransition(() => {
+        router.refresh();
+      });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : '重试任务创建失败。',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleCancel() {
+    setIsSubmitting(true);
+    setFeedback(null);
+    setErrorMessage(null);
+
+    try {
+      await cancelJobLog(job.id);
+      setFeedback('任务已取消。');
+
+      startTransition(() => {
+        router.refresh();
+      });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : '取消任务失败。',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      {canRetry ? (
+        <button
+          type="button"
+          onClick={handleRetry}
+          disabled={isSubmitting}
+          className="inline-flex rounded-full border border-slate-950 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isSubmitting ? '处理中...' : '重新执行'}
+        </button>
+      ) : null}
+      {canCancel ? (
+        <button
+          type="button"
+          onClick={handleCancel}
+          disabled={isSubmitting}
+          className="inline-flex rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isSubmitting ? '处理中...' : '取消任务'}
+        </button>
+      ) : null}
+
+      {feedback ? (
+        <div className="mt-4 w-full rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          {feedback}
+        </div>
+      ) : null}
+
+      {errorMessage ? (
+        <div className="mt-4 w-full rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {errorMessage}
+        </div>
+      ) : null}
+    </>
   );
 }
 
