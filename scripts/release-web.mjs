@@ -69,6 +69,9 @@ async function main() {
   } finally {
     console.log('\nRelease summary');
     console.log(`Local HEAD: ${localHead}`);
+    console.log(`Checked URL: ${remoteBuildInfo?.settingsUrl || new URL('/settings', options.baseUrl).toString()}`);
+    console.log(`Fetched /settings raw Git SHA: ${remoteBuildInfo?.gitSha || 'unavailable'}`);
+    console.log(`Fetched /settings raw Build Time: ${remoteBuildInfo?.buildTime || 'unavailable'}`);
     console.log(`Remote Git SHA: ${remoteBuildInfo?.gitSha || 'unavailable'}`);
     console.log(`Remote Build Time: ${remoteBuildInfo?.buildTime || 'unavailable'}`);
     console.log(`verify:production: ${verifyResult}`);
