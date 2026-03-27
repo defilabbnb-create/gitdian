@@ -13,7 +13,9 @@
     "lint": "pnpm -r --if-present run lint",
     "typecheck": "pnpm -r --if-present run typecheck",
     "format": "prettier --write .",
-    "verify:production": "node scripts/verify-production.mjs"
+    "verify:production": "node scripts/verify-production.mjs",
+    "verify:production:sha": "node scripts/check-production-build-info.mjs",
+    "release:web": "node scripts/release-web.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
