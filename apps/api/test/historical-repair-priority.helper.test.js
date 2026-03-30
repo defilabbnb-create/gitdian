@@ -319,6 +319,30 @@ test('detail-only basic-ready high-value weak-only evidence prefers refresh', ()
   assert.equal(item.historicalRepairAction, 'refresh_only');
 });
 
+test('detail-only trusted-ready no-claude-review high-value weak state prefers refresh', () => {
+  const item = priorityItem({
+    hasDetailPageExposure: true,
+    displayStatus: 'TRUSTED_READY',
+    hasClaudeReview: false,
+    incompleteFlag: true,
+    missingReasons: ['NO_CLAUDE_REVIEW'],
+    moneyPriority: 'P0',
+    repositoryValueTier: 'HIGH',
+    collectionTier: 'CORE',
+    evidenceWeakCount: 0,
+    keyEvidenceWeakCount: 0,
+    evidenceWeakDimensions: [],
+    evidenceMissingDimensions: [],
+    evidenceConflictDimensions: [],
+    qualityReasonSummary: '历史分析链路不稳定',
+  });
+
+  assert.equal(item.historicalRepairBucket, 'high_value_weak');
+  assert.equal(item.strictVisibilityLevel, 'DETAIL_ONLY');
+  assert.equal(item.historicalTrustedButWeak, true);
+  assert.equal(item.historicalRepairAction, 'refresh_only');
+});
+
 test('stale-watch weak-only evidence prefers refresh over evidence repair', () => {
   const item = priorityItem({
     hasDetailPageExposure: true,

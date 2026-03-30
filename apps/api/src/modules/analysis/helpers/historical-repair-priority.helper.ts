@@ -469,6 +469,23 @@ function resolveHistoricalRepairAction(args: {
       !args.finalDecisionButNoDeep &&
       args.evidenceWeakOnly,
   );
+  const detailOnlyClaudeReviewPendingHighValueWeakPrefersRefresh = Boolean(
+    item.historicalRepairBucket === 'high_value_weak' &&
+      item.strictVisibilityLevel === 'DETAIL_ONLY' &&
+      item.displayStatus === 'TRUSTED_READY' &&
+      item.incompleteFlag &&
+      item.missingReasons.length === 1 &&
+      item.missingReasons[0] === 'NO_CLAUDE_REVIEW' &&
+      !item.fallbackFlag &&
+      !item.conflictFlag &&
+      !args.coreEvidenceGap &&
+      !args.keyEvidenceMissing &&
+      !hasDeepRepairGap &&
+      !args.finalDecisionButNoDeep &&
+      !args.evidenceConflict &&
+      !args.evidenceDecisionConflict &&
+      item.evidenceRepairGaps.length === 0,
+  );
 
   if (item.historicalRepairBucket === 'archive_or_noise') {
     return {
@@ -556,6 +573,12 @@ function resolveHistoricalRepairAction(args: {
       };
     }
     if (detailOnlyHighValueWeakPrefersRefresh) {
+      return {
+        action: 'refresh_only',
+        conflictDrivenDecisionRecalc: false,
+      };
+    }
+    if (detailOnlyClaudeReviewPendingHighValueWeakPrefersRefresh) {
       return {
         action: 'refresh_only',
         conflictDrivenDecisionRecalc: false,
