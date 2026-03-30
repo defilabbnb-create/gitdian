@@ -661,6 +661,10 @@ function hasMixedEnglishLeak(text: string) {
   const asciiLetters = (normalized.match(ASCII_LETTER_PATTERN) ?? []).length;
   const cjkChars = (normalized.match(CJK_PATTERN) ?? []).length;
 
+  if (allowsMixedTechnicalHeadline(englishTokens, asciiLetters, cjkChars)) {
+    return false;
+  }
+
   if (
     englishTokens.length > 0 &&
     englishTokens.every((token) => token.length <= 4) &&
@@ -677,6 +681,21 @@ function hasMixedEnglishLeak(text: string) {
       cjkChars >= 4) ||
     (englishTokens.length >= 3 && asciiLetters >= 12 && asciiLetters > cjkChars) ||
     englishTokens.some((token) => token.length >= 12)
+  );
+}
+
+function allowsMixedTechnicalHeadline(
+  englishTokens: string[],
+  asciiLetters: number,
+  cjkChars: number,
+) {
+  return (
+    cjkChars >= 6 &&
+    englishTokens.length > 0 &&
+    englishTokens.length <= 6 &&
+    asciiLetters <= 36 &&
+    asciiLetters <= cjkChars * 2 &&
+    englishTokens.every((token) => token.length <= 12)
   );
 }
 

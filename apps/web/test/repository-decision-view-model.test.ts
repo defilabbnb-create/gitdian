@@ -315,6 +315,79 @@ test('degraded display prefers homepage reason and derived users over stale fall
   assert.doesNotMatch(decisionView.display.reason, /当前冲突主要集中在/);
 });
 
+test('degraded display keeps mixed technical Chinese headline and avoids polluted fallback copy', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      name: 'react-native-agentic-ai',
+      fullName: 'mohamed2m2018/react-native-agentic-ai',
+      description:
+        'Autonomous AI Agent SDK for React Native & Expo with voice control, natural language UI actions, and MCP-powered testing.',
+      topics: ['react-native', 'expo', 'ai-agent', 'mcp', 'testing'],
+      analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh:
+            '面向 React Native 的自主 AI 代理 SDK，支持语音交互、自然语言 UI 控制和自动化测试。',
+        },
+        extractedIdeaJson: {
+          ideaSummary:
+            'Mobile AI TestPilot: A SaaS platform for autonomous, natural language mobile app testing that eliminates brittle UI selectors.',
+        },
+        insightJson: {
+          oneLinerZh:
+            '一个用于在命令行里搜索歌曲并管理播放列表的基础设施组件，主要面向开发者',
+          verdictReason:
+            '这个项目更像技术能力或可借鉴方向，但产品边界和付费逻辑还不够清楚，先按可以抄处理更稳。',
+          projectReality: {
+            type: 'tool',
+            hasRealUser: false,
+            hasClearUseCase: true,
+            isDirectlyMonetizable: false,
+          },
+        },
+      },
+      analysisState: {
+        displayStatus: 'UNSAFE',
+        trustedDisplayReady: false,
+        highConfidenceReady: false,
+        fullyAnalyzed: false,
+        unsafe: true,
+        incompleteReason: 'NO_CLAUDE_REVIEW',
+        incompleteReasons: ['NO_CLAUDE_REVIEW'],
+      },
+      finalDecision: {
+        action: 'CLONE',
+        moneyPriority: 'P2',
+        oneLinerZh:
+          '一个用于在命令行里搜索歌曲并管理播放列表的基础设施组件，主要面向开发者',
+        reasonZh:
+          '这个项目更像技术能力或可借鉴方向，但产品边界和付费逻辑还不够清楚，先按可以抄处理更稳。',
+        moneyDecision: {
+          targetUsersZh: '开发者 / 工程团队',
+          monetizationSummaryZh: '收费路径还不够清楚，建议先确认真实用户和场景。',
+          reasonZh:
+            '这个项目更像技术能力或可借鉴方向，但产品边界和付费逻辑还不够清楚，先按可以抄处理更稳。',
+        },
+        decisionSummary: {
+          headlineZh:
+            '一个用于在命令行里搜索歌曲并管理播放列表的基础设施组件，主要面向开发者',
+          targetUsersZh: '开发者 / 工程团队',
+          monetizationSummaryZh: '收费路径还不够清楚，建议先确认真实用户和场景。',
+          reasonZh:
+            '这个项目更像技术能力或可借鉴方向，但产品边界和付费逻辑还不够清楚，先按可以抄处理更稳。',
+        },
+      },
+    }),
+  );
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'degraded');
+  assert.match(decisionView.display.headline, /React Native|AI 代理 SDK/);
+  assert.doesNotMatch(decisionView.display.headline, /播放列表/);
+  assert.match(decisionView.display.reason, /能力层或参考实现|收费逻辑还没真正跑通/);
+  assert.doesNotMatch(decisionView.display.reason, /当前信号存在冲突/);
+});
+
 test('downgrades conflicts to degraded observe-first action', () => {
   const repository = createRepositoryFixture({
     finalDecision: {

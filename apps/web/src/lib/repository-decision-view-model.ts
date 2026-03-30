@@ -478,6 +478,16 @@ function appendConservativeSuffix(
   return /[。！？]$/.test(base) ? `${base}${suffix}` : `${base}。${suffix}`;
 }
 
+function shouldKeepStandaloneDisplayReason(value: string | null): value is string {
+  if (!value) {
+    return false;
+  }
+
+  return !/^(先确认真实用户|先确认谁会持续使用它|基础判断偏保守|后端最终判断还在补齐|当前先按低优先展示)/u.test(
+    value,
+  ) && !/(当前仍是 fallback|当前信号存在冲突|深分析还没补齐|关键分析还没补齐|中文摘要还在校正)/u.test(value);
+}
+
 function buildDisplayReason(args: {
   displayState: RepositoryDecisionDisplayState;
   repository: RepositoryDecisionViewModelTarget;
@@ -502,6 +512,10 @@ function buildDisplayReason(args: {
     normalizeFallbackDisplayValue(args.fallbackAnalysis.whyItMatters) ??
     normalizeFallbackDisplayValue(args.fallbackAnalysis.useCase);
   const baseReason = preferMoreSpecificReason(homepageReason, fallbackReason);
+
+  if (shouldKeepStandaloneDisplayReason(baseReason)) {
+    return baseReason;
+  }
 
   if (args.fallback) {
     return appendConservativeSuffix(

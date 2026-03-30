@@ -323,6 +323,10 @@ const GENERIC_HOMEPAGE_REASON_PATTERNS = [
   /^有明确付费路径[。！]?$/,
   /^需求明确，值得优先验证[。！]?$/,
   /^结构和可运行性都比较清楚[。！]?$/,
+  /^这个方向本身没问题，但同类已经很多，更适合借鉴做法后换个切口[。！]?$/,
+  /^这个方向需求明确，虽然同类不少，但只要切口更准，还是值得继续做[。！]?$/,
+  /^这个项目更像技术能力或可借鉴方向，但产品边界和付费逻辑还不够清楚，先按可以抄处理更稳[。！]?$/,
+  /^方向不算错，但项目还不够完整，暂时还撑不起一个清晰产品[。！]?$/,
   /^先确认真实用户、场景和投入价值，再决定要不要继续推进[。！]?$/,
   /^基础判断偏保守.*$/,
   /^后端最终判断还在补齐.*$/,
@@ -1176,7 +1180,7 @@ const REPOSITORY_METADATA_HINTS: RepositoryMetadataHint[] = [
   },
   {
     pattern:
-      /(auth|authentication|authorization|login|permissions?|rbac|sso|oauth)/i,
+      /(?:\bauth\b|auth[-_ ]|authentication|authorization|login|permissions?|rbac|sso|oauth)/i,
     subject: '一个帮应用接入登录和权限能力的工具',
     targetUsers: '需要快速接入登录和权限的开发团队',
   },
@@ -1435,9 +1439,14 @@ function buildSpecificFallbackHeadline(
       return finalizeHeadline(`${subject}，但${evidenceGapClause}。`);
     }
 
-    if (/^(这个项目|这个方向|当前|README|仓库)/.test(reason)) {
-      return finalizeHeadline(reason);
-    }
+  if (/^(这个项目|这个方向|当前|README|仓库)/.test(reason)) {
+    const subjectLedReason =
+      subject && (isGenericHomepageReason(reason) || isAbstractSignalReason(reason))
+        ? buildSubjectLedHomepageReason(repository, summary, reason)
+        : null;
+
+    return finalizeHeadline(subjectLedReason || reason);
+  }
 
     const reasonLed =
       mode === 'technical'
@@ -1724,6 +1733,34 @@ function buildSubjectLedHomepageReason(
   }
 
   if (
+    /^这个项目更像技术能力或可借鉴方向，但产品边界和付费逻辑还不够清楚，先按可以抄处理更稳/u.test(
+      compactReason,
+    )
+  ) {
+    return `${subject}，当前更像能力层或参考实现，产品边界和付费逻辑还不够清楚。`;
+  }
+
+  if (
+    /^这个方向本身没问题，但同类已经很多，更适合借鉴做法后换个切口/u.test(
+      compactReason,
+    )
+  ) {
+    return `${subject}，方向成立，但同类方案已经很多，更适合换个切口再看。`;
+  }
+
+  if (
+    /^这个方向需求明确，虽然同类不少，但只要切口更准，还是值得继续做/u.test(
+      compactReason,
+    )
+  ) {
+    return `${subject}，需求不算伪命题，但同类已经不少，关键要看能不能切出新价值。`;
+  }
+
+  if (/^方向不算错，但项目还不够完整，暂时还撑不起一个清晰产品/u.test(compactReason)) {
+    return `${subject}，方向不算偏，但当前完成度还不够，暂时撑不起完整产品判断。`;
+  }
+
+  if (
     /^(有明确用户和付费路径|有明确付费路径|需求明确，值得优先验证)$/u.test(
       compactReason,
     )
@@ -1773,6 +1810,10 @@ function hasMixedHomepageEnglishLeak(text: string) {
   const asciiLetters = (normalized.match(/[A-Za-z]/g) ?? []).length;
   const cjkChars = (normalized.match(/[\u4e00-\u9fff]/g) ?? []).length;
 
+  if (allowsMixedTechnicalHeadline(englishTokens, asciiLetters, cjkChars)) {
+    return false;
+  }
+
   return (
     (englishTokens.length >= 2 && asciiLetters >= 6 && cjkChars >= 4) ||
     (englishTokens.some((token) => token.length >= 5) &&
@@ -1780,6 +1821,21 @@ function hasMixedHomepageEnglishLeak(text: string) {
       cjkChars >= 4) ||
     (englishTokens.length >= 3 && asciiLetters >= 12 && asciiLetters > cjkChars) ||
     englishTokens.some((token) => token.length >= 12)
+  );
+}
+
+function allowsMixedTechnicalHeadline(
+  englishTokens: string[],
+  asciiLetters: number,
+  cjkChars: number,
+) {
+  return (
+    cjkChars >= 6 &&
+    englishTokens.length > 0 &&
+    englishTokens.length <= 6 &&
+    asciiLetters <= 36 &&
+    asciiLetters <= cjkChars * 2 &&
+    englishTokens.every((token) => token.length <= 12)
   );
 }
 
@@ -2718,6 +2774,19 @@ export function getRepositoryDisplayTargetUsersLabel(
     validation.riskFlags.includes('fallback_overclaim') ||
     validation.riskFlags.includes('snapshot_conflict')
   ) {
+    const snapshotLedTargetUsers =
+      (validation.riskFlags.includes('snapshot_conflict') ||
+        validation.riskFlags.includes('fallback_overclaim')) &&
+      raw &&
+      !hasUnclearUserLabel(raw) &&
+      !isGenericSafeTargetUsersLabel(raw)
+        ? inferredTargetUsers ?? raw
+        : null;
+
+    if (snapshotLedTargetUsers && !hasUnclearUserLabel(snapshotLedTargetUsers)) {
+      return snapshotLedTargetUsers;
+    }
+
     if (lightAnalysisTargetUsers && !hasUnclearUserLabel(lightAnalysisTargetUsers)) {
       return !isGenericSafeTargetUsersLabel(lightAnalysisTargetUsers)
         ? lightAnalysisTargetUsers

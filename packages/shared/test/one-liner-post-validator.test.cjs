@@ -137,6 +137,22 @@ test('downgrades english leakage', () => {
   assert.ok(result.riskFlags.includes('english_leak'));
 });
 
+test('keeps mixed Chinese technical headlines with limited product-name English', () => {
+  const headline =
+    '面向 React Native 的自主 AI 代理 SDK，支持语音交互、自然语言 UI 控制和自动化测试。';
+  const result = validateOneLiner(
+    baseInput({
+      oneLinerZh: headline,
+      projectType: 'tool',
+      targetUsersLabel: '开发者、工程团队',
+      monetizationLabel: '收费路径还不够清楚，建议先确认真实用户和场景。',
+    }),
+  );
+
+  assert.equal(result.changed, false);
+  assert.equal(result.sanitized, headline);
+});
+
 test('downgrades repo-name fallback sentence', () => {
   const result = validateOneLiner(
     baseInput({
