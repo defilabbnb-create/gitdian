@@ -104,7 +104,7 @@ export type RepositoryDecisionViewModel = {
     caution: string;
   };
   detail: {
-    statusLabel: RepositoryDecisionDisplayState;
+    statusLabel: string;
     primaryActionLabel: string;
     primaryActionDescription: string;
     primaryActionIntent: RepositoryDecisionDetailActionIntent;
@@ -361,6 +361,7 @@ function buildDisplayPriority(
   displayState: RepositoryDecisionDisplayState,
   tier: RepositoryFounderPriority,
   sourceLabel: string,
+  historicalRepairHoldback: boolean,
 ) {
   if (displayState === 'trusted') {
     return {
@@ -378,7 +379,7 @@ function buildDisplayPriority(
 
   return {
     toneTier: 'P3' as const,
-    displayLabel: `${tier} · 仅供参考`,
+    displayLabel: historicalRepairHoldback ? '优先级待复核' : `${tier} · 仅供参考`,
   };
 }
 
@@ -488,6 +489,36 @@ function shouldKeepStandaloneDisplayReason(value: string | null): value is strin
   ) && !/(当前仍是 fallback|当前信号存在冲突|深分析还没补齐|关键分析还没补齐|中文摘要还在校正)/u.test(value);
 }
 
+function hasHistoricalRepairHoldback(
+  repository: RepositoryDecisionViewModelTarget,
+) {
+  const displayStatusReason = repository.analysisState?.displayStatusReason ?? '';
+
+  return (
+    displayStatusReason.includes('historical_repair_guard') ||
+    displayStatusReason.includes('decision_recalc')
+  );
+}
+
+function getHistoricalEvidenceSummary(
+  repository: RepositoryDecisionViewModelTarget,
+) {
+  const finalDecisionWithEvidence = repository.finalDecision as
+    | (typeof repository.finalDecision & {
+        evidenceDecision?: {
+          summaryZh?: string | null;
+        } | null;
+      })
+    | null
+    | undefined;
+
+  return normalizeFallbackDisplayValue(
+    finalDecisionWithEvidence?.evidenceDecision?.summaryZh ??
+      repository.analysisState?.lightAnalysis?.caution ??
+      repository.analysisState?.analysisStatusReason,
+  );
+}
+
 function buildDisplayReason(args: {
   displayState: RepositoryDecisionDisplayState;
   repository: RepositoryDecisionViewModelTarget;
@@ -512,6 +543,15 @@ function buildDisplayReason(args: {
     normalizeFallbackDisplayValue(args.fallbackAnalysis.whyItMatters) ??
     normalizeFallbackDisplayValue(args.fallbackAnalysis.useCase);
   const baseReason = preferMoreSpecificReason(homepageReason, fallbackReason);
+  const historicalEvidenceSummary = getHistoricalEvidenceSummary(args.repository);
+
+  if (
+    args.displayState === 'degraded' &&
+    hasHistoricalRepairHoldback(args.repository) &&
+    historicalEvidenceSummary
+  ) {
+    return historicalEvidenceSummary;
+  }
 
   if (shouldKeepStandaloneDisplayReason(baseReason)) {
     return baseReason;
@@ -768,11 +808,19 @@ function buildDetailFields(args: {
   conflict: boolean;
   hasFinalDecisionWithoutDeep: boolean;
   missingKeyAnalysis: boolean;
+  historicalRepairHoldback: boolean;
 }) {
   const primaryAction = selectDetailPrimaryAction(args);
 
   return {
-    statusLabel: args.displayState,
+    statusLabel:
+      args.displayState === 'trusted'
+        ? '可信结论'
+        : args.displayState === 'provisional'
+          ? '待补分析'
+          : args.historicalRepairHoldback
+            ? '待重算'
+            : '保守降级',
     primaryActionLabel: primaryAction.label,
     primaryActionDescription: primaryAction.description,
     primaryActionIntent: primaryAction.intent,
@@ -809,10 +857,15 @@ function getCollapsedModuleStatusLabel(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
   defaultMissingLabel: string;
 }) {
   if (!args.completed) {
     return args.defaultMissingLabel;
+  }
+
+  if (args.suppressHistoricalContent && args.displayState !== 'trusted') {
+    return '历史结果待重算';
   }
 
   if (args.displayState === 'trusted') {
@@ -839,9 +892,14 @@ function getHeldBackModuleSummary(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
 }) {
   if (args.displayState === 'trusted') {
     return null;
+  }
+
+  if (args.suppressHistoricalContent) {
+    return '这层有历史结果，但当前命中旧结论重算保护，先不要直接采信，等重算后再看。';
   }
 
   if (args.missingKeyAnalysis) {
@@ -871,6 +929,7 @@ function buildHeldBackSummary(
     fallback: boolean;
     conflict: boolean;
     missingKeyAnalysis: boolean;
+    suppressHistoricalContent: boolean;
   },
 ) {
   const base =
@@ -883,6 +942,10 @@ function buildHeldBackSummary(
   const heldBackSummary =
     getHeldBackModuleSummary(args) ??
     '当前先按保守口径展示，不把这一层结果直接升级成行动结论。';
+
+  if (args.suppressHistoricalContent) {
+    return heldBackSummary;
+  }
 
   if (!base) {
     return heldBackSummary;
@@ -902,6 +965,7 @@ function buildIdeaFitDetailSummary(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
 }): string {
   if (args.displayState !== 'trusted') {
     return buildHeldBackSummary(
@@ -943,6 +1007,7 @@ function buildIdeaExtractDetailSummary(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
   helperText: string;
 }): string {
   if (args.displayState !== 'trusted') {
@@ -997,6 +1062,7 @@ function buildCompletenessDetailSummary(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
 }): string {
   if (args.displayState !== 'trusted') {
     return buildHeldBackSummary(
@@ -1025,6 +1091,7 @@ function buildIdeaFitModule(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
   detail: {
     missingEvidenceLabel: string;
   };
@@ -1037,6 +1104,7 @@ function buildIdeaFitModule(args: {
     fallback: args.fallback,
     conflict: args.conflict,
     missingKeyAnalysis: args.missingKeyAnalysis,
+    suppressHistoricalContent: args.suppressHistoricalContent,
     defaultMissingLabel: '待补分析',
   });
 
@@ -1048,11 +1116,15 @@ function buildIdeaFitModule(args: {
     coreGapLabel: completed
       ? args.displayState === 'trusted'
         ? `机会层级 ${ideaFit?.opportunityLevel ?? '已补齐'}`
+        : args.suppressHistoricalContent
+          ? '这层有历史结果，但当前命中待重算保护'
         : '这一层结果已回填，但当前整页仍按保守口径展示'
       : '还缺创业评分、机会层级和负向信号',
     evidenceNeededLabel: completed
       ? args.displayState === 'trusted'
         ? '这层关键证据已经补齐'
+        : args.suppressHistoricalContent
+          ? '先重算这层结果，再回到主结论判断'
         : args.detail.missingEvidenceLabel
       : '补创业评分、机会层级和负向信号',
     detailSummary: buildIdeaFitDetailSummary({
@@ -1061,12 +1133,19 @@ function buildIdeaFitModule(args: {
       fallback: args.fallback,
       conflict: args.conflict,
       missingKeyAnalysis: args.missingKeyAnalysis,
+      suppressHistoricalContent: args.suppressHistoricalContent,
     }),
-    originalAnalysis: normalizeOriginalAnalysis(ideaFit?.coreJudgement),
+    originalAnalysis:
+      args.displayState !== 'trusted' && args.suppressHistoricalContent
+        ? null
+        : normalizeOriginalAnalysis(ideaFit?.coreJudgement),
     detailMetrics: [
       {
         label: '机会层级',
-        value: ideaFit?.opportunityLevel ?? '待补齐',
+        value:
+          args.displayState !== 'trusted' && args.suppressHistoricalContent
+            ? '待重算'
+            : ideaFit?.opportunityLevel ?? '待补齐',
       },
       {
         label: '核心判断',
@@ -1096,6 +1175,7 @@ function buildIdeaExtractModule(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
   detail: {
     missingEvidenceLabel: string;
   };
@@ -1113,6 +1193,7 @@ function buildIdeaExtractModule(args: {
         fallback: args.fallback,
         conflict: args.conflict,
         missingKeyAnalysis: args.missingKeyAnalysis,
+        suppressHistoricalContent: args.suppressHistoricalContent,
         defaultMissingLabel: '待补分析',
       })
     : getIdeaExtractStatusLabel(ideaExtractStatus.status);
@@ -1125,11 +1206,15 @@ function buildIdeaExtractModule(args: {
     coreGapLabel: completed
       ? args.displayState === 'trusted'
         ? '一句话点子、用户场景和收费表述已补齐'
+        : args.suppressHistoricalContent
+          ? '这层有历史结果，但当前命中待重算保护'
         : '这一层结果已回填，但当前整页仍按保守口径展示'
       : '还缺一句话点子、用户场景和收费表述',
     evidenceNeededLabel: completed
       ? args.displayState === 'trusted'
         ? '这层关键证据已经补齐'
+        : args.suppressHistoricalContent
+          ? '先重算这层结果，再回到主结论判断'
         : args.detail.missingEvidenceLabel
       : '补一句话点子、用户场景和收费表述',
     detailSummary: buildIdeaExtractDetailSummary({
@@ -1138,23 +1223,36 @@ function buildIdeaExtractModule(args: {
       fallback: args.fallback,
       conflict: args.conflict,
       missingKeyAnalysis: args.missingKeyAnalysis,
+      suppressHistoricalContent: args.suppressHistoricalContent,
       helperText: ideaExtractStatus.helperText,
     }),
-    originalAnalysis: normalizeOriginalAnalysis(extractedIdea?.ideaSummary),
+    originalAnalysis:
+      args.displayState !== 'trusted' && args.suppressHistoricalContent
+        ? null
+        : normalizeOriginalAnalysis(extractedIdea?.ideaSummary),
     detailMetrics: [
       {
         label: '提取模式',
-        value: extractedIdea?.extractMode ?? ideaExtractStatus.mode ?? '待补齐',
+        value:
+          args.displayState !== 'trusted' && args.suppressHistoricalContent
+            ? '待重算'
+            : extractedIdea?.extractMode ?? ideaExtractStatus.mode ?? '待补齐',
       },
       {
         label: '目标用户',
         value:
+          args.displayState !== 'trusted' && args.suppressHistoricalContent
+            ? '待重算'
+            :
           normalizeFallbackDisplayValue(extractedIdea?.targetUsers?.find(Boolean)) ??
           statusLabel,
       },
       {
         label: '收费路径',
         value:
+          args.displayState !== 'trusted' && args.suppressHistoricalContent
+            ? '待重算'
+            :
           normalizeFallbackDisplayValue(extractedIdea?.monetization) ?? statusLabel,
       },
     ],
@@ -1173,6 +1271,7 @@ function buildCompletenessModule(args: {
   fallback: boolean;
   conflict: boolean;
   missingKeyAnalysis: boolean;
+  suppressHistoricalContent: boolean;
   detail: {
     missingEvidenceLabel: string;
   };
@@ -1185,6 +1284,7 @@ function buildCompletenessModule(args: {
     fallback: args.fallback,
     conflict: args.conflict,
     missingKeyAnalysis: args.missingKeyAnalysis,
+    suppressHistoricalContent: args.suppressHistoricalContent,
     defaultMissingLabel: '待补分析',
   });
 
@@ -1196,11 +1296,15 @@ function buildCompletenessModule(args: {
     coreGapLabel: completed
       ? args.displayState === 'trusted'
         ? `完整性等级 ${completeness?.completenessLevel ?? args.repository.completenessLevel ?? '已补齐'}`
+        : args.suppressHistoricalContent
+          ? '这层有历史结果，但当前命中待重算保护'
         : '这一层结果已回填，但当前整页仍按保守口径展示'
       : '还缺完整性等级、工程成熟度和可落地成本判断',
     evidenceNeededLabel: completed
       ? args.displayState === 'trusted'
         ? '这层关键证据已经补齐'
+        : args.suppressHistoricalContent
+          ? '先重算这层结果，再回到主结论判断'
         : args.detail.missingEvidenceLabel
       : '补完整性等级、工程成熟度和可落地成本判断',
     detailSummary: buildCompletenessDetailSummary({
@@ -1210,19 +1314,29 @@ function buildCompletenessModule(args: {
       fallback: args.fallback,
       conflict: args.conflict,
       missingKeyAnalysis: args.missingKeyAnalysis,
+      suppressHistoricalContent: args.suppressHistoricalContent,
     }),
-    originalAnalysis: normalizeOriginalAnalysis(completeness?.summary),
+    originalAnalysis:
+      args.displayState !== 'trusted' && args.suppressHistoricalContent
+        ? null
+        : normalizeOriginalAnalysis(completeness?.summary),
     detailMetrics: [
       {
         label: '完整性等级',
         value:
+          args.displayState !== 'trusted' && args.suppressHistoricalContent
+            ? '待重算'
+            :
           completeness?.completenessLevel ??
           args.repository.completenessLevel ??
           '待补齐',
       },
       {
         label: '落地成本',
-        value: normalizeFallbackDisplayValue(completeness?.runability) ?? statusLabel,
+        value:
+          args.displayState !== 'trusted' && args.suppressHistoricalContent
+            ? '待重算'
+            : normalizeFallbackDisplayValue(completeness?.runability) ?? statusLabel,
       },
       {
         label: '证据状态',
@@ -1403,6 +1517,7 @@ export function buildRepositoryDecisionViewModel(
     displayState,
     repository,
   );
+  const historicalRepairHoldback = hasHistoricalRepairHoldback(repository);
   const lowConfidence =
     isRepositoryDecisionLowConfidence(repositoryRecord, summary) ||
     guardedDisplayState === 'degraded';
@@ -1418,6 +1533,7 @@ export function buildRepositoryDecisionViewModel(
     guardedDisplayState,
     summary.moneyPriority.tier,
     summary.moneyPriority.label,
+    historicalRepairHoldback,
   );
   const fallbackAnalysis = getRepositoryFallbackIdeaAnalysis(repositoryRecord, summary);
   const reason = buildDisplayReason({
@@ -1454,6 +1570,7 @@ export function buildRepositoryDecisionViewModel(
     conflict,
     hasFinalDecisionWithoutDeep,
     missingKeyAnalysis,
+    historicalRepairHoldback,
   });
   const analysisModules = {
     ideaFit: buildIdeaFitModule({
@@ -1462,6 +1579,7 @@ export function buildRepositoryDecisionViewModel(
       fallback,
       conflict,
       missingKeyAnalysis,
+      suppressHistoricalContent: historicalRepairHoldback,
       detail,
     }),
     ideaExtract: buildIdeaExtractModule({
@@ -1471,6 +1589,7 @@ export function buildRepositoryDecisionViewModel(
       fallback,
       conflict,
       missingKeyAnalysis,
+      suppressHistoricalContent: historicalRepairHoldback,
       detail,
     }),
     completeness: buildCompletenessModule({
@@ -1479,6 +1598,7 @@ export function buildRepositoryDecisionViewModel(
       fallback,
       conflict,
       missingKeyAnalysis,
+      suppressHistoricalContent: historicalRepairHoldback,
       detail,
     }),
   };

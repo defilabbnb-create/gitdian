@@ -388,6 +388,87 @@ test('degraded display keeps mixed technical Chinese headline and avoids pollute
   assert.doesNotMatch(decisionView.display.reason, /当前信号存在冲突/);
 });
 
+test('historical repair degraded repositories hide strong priority and stale module copy', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      analysis: {
+        ideaFitJson: {
+          opportunityLevel: 'B',
+          coreJudgement: '这是一个值得快速推进的浏览器工具机会。',
+        },
+        extractedIdeaJson: {
+          extractMode: 'light',
+          ideaSummary: '一个用于部署和交付应用的基础设施组件，主要面向开发者',
+          targetUsers: ['开发者和小团队'],
+          monetization: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+        },
+        completenessJson: {
+          completenessLevel: 'HIGH',
+          summary: '当前完整性等级 HIGH',
+        },
+      },
+      analysisState: {
+        analysisStatus: 'REVIEW_PENDING',
+        displayStatus: 'UNSAFE',
+        frontendDecisionState: 'degraded',
+        displayStatusReason: 'historical_repair_guard:decision_recalc',
+        analysisStatusReason: '冲突集中在 user / monetization / execution',
+        trustedDisplayReady: false,
+        highConfidenceReady: false,
+        fullyAnalyzed: false,
+        unsafe: true,
+        incompleteReason: 'NO_CLAUDE_REVIEW',
+        incompleteReasons: ['NO_CLAUDE_REVIEW'],
+        lightAnalysis: {
+          targetUsers: '开发者和小团队',
+          monetization: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+          whyItMatters: '冲突集中在 user / monetization / execution',
+          caution: '当前存在 user冲突 / monetization冲突 / execution冲突，继续推进前应先重算判断。',
+          nextStep: '暂不投入，先放进观察池；只有当后面出现更明确用户、价值或收费路径时再继续。',
+          source: 'snapshot',
+        },
+      },
+      finalDecision: {
+        moneyPriority: 'P0',
+        reasonZh: '这是个典型工具型机会，问题明确，也有机会很快包装成收费产品。',
+        decisionSummary: {
+          headlineZh: '一个帮开发者部署和交付应用的浏览器扩展',
+          reasonZh: '这是个典型工具型机会，问题明确，也有机会很快包装成收费产品。',
+          targetUsersZh: '开发者和小团队',
+          monetizationSummaryZh: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+        },
+        moneyDecision: {
+          targetUsersZh: '开发者和小团队',
+          monetizationSummaryZh: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+          reasonZh:
+            '这是面向明确开发者 / 团队工作流的真工具，用户、场景和产品边界都比较清楚，而且小团队有现实机会把它快速包装成可收费产品。',
+        },
+        evidenceDecision: {
+          summaryZh: '当前判断由 user冲突 / monetization冲突 / execution冲突 卡住，必须先重算判断。',
+        } as any,
+      } as any,
+    }),
+  );
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'degraded');
+  assert.equal(decisionView.display.priorityLabel, '优先级待复核');
+  assert.equal(decisionView.detail.statusLabel, '待重算');
+  assert.match(decisionView.display.reason, /重算判断|用户冲突|收费冲突|执行冲突/);
+  assert.doesNotMatch(decisionView.display.reason, /典型工具型机会/);
+  assert.equal(decisionView.analysisModules.ideaExtract.statusLabel, '历史结果待重算');
+  assert.match(decisionView.analysisModules.ideaExtract.detailSummary, /历史结果|待重算/);
+  assert.doesNotMatch(decisionView.analysisModules.ideaExtract.detailSummary, /部署和交付应用/);
+  assert.equal(decisionView.analysisModules.ideaExtract.originalAnalysis, null);
+  assert.equal(
+    decisionView.analysisModules.ideaExtract.detailMetrics.find(
+      (metric) => metric.label === '目标用户',
+    )?.value,
+    '待重算',
+  );
+});
+
 test('downgrades conflicts to degraded observe-first action', () => {
   const repository = createRepositoryFixture({
     finalDecision: {
