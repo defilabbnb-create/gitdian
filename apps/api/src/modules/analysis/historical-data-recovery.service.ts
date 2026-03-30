@@ -48,6 +48,7 @@ import type {
 import {
   buildDecisionRecalcGateSnapshot,
   buildDecisionRecalcGateSnapshotMap,
+  mergeDecisionRecalcGateSnapshots,
   readDecisionRecalcGateSnapshot,
 } from './helpers/decision-recalc-gate.helper';
 import {
@@ -755,6 +756,15 @@ export class HistoricalDataRecoveryService {
       ),
       generatedAt,
     });
+    const hasScopedRepositoryIds = Boolean(
+      Array.isArray(repositoryIds) && repositoryIds.length > 0,
+    );
+    const decisionRecalcGateSnapshotToPersist = hasScopedRepositoryIds
+      ? mergeDecisionRecalcGateSnapshots({
+          previousSnapshot: previousDecisionRecalcGateSnapshot,
+          nextSnapshot: decisionRecalcGateSnapshot,
+        })
+      : decisionRecalcGateSnapshot;
     const decisionRecalcGateMap = buildDecisionRecalcGateSnapshotMap(
       decisionRecalcGateSnapshot,
     );
@@ -901,7 +911,9 @@ export class HistoricalDataRecoveryService {
 
     await this.persistHistoricalRepairPrioritySnapshot(report);
     await this.persistHistoricalFrontendGuard(frontendGuardItems, generatedAt);
-    await this.persistDecisionRecalcGateSnapshot(decisionRecalcGateSnapshot);
+    await this.persistDecisionRecalcGateSnapshot(
+      decisionRecalcGateSnapshotToPersist,
+    );
     const inflightIndex = await this.loadHistoricalRepairInflightIndex();
 
     const laneExecutions = [

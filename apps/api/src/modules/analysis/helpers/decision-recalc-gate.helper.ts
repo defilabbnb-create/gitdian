@@ -251,6 +251,35 @@ export function buildDecisionRecalcGateSnapshot(args: {
   };
 }
 
+export function mergeDecisionRecalcGateSnapshots(args: {
+  previousSnapshot: DecisionRecalcGateSnapshot | null;
+  nextSnapshot: DecisionRecalcGateSnapshot;
+}): DecisionRecalcGateSnapshot {
+  const merged = new Map<string, DecisionRecalcGateResult>();
+
+  for (const item of args.previousSnapshot?.items ?? []) {
+    merged.set(normalizeString(item.repositoryId), item);
+  }
+
+  for (const item of args.nextSnapshot.items) {
+    merged.set(normalizeString(item.repositoryId), item);
+  }
+
+  const items = Array.from(merged.values()).sort((left, right) =>
+    left.fullName.localeCompare(right.fullName),
+  );
+
+  return {
+    schemaVersion:
+      normalizeString(args.nextSnapshot.schemaVersion) ||
+      DECISION_RECALC_GATE_SCHEMA_VERSION,
+    generatedAt:
+      normalizeString(args.nextSnapshot.generatedAt) || new Date().toISOString(),
+    totalCandidates: items.length,
+    items,
+  };
+}
+
 export function buildDecisionRecalcGateSnapshotMap(
   snapshot: DecisionRecalcGateSnapshot | null,
 ): DecisionRecalcGateSnapshotMap {

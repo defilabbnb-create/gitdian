@@ -8,6 +8,7 @@ const {
   buildDecisionRecalcGateSnapshot,
   buildDecisionRecalcGateSnapshotMap,
   compareDecisionRecalcFingerprints,
+  mergeDecisionRecalcGateSnapshots,
   renderDecisionRecalcGateMarkdown,
 } = require('../dist/modules/analysis/helpers/decision-recalc-gate.helper');
 
@@ -172,4 +173,50 @@ test('gate report renders markdown and aggregates suppression counts', () => {
   assert.match(markdown, /Decision Recalc Gate/);
   assert.match(markdown, /suppress_replay/);
   assert.match(markdown, /command: pnpm --filter api report:decision-recalc-gate/);
+});
+
+test('mergeDecisionRecalcGateSnapshots keeps untouched repos and updates refreshed repos', () => {
+  const previousSnapshot = buildDecisionRecalcGateSnapshot({
+    items: [
+      createItem({
+        repoId: 'repo-prev',
+        fullName: 'acme/repo-prev',
+      }),
+      createItem({
+        repoId: 'repo-shared',
+        fullName: 'acme/repo-shared',
+      }),
+    ],
+    generatedAt: '2026-03-29T00:00:00.000Z',
+  });
+  const nextSnapshot = buildDecisionRecalcGateSnapshot({
+    items: [
+      createItem({
+        repoId: 'repo-shared',
+        fullName: 'acme/repo-shared',
+        evidenceCoverageRate: 0.61,
+      }),
+      createItem({
+        repoId: 'repo-next',
+        fullName: 'acme/repo-next',
+      }),
+    ],
+    previousSnapshotMap: buildDecisionRecalcGateSnapshotMap(previousSnapshot),
+    generatedAt: '2026-03-30T00:00:00.000Z',
+  });
+
+  const merged = mergeDecisionRecalcGateSnapshots({
+    previousSnapshot,
+    nextSnapshot,
+  });
+  const byRepoId = new Map(merged.items.map((item) => [item.repositoryId, item]));
+
+  assert.equal(merged.generatedAt, '2026-03-30T00:00:00.000Z');
+  assert.equal(merged.totalCandidates, 3);
+  assert.ok(byRepoId.has('repo-prev'));
+  assert.ok(byRepoId.has('repo-next'));
+  assert.equal(
+    byRepoId.get('repo-shared').recalcFingerprint.evidenceCoverageRate,
+    0.61,
+  );
 });

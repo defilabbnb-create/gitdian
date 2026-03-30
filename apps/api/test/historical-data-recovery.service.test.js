@@ -6,6 +6,7 @@ const {
 } = require('../dist/modules/analysis/historical-data-recovery.service');
 const {
   buildDecisionRecalcFingerprint,
+  buildDecisionRecalcGateSnapshot,
 } = require('../dist/modules/analysis/helpers/decision-recalc-gate.helper');
 
 function buildDispatchPlan(overrides = {}) {
@@ -650,6 +651,151 @@ test('runHistoricalRepairLoop dispatches downgrade, evidence, deep, and recalc a
   assert.ok(savedConfigs.some((entry) => entry.key.includes('frontend_guard')));
   assert.ok(savedConfigs.some((entry) => entry.key.includes('priority')));
   assert.ok(savedConfigs.some((entry) => entry.key.includes('analysis.outcome')));
+});
+
+test('runHistoricalRepairLoop merges scoped decision recalc gate snapshots instead of clobbering global baseline', async () => {
+  const savedConfigs = [];
+  const previousSnapshot = buildDecisionRecalcGateSnapshot({
+    items: [
+      buildPriorityReportItem({
+        repoId: 'repo-legacy',
+        fullName: 'acme/legacy',
+        action: 'decision_recalc',
+        bucket: 'high_value_weak',
+        keyEvidenceGaps: ['user_conflict'],
+        decisionRecalcGaps: ['user_conflict'],
+        trustedBlockingGaps: ['user_conflict'],
+        conflictDrivenGaps: ['user_conflict'],
+        conflictFlag: true,
+        evidenceConflictCount: 1,
+      }),
+    ],
+    generatedAt: '2026-03-29T00:00:00.000Z',
+  });
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async ({ where }) => {
+          if (where.configKey === 'analysis.decision_recalc_gate.latest') {
+            return {
+              configValue: previousSnapshot,
+            };
+          }
+          return null;
+        },
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueSingleAnalysis: async () => undefined,
+    },
+    {
+      runPriorityReport: async () => ({
+        generatedAt: '2026-03-30T00:00:00.000Z',
+        summary: {
+          visibleBrokenCount: 0,
+          highValueWeakCount: 1,
+          staleWatchCount: 0,
+          archiveOrNoiseCount: 0,
+          historicalTrustedButWeakCount: 0,
+          immediateFrontendDowngradeCount: 0,
+          evidenceCoverageRate: 0.3,
+          keyEvidenceMissingCount: 0,
+          evidenceConflictCount: 1,
+          evidenceWeakButVisibleCount: 0,
+          conflictDrivenDecisionRecalcCount: 1,
+          actionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 1,
+            archive: 0,
+          },
+          visibleBrokenActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          highValueWeakActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 1,
+            archive: 0,
+          },
+        },
+        items: [
+          buildPriorityReportItem({
+            repoId: 'repo-recalc',
+            fullName: 'acme/recalc',
+            action: 'decision_recalc',
+            bucket: 'high_value_weak',
+            reason: 'conflict still open',
+            priorityScore: 160,
+            conflictDrivenDecisionRecalc: true,
+            keyEvidenceGaps: ['monetization_conflict'],
+            decisionRecalcGaps: ['monetization_conflict'],
+            trustedBlockingGaps: ['monetization_conflict'],
+            conflictDrivenGaps: ['monetization_conflict'],
+            conflictFlag: true,
+            evidenceConflictCount: 1,
+          }),
+        ],
+        samples: {},
+      }),
+    },
+  );
+
+  service.saveSystemConfig = async (key, value) => {
+    savedConfigs.push({ key, value });
+  };
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 1,
+    globalPendingCount: 1,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 1,
+    },
+  });
+
+  await service.runHistoricalRepairLoop({
+    dryRun: false,
+    repositoryIds: ['repo-recalc'],
+    limit: 1,
+    minPriorityScore: 0,
+  });
+
+  const persistedGateSnapshot = savedConfigs.find(
+    (entry) => entry.key === 'analysis.decision_recalc_gate.latest',
+  )?.value;
+  assert.ok(persistedGateSnapshot);
+  assert.equal(persistedGateSnapshot.totalCandidates, 2);
+  assert.deepEqual(
+    persistedGateSnapshot.items.map((item) => item.repositoryId).sort(),
+    ['repo-legacy', 'repo-recalc'],
+  );
 });
 
 test('runHistoricalRepairLoop keeps other lanes running when one lane fails', async () => {
