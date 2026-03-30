@@ -20,6 +20,11 @@ export function RepositoryListItemCard({
   variant = 'default',
 }: RepositoryListItemProps) {
   const decisionView = buildRepositoryDecisionViewModel(repository);
+  const categoryLabel =
+    decisionView.behaviorContext.categoryLabel ??
+    repository.finalDecision?.decisionSummary?.categoryLabelZh ??
+    repository.finalDecision?.categoryLabelZh ??
+    '待分类';
   const showCreatedAtGithub =
     query.view === 'newRadar' ||
     query.view === 'backfilledPromising' ||
@@ -124,7 +129,7 @@ export function RepositoryListItemCard({
           />
           <DecisionCell
             label="属于什么"
-            value={repository.finalDecision?.categoryLabelZh ?? '待分类'}
+            value={categoryLabel}
             tone="border-violet-200 bg-violet-50 text-violet-700"
           />
         </div>

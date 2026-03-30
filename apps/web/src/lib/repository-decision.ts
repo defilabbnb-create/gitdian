@@ -212,6 +212,18 @@ const ACTION_LABELS: Record<RepositoryAction, string> = {
   IGNORE: '先跳过',
 };
 
+function actionJudgementLabel(action: RepositoryAction) {
+  switch (action) {
+    case 'BUILD':
+      return '值得做';
+    case 'CLONE':
+      return '值得借鉴';
+    case 'IGNORE':
+    default:
+      return '跳过';
+  }
+}
+
 const SNAPSHOT_ACTION_LABELS: Record<RepositoryIdeaNextAction, string> = {
   KEEP: '继续观察',
   SKIP: '先忽略',
@@ -382,36 +394,66 @@ function buildThinFallbackSummary(
   repository: RepositoryDecisionTarget,
 ): RepositoryDecisionSummary {
   const trainingAsset = repository.trainingAsset;
-  const fallbackCategory = getCategoryDisplay(repository.categoryL1, repository.categoryL2);
+  const analysisState = getRepositoryAnalysisState(repository);
+  const insight = repository.analysis?.insightJson;
+  const snapshot = repository.analysis?.ideaSnapshotJson;
+  const fallbackCategory = getCategoryDisplay(
+    insight?.category?.main ?? repository.categoryL1,
+    insight?.category?.sub ?? repository.categoryL2,
+  );
+  const fallbackAction = insight?.action ?? 'CLONE';
+  const fallbackVerdict = insight?.verdict ?? 'OK';
   const moneyPriority: MoneyPriorityDisplay = {
     score: 0,
     tier: 'P3',
     moneyDecision: 'LOW_VALUE',
     label: 'P3 · 低优先',
-    reason: '后端最终判断还在补齐，当前先按低优先展示，避免前端自己重新推理。',
-    recommendedMove: '稍后再看',
-    targetUsers: '用户还不够清楚',
-    monetization: '收费路径还不够清楚',
+    reason:
+      pickLocalizedText(
+        analysisState?.lightAnalysis?.whyItMatters,
+        analysisState?.lightAnalysis?.nextStep,
+        insight?.verdictReason,
+        snapshot?.reason,
+      ) || '后端最终判断还在补齐，当前先按低优先展示，避免前端自己重新推理。',
+    recommendedMove:
+      pickLocalizedText(
+        analysisState?.lightAnalysis?.nextStep,
+        repository.analysis?.moneyPriority?.recommendedMoveZh,
+      ) || '稍后再看',
+    targetUsers:
+      pickLocalizedText(
+        analysisState?.lightAnalysis?.targetUsers,
+        repository.analysis?.moneyPriority?.targetUsersZh,
+      ) || '用户还不够清楚',
+    monetization:
+      pickLocalizedText(
+        analysisState?.lightAnalysis?.monetization,
+        repository.analysis?.moneyPriority?.monetizationSummaryZh,
+      ) || '收费路径还不够清楚',
     projectTypeLabel: fallbackCategory.label,
     legacyTier: null,
   };
 
   return {
     oneLiner:
-      cleanText(repository.coreAsset?.oneLinerZh) ||
-      cleanText(repository.description) ||
+      cleanDecisionText(insight?.oneLinerZh) ||
+      cleanDecisionText(repository.coreAsset?.oneLinerZh) ||
+      cleanDecisionText(repository.description) ||
       '这个项目的中文摘要还在校正，先看最终结论与详情。',
-    judgementLabel: '继续观察',
-    finalDecisionLabel: '继续观察 · 等待收口',
-    verdict: 'OK',
-    verdictLabel: '可继续看',
+    judgementLabel: actionJudgementLabel(fallbackAction),
+    finalDecisionLabel: `${actionJudgementLabel(fallbackAction)} · ${ACTION_LABELS[fallbackAction]}`,
+    verdict: fallbackVerdict,
+    verdictLabel: VERDICT_LABELS[fallbackVerdict],
     verdictReason: moneyPriority.reason,
-    action: 'CLONE',
-    actionLabel: '继续观察',
+    action: fallbackAction,
+    actionLabel: ACTION_LABELS[fallbackAction],
     category: fallbackCategory,
     completenessLabel: repository.completenessLevel ?? '待补分析',
     completenessLevel: repository.completenessLevel ?? null,
-    nextActionLabel: '继续观察',
+    nextActionLabel:
+      snapshot?.nextAction
+        ? SNAPSHOT_ACTION_LABELS[snapshot.nextAction]
+        : ACTION_LABELS[fallbackAction],
     tags: [moneyPriority.label, fallbackCategory.label].filter(Boolean),
     hasManualOverride: false,
     manualNote: '',
@@ -447,6 +489,14 @@ function buildSummaryFromFinalDecision(
   const trainingAsset = repository.trainingAsset;
   const insight = repository.analysis?.insightJson;
   const snapshot = repository.analysis?.ideaSnapshotJson;
+  const analysisState = getRepositoryAnalysisState(repository);
+  const fallbackCategory = getCategoryDisplay(
+    finalDecision.categoryMain ??
+      insight?.category?.main ??
+      repository.categoryL1 ??
+      finalDecision.category,
+    finalDecision.categorySub ?? insight?.category?.sub ?? repository.categoryL2,
+  );
   const resolvedFounderPriority =
     normalizeFounderPriority(finalDecision.moneyPriority) ?? 'P3';
   const moneyDecision = repository.analysis?.moneyPriority?.moneyDecision
@@ -461,11 +511,34 @@ function buildSummaryFromFinalDecision(
     tier: resolvedFounderPriority,
     moneyDecision,
     label: pickText(finalDisplay.moneyPriorityLabelZh),
-    reason: pickText(finalDisplay.reasonZh, finalDecision.reasonZh),
+    reason: pickText(
+      finalDisplay.reasonZh,
+      finalDecision.reasonZh,
+      finalDecision.moneyDecision?.reasonZh,
+      pickLocalizedText(
+        analysisState?.lightAnalysis?.whyItMatters,
+        analysisState?.lightAnalysis?.nextStep,
+      ),
+      insight?.verdictReason,
+    ),
     recommendedMove: pickText(finalDisplay.recommendedMoveZh),
-    targetUsers: pickText(finalDisplay.targetUsersZh),
-    monetization: pickText(finalDisplay.monetizationSummaryZh),
-    projectTypeLabel: pickText(finalDisplay.categoryLabelZh, finalDecision.categoryLabelZh),
+    targetUsers: pickText(
+      finalDisplay.targetUsersZh,
+      finalDecision.moneyDecision?.targetUsersZh,
+      pickLocalizedText(analysisState?.lightAnalysis?.targetUsers),
+      repository.analysis?.moneyPriority?.targetUsersZh,
+    ),
+    monetization: pickText(
+      finalDisplay.monetizationSummaryZh,
+      finalDecision.moneyDecision?.monetizationSummaryZh,
+      pickLocalizedText(analysisState?.lightAnalysis?.monetization),
+      repository.analysis?.moneyPriority?.monetizationSummaryZh,
+    ),
+    projectTypeLabel: pickText(
+      finalDisplay.categoryLabelZh,
+      finalDecision.categoryLabelZh,
+      fallbackCategory.label,
+    ),
     legacyTier: repository.analysis?.moneyPriority?.tier ?? null,
   };
   const conflictReasons = Array.from(
@@ -482,13 +555,27 @@ function buildSummaryFromFinalDecision(
     finalDecisionLabel: pickText(finalDisplay.finalDecisionLabelZh),
     verdict: finalDecision.verdict,
     verdictLabel: pickText(finalDisplay.verdictLabelZh, VERDICT_LABELS[finalDecision.verdict]),
-    verdictReason: pickText(finalDisplay.reasonZh, finalDecision.reasonZh),
+    verdictReason: pickText(
+      finalDisplay.reasonZh,
+      finalDecision.reasonZh,
+      finalDecision.moneyDecision?.reasonZh,
+      pickLocalizedText(
+        analysisState?.lightAnalysis?.whyItMatters,
+        analysisState?.lightAnalysis?.nextStep,
+      ),
+      insight?.verdictReason,
+    ),
     action: finalDecision.action,
     actionLabel: pickText(finalDisplay.actionLabelZh, ACTION_LABELS[finalDecision.action]),
     category: {
-      main: pickText(finalDecision.categoryMain) || null,
-      sub: pickText(finalDecision.categorySub) || null,
-      label: pickText(finalDecision.categoryLabelZh, finalDisplay.categoryLabelZh, '待分类'),
+      main: pickText(finalDecision.categoryMain, fallbackCategory.main) || null,
+      sub: pickText(finalDecision.categorySub, fallbackCategory.sub) || null,
+      label: pickText(
+        finalDecision.categoryLabelZh,
+        finalDisplay.categoryLabelZh,
+        fallbackCategory.label,
+        '待分类',
+      ),
     },
     completenessLabel:
       insight?.completenessLevel ?? repository.completenessLevel ?? '待补分析',
@@ -504,7 +591,11 @@ function buildSummaryFromFinalDecision(
     monetizationLabel: moneyPriority.monetization,
     recommendedMoveLabel: moneyPriority.recommendedMove,
     worthDoingLabel: pickText(finalDisplay.worthDoingLabelZh),
-    categoryLabel: pickText(finalDisplay.categoryLabelZh, finalDecision.categoryLabelZh),
+    categoryLabel: pickText(
+      finalDisplay.categoryLabelZh,
+      finalDecision.categoryLabelZh,
+      fallbackCategory.label,
+    ),
     source: finalDecision.source,
     sourceLabel: pickText(finalDisplay.sourceLabelZh, finalDecision.sourceLabelZh, '系统判断'),
     hasConflict: Boolean(finalDecision.hasConflict),
@@ -1722,6 +1813,9 @@ export function getRepositoryDisplayMonetizationLabel(
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const signals = resolveRepositorySignals(repository);
   const raw = cleanText(summary.monetizationLabel);
+  const lightAnalysisMonetization = pickLocalizedText(
+    repository.analysisState?.lightAnalysis?.monetization,
+  );
 
   if (
       !raw ||
@@ -1740,6 +1834,13 @@ export function getRepositoryDisplayMonetizationLabel(
       summary.categoryLabel === '待分类' ||
       isStructurallyWeakHomepageCandidate(repository, summary)
   ) {
+    if (
+      lightAnalysisMonetization &&
+      !hasUnclearMonetizationLabel(lightAnalysisMonetization)
+    ) {
+      return lightAnalysisMonetization;
+    }
+
     return signals.hasRealUser && signals.hasClearUseCase
       ? '更适合先验证价值，再判断是否具备收费空间。'
       : '收费路径还不够清楚，建议先确认真实用户和场景。';
@@ -1755,6 +1856,9 @@ export function getRepositoryDisplayTargetUsersLabel(
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const signals = resolveRepositorySignals(repository);
   const raw = cleanText(summary.targetUsersLabel);
+  const lightAnalysisTargetUsers = pickLocalizedText(
+    repository.analysisState?.lightAnalysis?.targetUsers,
+  );
 
   if (
     !raw ||
@@ -1766,6 +1870,10 @@ export function getRepositoryDisplayTargetUsersLabel(
     validation.riskFlags.includes('fallback_overclaim') ||
     validation.riskFlags.includes('snapshot_conflict')
   ) {
+    if (lightAnalysisTargetUsers && !hasUnclearUserLabel(lightAnalysisTargetUsers)) {
+      return lightAnalysisTargetUsers;
+    }
+
     return shouldDegradeHomepageHeadline(repository, summary)
       ? '先确认谁会持续使用它，再决定要不要继续投入。'
       : '目标用户还需要继续确认。';
@@ -1781,6 +1889,13 @@ export function getRepositoryHomepageDecisionReason(
   const signals = repository.analysis?.moneyPriority?.signals;
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const snapshot = repository.analysis?.ideaSnapshotJson;
+  const fallbackReason = pickLocalizedText(
+    repository.analysisState?.lightAnalysis?.whyItMatters,
+    repository.analysisState?.lightAnalysis?.nextStep,
+    cleanDecisionText(snapshot?.reason),
+    summary.moneyPriority.reason,
+    summary.verdictReason,
+  );
   const lowerReason = summary.moneyPriority.reason.toLowerCase();
   const hasDirectMonetization =
     Boolean(signals?.isDirectlyMonetizable) ||
@@ -1795,7 +1910,7 @@ export function getRepositoryHomepageDecisionReason(
     validation.riskFlags.includes('snapshot_conflict')
   ) {
     return (
-      cleanDecisionText(snapshot?.reason) ||
+      fallbackReason ||
       '基础判断偏保守，先不要把它当成已经完成的产品机会，优先确认用户、场景和是否值得继续分析。'
     );
   }
@@ -1806,7 +1921,7 @@ export function getRepositoryHomepageDecisionReason(
     hasWeakUserSignal ||
     hasWeakUseCaseSignal
   ) {
-    return '先确认真实用户、场景和投入价值，再决定要不要继续推进。';
+    return fallbackReason || '先确认真实用户、场景和投入价值，再决定要不要继续推进。';
   }
 
   if (
@@ -1836,21 +1951,30 @@ export function getRepositoryHomepageMonetizationAnswer(
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const direct = Boolean(signals?.isDirectlyMonetizable);
   const displayLabel = getRepositoryDisplayMonetizationLabel(repository, summary);
+  const lightAnalysisMonetization = pickLocalizedText(
+    repository.analysisState?.lightAnalysis?.monetization,
+  );
 
   if (
     summary.source === 'fallback' ||
     validation.riskFlags.includes('fallback_overclaim') ||
     validation.riskFlags.includes('snapshot_conflict')
   ) {
-    return '收费路径还不够清楚，建议先确认真实用户和场景。';
+    return !hasUnclearMonetizationLabel(lightAnalysisMonetization)
+      ? lightAnalysisMonetization
+      : '收费路径还不够清楚，建议先确认真实用户和场景。';
   }
 
   if (displayLabel.includes('收费路径还不够清楚')) {
-    return '收费路径还不够清楚，建议先确认真实用户和场景。';
+    return !hasUnclearMonetizationLabel(lightAnalysisMonetization)
+      ? lightAnalysisMonetization
+      : '收费路径还不够清楚，建议先确认真实用户和场景。';
   }
 
   if (displayLabel.includes('更适合先验证价值')) {
-    return '更适合先验证价值，再判断是否具备收费空间。';
+    return !hasUnclearMonetizationLabel(lightAnalysisMonetization)
+      ? lightAnalysisMonetization
+      : '更适合先验证价值，再判断是否具备收费空间。';
   }
 
   if (direct) {

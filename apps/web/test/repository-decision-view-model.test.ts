@@ -46,11 +46,77 @@ test('downgrades fallback repositories to degraded safe copy', () => {
   assert.equal(decisionView.flags.fallback, true);
   assert.equal(
     decisionView.display.monetizationLabel,
-    '收费路径先按未确认处理，补分析后再判断是否具备收费空间。',
+    '可以做团队订阅',
   );
   assert.equal(
     decisionView.display.targetUsersLabel,
-    '先确认谁会持续使用它，再决定要不要继续投入。',
+    '独立开发者和小团队',
+  );
+});
+
+test('reuses light analysis users and monetization copy for degraded repositories', () => {
+  const repository = createRepositoryFixture({
+    analysisState: {
+      displayStatus: 'UNSAFE',
+      trustedDisplayReady: false,
+      highConfidenceReady: false,
+      fullyAnalyzed: false,
+      unsafe: true,
+      incompleteReason: 'NO_CLAUDE_REVIEW',
+      incompleteReasons: ['NO_CLAUDE_REVIEW'],
+      lightAnalysis: {
+        targetUsers: '跨境卖家和客服团队',
+        monetization: '适合先按席位订阅和自动化处理量收费。',
+        whyItMatters: '这个方向能直接减少重复客服处理成本。',
+        nextStep: '先验证最常见的自动化工单流程。',
+        source: 'snapshot',
+      },
+    },
+  });
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'degraded');
+  assert.equal(decisionView.display.targetUsersLabel, '跨境卖家和客服团队');
+  assert.equal(
+    decisionView.display.monetizationLabel,
+    '适合先按席位订阅和自动化处理量收费。',
+  );
+});
+
+test('downgraded repositories still surface specific light-analysis users and monetization', () => {
+  const repository = createRepositoryFixture({
+    analysisState: {
+      fallbackVisible: true,
+      displayStatus: 'BASIC_READY',
+      deepReady: false,
+      lightAnalysis: {
+        targetUsers: '客服团队和运营人员',
+        monetization: '可先按团队席位订阅和托管服务验证付费。',
+        whyItMatters: '客服场景已经比较明确，只差最后一轮收费验证。',
+        nextStep: '先找 5 个客服团队确认是否愿意按席位付费。',
+        source: 'snapshot',
+      },
+    },
+    finalDecision: {
+      moneyDecision: {
+        targetUsersZh: '',
+        monetizationSummaryZh: '',
+      },
+      decisionSummary: {
+        targetUsersZh: '',
+        monetizationSummaryZh: '',
+      },
+    },
+  });
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'degraded');
+  assert.equal(decisionView.display.targetUsersLabel, '客服团队和运营人员');
+  assert.equal(
+    decisionView.display.monetizationLabel,
+    '可先按团队席位订阅和托管服务验证付费。',
   );
 });
 

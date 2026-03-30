@@ -40,7 +40,6 @@ async function HomePageContent({ searchParams }: HomePageProps) {
   let errorMessage: string | null = null;
   let repositoriesNotice: string | null = null;
   let repositoriesQuery = resolvedSearchParams;
-  const isDefaultLandingState = shouldUseFastHomeDefaultQuery(rawSearchParams);
 
   const repositoriesResult = await loadHomeRepositories(
     resolvedSearchParams,
@@ -86,9 +85,11 @@ async function HomePageContent({ searchParams }: HomePageProps) {
         </section>
       ) : repositories ? (
         <HomeOpportunityPool
+          key={JSON.stringify(repositoriesQuery)}
           query={repositoriesQuery}
           notice={repositoriesNotice}
-          collapsedByDefault={isDefaultLandingState}
+          collapsedByDefault={false}
+          initialResponse={repositories}
         />
       ) : null}
     </>

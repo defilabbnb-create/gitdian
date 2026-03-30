@@ -14,16 +14,19 @@ import { ExportAssetBundlesButton } from '@/components/repositories/export-asset
 import { ExportRepositoriesButton } from '@/components/repositories/export-repositories-button';
 import { RepositoryFilters } from '@/components/repositories/repository-filters';
 import { RepositoryList } from '@/components/repositories/repository-list';
+import { RepositoryQuickFilters } from '@/components/repositories/repository-quick-filters';
 import { RepositoryViewSwitcher } from '@/components/repositories/repository-view-switcher';
 import {
   RepositoryListItem,
   RepositoryListQueryState,
+  RepositoryListResponse,
 } from '@/lib/types/repository';
 
 type HomeOpportunityPoolProps = {
   query: RepositoryListQueryState;
   notice: string | null;
   collapsedByDefault: boolean;
+  initialResponse?: RepositoryListResponse | null;
 };
 
 type OpportunityPoolPanelContentProps = {
@@ -59,18 +62,39 @@ function getOpportunityPoolErrorMessage(error: unknown, timedOut: boolean) {
   );
 }
 
+function createInitialOpportunityPoolState(
+  queryKey: string,
+  initialResponse?: RepositoryListResponse | null,
+): OpportunityPoolState {
+  if (!initialResponse) {
+    return createOpportunityPoolIdleState(queryKey);
+  }
+
+  return initialResponse.items.length > 0
+    ? {
+        status: 'success',
+        queryKey,
+        response: initialResponse,
+      }
+    : {
+        status: 'empty',
+        queryKey,
+        response: initialResponse,
+      };
+}
+
 export function HomeOpportunityPool({
   query,
   notice,
   collapsedByDefault,
+  initialResponse,
 }: HomeOpportunityPoolProps) {
   const queryKey = JSON.stringify(query);
-  const [isReady, setIsReady] = useState(false);
   const [isExpanded, setIsExpanded] = useState(!collapsedByDefault);
   const [requestEpoch, setRequestEpoch] = useState(0);
   const [loadState, dispatch] = useReducer(
     reduceOpportunityPoolState,
-    createOpportunityPoolIdleState(queryKey),
+    createInitialOpportunityPoolState(queryKey, initialResponse),
   );
   const loadStateRef = useRef(loadState);
   const viewState = getOpportunityPoolViewState(loadState, {
@@ -82,23 +106,10 @@ export function HomeOpportunityPool({
   }, [loadState]);
 
   useEffect(() => {
-    setIsReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isReady) {
-      return;
-    }
-
-    if (!collapsedByDefault) {
-      setIsExpanded(true);
-      return;
-    }
-
-    if (window.location.hash === '#all-projects') {
+    if (collapsedByDefault && window.location.hash === '#all-projects') {
       setIsExpanded(true);
     }
-  }, [collapsedByDefault, isReady]);
+  }, [collapsedByDefault]);
 
   useEffect(() => {
     if (isExpanded) {
@@ -112,21 +123,16 @@ export function HomeOpportunityPool({
   }, [isExpanded, queryKey]);
 
   useEffect(() => {
-    if (!isReady) {
-      return;
-    }
-
     logOpportunityPoolDebug('state:changed', {
       queryKey,
       isExpanded,
       loadState: loadState.status,
       viewState,
     });
-  }, [isExpanded, isReady, loadState.status, queryKey, viewState]);
+  }, [isExpanded, loadState.status, queryKey, viewState]);
 
   useEffect(() => {
     if (
-      !isReady ||
       !shouldLoadOpportunityPool(loadStateRef.current, {
         isExpanded,
         queryKey,
@@ -197,11 +203,7 @@ export function HomeOpportunityPool({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [isExpanded, isReady, query, queryKey, requestEpoch]);
-
-  if (!isReady) {
-    return null;
-  }
+  }, [isExpanded, query, queryKey, requestEpoch]);
 
   if (!isExpanded) {
     return (
@@ -211,7 +213,7 @@ export function HomeOpportunityPool({
         data-opportunity-pool-view={viewState}
       >
         <p className="text-sm text-slate-500">
-          需要继续深挖时，再展开完整机会池。
+          完整项目池已经支持直接筛选和查看中文分析，随时可以展开细查。
         </p>
         <button
           type="button"
@@ -243,7 +245,7 @@ export function HomeOpportunityPool({
             全部项目池
           </p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
-            只有在你准备继续深挖时，再打开这一层。
+            直接在这里筛选、分类并查看完整中文分析，不再把大部分项目藏在折叠层后面。
           </h2>
         </div>
 
@@ -388,9 +390,10 @@ function OpportunityPoolRefinementControls({
           细查模式
         </p>
         <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
-          想继续缩小范围时，再切视角和展开高级筛选。
+          先用快捷条件缩到可看范围，再切视角和展开高级筛选。
         </h3>
       </div>
+      <RepositoryQuickFilters query={query} />
       <RepositoryViewSwitcher query={query} />
       <RepositoryFilters key={JSON.stringify(query)} query={query} />
     </section>

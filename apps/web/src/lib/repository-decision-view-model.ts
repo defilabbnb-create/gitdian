@@ -407,11 +407,17 @@ function buildDisplayReason(args: {
     normalizeFallbackDisplayValue(args.fallbackAnalysis.useCase);
 
   if (args.fallback) {
-    return '当前仍是 fallback 或兜底判断，先别把它当成已经稳定的产品结论。';
+    return appendConservativeSuffix(
+      fallbackReason,
+      '当前仍是 fallback 或兜底判断，先别把它当成已经稳定的产品结论。',
+    );
   }
 
   if (args.conflict) {
-    return '当前信号存在冲突，先按保守口径处理，等关键证据补齐后再决定。';
+    return appendConservativeSuffix(
+      fallbackReason,
+      '当前信号存在冲突，先按保守口径处理，等关键证据补齐后再决定。',
+    );
   }
 
   if (args.hasFinalDecisionWithoutDeep) {
@@ -454,15 +460,16 @@ function buildDisplayTargetUsers(args: {
   summary: RepositoryDecisionSummary;
   fallbackAnalysis: ReturnType<typeof getRepositoryFallbackIdeaAnalysis>;
 }) {
+  const fallbackTargetUsers =
+    normalizeFallbackDisplayValue(args.fallbackAnalysis.targetUsers) ??
+    SAFE_TARGET_USERS_LABEL;
+
   return args.displayState === 'trusted'
     ? getRepositoryDisplayTargetUsersLabel(
         args.repository as RepositoryDecisionSourceTarget,
         args.summary,
       )
-    : args.displayState === 'provisional'
-      ? normalizeFallbackDisplayValue(args.fallbackAnalysis.targetUsers) ??
-        SAFE_TARGET_USERS_LABEL
-      : SAFE_TARGET_USERS_LABEL;
+    : fallbackTargetUsers;
 }
 
 function buildDisplayMonetization(args: {
@@ -473,10 +480,8 @@ function buildDisplayMonetization(args: {
 }) {
   if (args.displayState !== 'trusted') {
     const fallbackMonetization =
-      args.displayState === 'provisional'
-        ? normalizeFallbackDisplayValue(args.fallbackAnalysis.monetization) ??
-          SAFE_MONETIZATION_LABEL
-        : SAFE_MONETIZATION_LABEL;
+      normalizeFallbackDisplayValue(args.fallbackAnalysis.monetization) ??
+      SAFE_MONETIZATION_LABEL;
 
     return {
       monetizationLabel: fallbackMonetization,
