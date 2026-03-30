@@ -1427,6 +1427,101 @@ test('enqueueHistoricalDeepRepair chunks repository lookup at 100 and keeps outc
   assert.match(telemetryLog, /deepRepairLookupDurationMs=\d+/);
 });
 
+test('deep_repair lane uses bulk single-analysis enqueue when available', async () => {
+  const bulkCalls = [];
+  const singleCalls = [];
+  const logs = [];
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async ({ where }) => {
+          const ids = where?.id?.in ?? [];
+          return ids.map((id) => ({
+            id,
+            analysis: {
+              completenessJson: null,
+              ideaFitJson: null,
+              extractedIdeaJson: null,
+            },
+          }));
+        },
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueSingleAnalysesBulk: async (entries) => {
+        bulkCalls.push(entries);
+        return entries.map((_entry, index) => ({
+          jobId: `job-${index + 1}`,
+          queueName: 'analysis.single',
+          queueJobId: `queue-job-${index + 1}`,
+          jobStatus: 'PENDING',
+        }));
+      },
+      enqueueSingleAnalysis: async (repositoryId) => {
+        singleCalls.push(repositoryId);
+      },
+    },
+    {
+      runPriorityReport: async () => ({
+        summary: {},
+        items: [],
+      }),
+    },
+  );
+
+  service.logger.log = (message) => {
+    logs.push(message);
+  };
+
+  const outcomes = await service.enqueueHistoricalDeepRepair([
+    buildDispatchPlan({
+      repoId: 'repo-deep-bulk-1',
+      action: 'deep_repair',
+      priorityScore: 168,
+      routerPriorityClass: 'P0',
+      requiresReview: true,
+    }),
+    buildDispatchPlan({
+      repoId: 'repo-deep-bulk-2',
+      action: 'deep_repair',
+      priorityScore: 144,
+      routerPriorityClass: 'P1',
+    }),
+  ]);
+
+  assert.equal(bulkCalls.length, 1);
+  assert.equal(singleCalls.length, 0);
+  assert.equal(bulkCalls[0].length, 2);
+  assert.equal(
+    bulkCalls[0][0].jobOptionsOverride.priority,
+    service.toSingleAnalysisQueuePriority('deep_repair', 168, 'P0'),
+  );
+  assert.equal(
+    bulkCalls[0][1].jobOptionsOverride.priority,
+    service.toSingleAnalysisQueuePriority('deep_repair', 144, 'P1'),
+  );
+  assert.equal(bulkCalls[0][0].metadata.historicalRepairAction, 'deep_repair');
+  assert.equal(bulkCalls[0][0].dto.runCompleteness, true);
+  assert.ok(outcomes.every((outcome) => outcome.outcomeStatus === 'partial'));
+  assert.ok(
+    outcomes.every(
+      (outcome) => outcome.outcomeReason === 'queued_deep_repair_execution',
+    ),
+  );
+  const telemetryLog = logs.find((entry) =>
+    entry.includes('historical_repair lane_telemetry lane=deep_repair'),
+  );
+  assert.ok(telemetryLog);
+  assert.match(telemetryLog, /bulkBatches=1/);
+});
+
 test('historical repair global gate caps mixed-lane inflight work', async () => {
   let inflight = 0;
   let maxInflight = 0;

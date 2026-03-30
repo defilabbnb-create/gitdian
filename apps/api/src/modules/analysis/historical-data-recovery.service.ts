@@ -1551,99 +1551,180 @@ export class HistoricalDataRecoveryService {
       plans.length,
     );
     const telemetry = this.createHistoricalRepairLaneTelemetry();
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
 
     try {
       const repositoryMap = await this.loadDeepRepairRepositoryMap(
         plans,
         telemetry,
       );
+      const filtered = plans.reduce<{
+        queueablePlans: HistoricalRepairDispatchPlan[];
+        outcomeMap: Map<
+          HistoricalRepairDispatchPlan,
+          HistoricalRepairDispatchOutcome
+        >;
+      }>(
+        (acc, plan) => {
+          const startedAt = Date.now();
+          const item = plan.item;
+          const repository = repositoryMap.get(item.repoId) ?? null;
 
-      return await runWithConcurrency<
-        HistoricalRepairDispatchPlan,
-        HistoricalRepairDispatchOutcome
-      >(plans, concurrency, async (plan) => {
-        const startedAt = Date.now();
-        const item = plan.item;
-        const repository = repositoryMap.get(item.repoId) ?? null;
+          if (!repository) {
+            acc.outcomeMap.set(plan, {
+              plan,
+              outcomeStatus: 'skipped',
+              outcomeReason: 'repository_missing_for_deep_repair',
+              executionDurationMs: Date.now() - startedAt,
+            });
+            return acc;
+          }
 
-        if (!repository) {
-          return {
-            plan,
-            outcomeStatus: 'skipped',
-            outcomeReason: 'repository_missing_for_deep_repair',
-            executionDurationMs: Date.now() - startedAt,
-          };
-        }
+          const dto = this.buildMissingDeepAnalysisDto(repository);
+          if (!dto.runCompleteness && !dto.runIdeaFit && !dto.runIdeaExtract) {
+            acc.outcomeMap.set(plan, {
+              plan,
+              outcomeStatus: 'no_change',
+              outcomeReason: 'deep_targets_already_present',
+              executionDurationMs: Date.now() - startedAt,
+            });
+            return acc;
+          }
 
-        const dto = this.buildMissingDeepAnalysisDto(repository);
-        if (!dto.runCompleteness && !dto.runIdeaFit && !dto.runIdeaExtract) {
-          return {
-            plan,
-            outcomeStatus: 'no_change',
-            outcomeReason: 'deep_targets_already_present',
-            executionDurationMs: Date.now() - startedAt,
-          };
-        }
+          acc.queueablePlans.push(plan);
+          return acc;
+        },
+        {
+          queueablePlans: [],
+          outcomeMap: new Map(),
+        },
+      );
 
-        try {
-          await this.runWithinHistoricalRepairGlobalGate({
-            telemetry,
-            handler: () =>
-              this.queueService.enqueueSingleAnalysis(
-                item.repoId,
-                {
-                  ...dto,
-                  userPreferencePriorityBoost: this.toPriorityBoost(
-                    item.historicalRepairPriorityScore,
-                    plan.routerDecision.routerPriorityClass,
-                    plan.routerDecision.requiresReview,
-                  ),
-                  userPreferencePriorityReasons: [
-                    `historical_repair:${item.historicalRepairBucket}`,
-                    `historical_action:${item.historicalRepairAction}`,
-                    `router_tier:${plan.routerDecision.capabilityTier}`,
-                    `router_priority:${plan.routerDecision.routerPriorityClass}`,
-                  ],
-                },
-                'historical_repair',
-                {
-                  metadata: {
-                    historicalRepairLane: item.historicalRepairBucket,
-                    historicalRepairAction: item.historicalRepairAction,
-                    historicalRepairPriorityScore:
-                      item.historicalRepairPriorityScore,
-                    ...plan.routerMetadata,
-                  },
-                  jobOptionsOverride: {
-                    priority: this.toSingleAnalysisQueuePriority(
-                      item.historicalRepairAction,
-                      item.historicalRepairPriorityScore,
-                      plan.routerDecision.routerPriorityClass,
+      if (!filtered.queueablePlans.length) {
+        return plans
+          .map((plan) => filtered.outcomeMap.get(plan) ?? null)
+          .filter(Boolean) as HistoricalRepairDispatchOutcome[];
+      }
+
+      const planBatches = this.chunkItems(
+        filtered.queueablePlans,
+        HISTORICAL_REPAIR_SINGLE_ANALYSIS_BULK_BATCH_SIZE,
+      );
+
+      for (const planBatch of planBatches) {
+        if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+          telemetry.bulkBatchCount += 1;
+          const bulkStartedAt = Date.now();
+
+          try {
+            await this.runWithinHistoricalRepairGlobalGate({
+              telemetry,
+              handler: () =>
+                bulkQueueService.enqueueSingleAnalysesBulk!(
+                  planBatch.map((plan) =>
+                    this.buildHistoricalDeepRepairBulkEntry(
+                      plan,
+                      repositoryMap.get(plan.item.repoId)!,
                     ),
-                  },
-                },
-              ),
-          });
-          return {
-            plan,
-            outcomeStatus: 'partial',
-            outcomeReason: 'queued_deep_repair_execution',
-            executionDurationMs: Date.now() - startedAt,
-            executionUsedReview: plan.routerDecision.requiresReview,
-          };
-        } catch (error) {
-          return this.buildHistoricalRepairDispatchFailureOutcome({
-            plan,
-            lane: 'deep_repair',
-            fallbackReason: 'deep_repair_enqueue_failed',
-            startedAt,
-            error,
-          });
+                  ),
+                  'historical_repair',
+                ),
+            });
+            const durationMs = Date.now() - bulkStartedAt;
+            for (const plan of planBatch) {
+              filtered.outcomeMap.set(
+                plan,
+                this.buildHistoricalDeepRepairQueuedOutcome(
+                  plan,
+                  durationMs,
+                ),
+              );
+            }
+            continue;
+          } catch (error) {
+            telemetry.bulkFallbackCount += 1;
+            this.logger.warn(
+              `historical_repair bulk single-analysis lane failed lane=deep_repair batchSize=${planBatch.length} reason=${this.readErrorMessage(error) || 'unknown'} fallback=single_enqueue`,
+            );
+          }
         }
-      });
+
+        const fallbackOutcomes = await this.enqueueHistoricalDeepRepairFallbackBatch(
+          {
+            plans: planBatch,
+            concurrency,
+            telemetry,
+            repositoryMap,
+          },
+        );
+        for (const outcome of fallbackOutcomes) {
+          filtered.outcomeMap.set(outcome.plan, outcome);
+        }
+      }
+
+      return plans
+        .map((plan) => filtered.outcomeMap.get(plan) ?? null)
+        .filter(Boolean) as HistoricalRepairDispatchOutcome[];
     } finally {
       this.logHistoricalRepairLaneTelemetry('deep_repair', telemetry);
     }
+  }
+
+  private async enqueueHistoricalDeepRepairFallbackBatch(args: {
+    plans: HistoricalRepairDispatchPlan[];
+    concurrency: number;
+    telemetry: HistoricalRepairLaneTelemetry;
+    repositoryMap: Awaited<
+      ReturnType<HistoricalDataRecoveryService['loadDeepRepairRepositoryMap']>
+    >;
+  }) {
+    return runWithConcurrency<
+      HistoricalRepairDispatchPlan,
+      HistoricalRepairDispatchOutcome
+    >(args.plans, args.concurrency, async (plan) => {
+      const startedAt = Date.now();
+      const repository = args.repositoryMap.get(plan.item.repoId);
+
+      if (!repository) {
+        return {
+          plan,
+          outcomeStatus: 'skipped',
+          outcomeReason: 'repository_missing_for_deep_repair',
+          executionDurationMs: Date.now() - startedAt,
+        };
+      }
+
+      try {
+        const queueInput = this.buildHistoricalDeepRepairQueueInput(
+          plan,
+          repository,
+        );
+        await this.runWithinHistoricalRepairGlobalGate({
+          telemetry: args.telemetry,
+          handler: () =>
+            this.queueService.enqueueSingleAnalysis(
+              queueInput.repositoryId,
+              queueInput.dto,
+              'historical_repair',
+              queueInput.options,
+            ),
+        });
+        return this.buildHistoricalDeepRepairQueuedOutcome(
+          plan,
+          Date.now() - startedAt,
+        );
+      } catch (error) {
+        return this.buildHistoricalRepairDispatchFailureOutcome({
+          plan,
+          lane: 'deep_repair',
+          fallbackReason: 'deep_repair_enqueue_failed',
+          startedAt,
+          error,
+        });
+      }
+    });
   }
 
   private async enqueueHistoricalDecisionRecalc(
@@ -2107,6 +2188,47 @@ export class HistoricalDataRecoveryService {
     };
   }
 
+  private buildHistoricalDeepRepairQueueInput(
+    plan: HistoricalRepairDispatchPlan,
+    repository: { analysis: RepositoryAnalysis | null },
+  ) {
+    const item = plan.item;
+    const dto = this.buildMissingDeepAnalysisDto(repository);
+
+    return {
+      repositoryId: item.repoId,
+      dto: {
+        ...dto,
+        userPreferencePriorityBoost: this.toPriorityBoost(
+          item.historicalRepairPriorityScore,
+          plan.routerDecision.routerPriorityClass,
+          plan.routerDecision.requiresReview,
+        ),
+        userPreferencePriorityReasons: [
+          `historical_repair:${item.historicalRepairBucket}`,
+          `historical_action:${item.historicalRepairAction}`,
+          `router_tier:${plan.routerDecision.capabilityTier}`,
+          `router_priority:${plan.routerDecision.routerPriorityClass}`,
+        ],
+      } satisfies RunAnalysisDto,
+      options: {
+        metadata: {
+          historicalRepairLane: item.historicalRepairBucket,
+          historicalRepairAction: item.historicalRepairAction,
+          historicalRepairPriorityScore: item.historicalRepairPriorityScore,
+          ...plan.routerMetadata,
+        },
+        jobOptionsOverride: {
+          priority: this.toSingleAnalysisQueuePriority(
+            item.historicalRepairAction,
+            item.historicalRepairPriorityScore,
+            plan.routerDecision.routerPriorityClass,
+          ),
+        },
+      },
+    };
+  }
+
   private buildHistoricalDecisionRecalcBulkEntry(
     plan: HistoricalRepairDispatchPlan,
   ) {
@@ -2116,6 +2238,35 @@ export class HistoricalDataRecoveryService {
       dto: queueInput.dto,
       metadata: queueInput.options.metadata,
       jobOptionsOverride: queueInput.options.jobOptionsOverride,
+    };
+  }
+
+  private buildHistoricalDeepRepairBulkEntry(
+    plan: HistoricalRepairDispatchPlan,
+    repository: { analysis: RepositoryAnalysis | null },
+  ) {
+    const queueInput = this.buildHistoricalDeepRepairQueueInput(
+      plan,
+      repository,
+    );
+    return {
+      repositoryId: queueInput.repositoryId,
+      dto: queueInput.dto,
+      metadata: queueInput.options.metadata,
+      jobOptionsOverride: queueInput.options.jobOptionsOverride,
+    };
+  }
+
+  private buildHistoricalDeepRepairQueuedOutcome(
+    plan: HistoricalRepairDispatchPlan,
+    executionDurationMs: number,
+  ): HistoricalRepairDispatchOutcome {
+    return {
+      plan,
+      outcomeStatus: 'partial',
+      outcomeReason: 'queued_deep_repair_execution',
+      executionDurationMs,
+      executionUsedReview: plan.routerDecision.requiresReview,
     };
   }
 
