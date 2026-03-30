@@ -360,3 +360,112 @@ test('queue service bulk snapshot enqueue cancels job logs when queue add fails'
     'Task cancelled because bulk queue add failed.',
   );
 });
+
+test('queue service bulk single analysis enqueue preserves per-job options and batches behavior tracking', async () => {
+  const intakeCalls = [];
+  const startJobsBulkCalls = [];
+  const attachQueueJobsBulkCalls = [];
+  const bulkJobs = [];
+  const behaviorBulkCalls = [];
+  const service = new QueueService(
+    {
+      startJobsBulk: async (inputs) => {
+        startJobsBulkCalls.push(inputs);
+        return inputs.map((_input, index) => ({
+          id: `job-${index + 1}`,
+        }));
+      },
+      attachQueueJobsBulk: async (inputs) => {
+        attachQueueJobsBulkCalls.push(inputs);
+        return inputs;
+      },
+      startJob: async () => {
+        throw new Error('startJob fallback should not be used');
+      },
+      attachQueueJob: async () => {
+        throw new Error('attachQueueJob fallback should not be used');
+      },
+    },
+    {
+      recordQueueInfluenceBulk: async (flags) => {
+        behaviorBulkCalls.push(flags);
+      },
+      recordQueueInfluence: async () => {
+        throw new Error('recordQueueInfluence fallback should not be used');
+      },
+    },
+    {
+      getAnalysisPriorityAdjustment: async () => {
+        throw new Error(
+          'scheduler lookup should be skipped when explicit priority is provided',
+        );
+      },
+    },
+    {},
+  );
+
+  service.assertAnalysisPoolIntakeAllowed = async (input) => {
+    intakeCalls.push(input);
+  };
+  service.getQueue = () => ({
+    addBulk: async (items) => {
+      bulkJobs.push(items);
+      return items.map((_item, index) => ({
+        id: `queue-job-${index + 1}`,
+      }));
+    },
+  });
+
+  const results = await service.enqueueSingleAnalysesBulk(
+    [
+      {
+        repositoryId: 'repo-1',
+        dto: {
+          mode: 'FULL',
+          userPreferencePriorityBoost: 2,
+        },
+        metadata: {
+          historicalRepairAction: 'decision_recalc',
+        },
+        jobOptionsOverride: {
+          priority: 9,
+          attempts: 4,
+        },
+      },
+      {
+        repositoryId: 'repo-2',
+        dto: {
+          mode: 'FULL',
+        },
+        metadata: {
+          historicalRepairAction: 'deep_repair',
+        },
+        jobOptionsOverride: {
+          priority: 17,
+          attempts: 2,
+        },
+      },
+    ],
+    'historical_repair',
+  );
+
+  assert.equal(intakeCalls.length, 1);
+  assert.deepEqual(intakeCalls[0].repositoryIds, ['repo-1', 'repo-2']);
+  assert.equal(behaviorBulkCalls.length, 1);
+  assert.deepEqual(behaviorBulkCalls[0], [true, false]);
+  assert.equal(startJobsBulkCalls.length, 1);
+  assert.equal(startJobsBulkCalls[0][0].attempts, 4);
+  assert.equal(startJobsBulkCalls[0][1].attempts, 2);
+  assert.equal(bulkJobs.length, 1);
+  assert.equal(bulkJobs[0][0].data.historicalRepairAction, 'decision_recalc');
+  assert.equal(bulkJobs[0][0].opts.priority, 9);
+  assert.equal(bulkJobs[0][1].data.historicalRepairAction, 'deep_repair');
+  assert.equal(bulkJobs[0][1].opts.priority, 17);
+  assert.equal(attachQueueJobsBulkCalls.length, 1);
+  assert.equal(attachQueueJobsBulkCalls[0][0].attempts, 4);
+  assert.equal(attachQueueJobsBulkCalls[0][1].attempts, 2);
+  assert.deepEqual(
+    results.map((result) => result.queueJobId),
+    ['queue-job-1', 'queue-job-2'],
+  );
+});

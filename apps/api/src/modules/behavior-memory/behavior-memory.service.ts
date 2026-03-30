@@ -107,6 +107,45 @@ export class BehaviorMemoryService {
     return nextState;
   }
 
+  async recordQueueInfluenceBulk(appliedFlags: boolean[]) {
+    if (!appliedFlags.length) {
+      return this.getState();
+    }
+
+    const current = await this.getState();
+    let boostedCount = 0;
+    for (const applied of appliedFlags) {
+      if (applied) {
+        boostedCount += 1;
+      }
+    }
+
+    const nextState = buildBehaviorMemoryState(current.recentActionOutcomes, {
+      ...current.runtimeStats,
+      syncedAt: current.runtimeStats.syncedAt ?? new Date().toISOString(),
+      queuePriorityEvaluations:
+        (current.runtimeStats.queuePriorityEvaluations ?? 0) +
+        appliedFlags.length,
+      queuePriorityBoostedCount:
+        (current.runtimeStats.queuePriorityBoostedCount ?? 0) + boostedCount,
+    });
+
+    await this.prisma.systemConfig.upsert({
+      where: {
+        configKey: BEHAVIOR_MEMORY_CONFIG_KEY,
+      },
+      update: {
+        configValue: this.toJsonValue(nextState),
+      },
+      create: {
+        configKey: BEHAVIOR_MEMORY_CONFIG_KEY,
+        configValue: this.toJsonValue(nextState),
+      },
+    });
+
+    return nextState;
+  }
+
   private toJsonValue(value: unknown): Prisma.InputJsonValue {
     return value as Prisma.InputJsonValue;
   }

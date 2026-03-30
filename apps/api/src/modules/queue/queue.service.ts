@@ -84,6 +84,15 @@ type IdeaSnapshotBulkEntry = {
   jobOptionsOverride?: JobsOptions;
 };
 
+type SingleAnalysisBulkEntry = {
+  repositoryId: string;
+  dto: RunAnalysisDto;
+  triggeredBy?: string;
+  parentJobId?: string;
+  metadata?: Record<string, unknown>;
+  jobOptionsOverride?: JobsOptions;
+};
+
 export type QueueDepthSummary = {
   waiting: number;
   active: number;
@@ -162,12 +171,16 @@ export class QueueService implements OnModuleDestroy {
       source: 'analysis_single',
       repositoryIds: [repositoryId],
     });
-    const priorityOptions = await this.buildAnalysisPriorityOptions(
-      repositoryId,
-      dto,
+    const skipPriorityLookup = this.shouldSkipAnalysisPriorityLookup(
+      options.jobOptionsOverride,
     );
+    const priorityOptions = skipPriorityLookup
+      ? {}
+      : await this.buildAnalysisPriorityOptions(repositoryId, dto);
     await this.behaviorMemoryService.recordQueueInfluence(
-      typeof priorityOptions.priority === 'number',
+      skipPriorityLookup
+        ? this.hasBehaviorPriorityBoost(dto)
+        : typeof priorityOptions.priority === 'number',
     );
 
     return this.enqueueJob({
@@ -185,6 +198,114 @@ export class QueueService implements OnModuleDestroy {
         ...(options.jobOptionsOverride ?? {}),
       },
     });
+  }
+
+  async enqueueSingleAnalysesBulk(
+    entries: SingleAnalysisBulkEntry[],
+    triggeredBy = 'ui',
+  ): Promise<EnqueueResult[]> {
+    if (!entries.length) {
+      return [];
+    }
+
+    await this.assertAnalysisPoolIntakeAllowed({
+      source: 'analysis_single',
+      repositoryIds: entries.map((entry) => entry.repositoryId),
+    });
+
+    const queueName = QUEUE_NAMES.ANALYSIS_SINGLE;
+    const jobName = QUEUE_JOB_TYPES.ANALYSIS_SINGLE;
+    const queue = this.getQueue(queueName);
+    const normalizedEntries = await Promise.all(
+      entries.map(async (entry) => {
+        const skipPriorityLookup = this.shouldSkipAnalysisPriorityLookup(
+          entry.jobOptionsOverride,
+        );
+        const priorityOptions = skipPriorityLookup
+          ? {}
+          : await this.buildAnalysisPriorityOptions(entry.repositoryId, entry.dto);
+
+        return {
+          entry,
+          payload: {
+            repositoryId: entry.repositoryId,
+            dto: entry.dto,
+            ...(entry.metadata ?? {}),
+          },
+          options: {
+            ...this.buildJobOptions(queueName),
+            ...priorityOptions,
+            ...(entry.jobOptionsOverride ?? {}),
+          },
+          behaviorPriorityApplied: skipPriorityLookup
+            ? this.hasBehaviorPriorityBoost(entry.dto)
+            : typeof priorityOptions.priority === 'number',
+        };
+      }),
+    );
+
+    await this.recordQueueInfluencesBulk(
+      normalizedEntries.map((entry) => entry.behaviorPriorityApplied),
+    );
+
+    const jobLogs = await this.startQueueJobsBulk(
+      normalizedEntries.map(({ entry, payload, options }) => ({
+        jobName,
+        jobStatus: JobStatus.PENDING,
+        queueName,
+        payload,
+        triggeredBy: entry.triggeredBy ?? triggeredBy,
+        attempts: options.attempts ?? 1,
+        retryCount: 0,
+        parentJobId: entry.parentJobId,
+        startedAt: null,
+      })),
+    );
+
+    let jobs;
+    try {
+      jobs = await queue.addBulk(
+        normalizedEntries.map(({ payload, options }, index) => ({
+          name: jobName,
+          data: {
+            ...payload,
+            jobLogId: jobLogs[index].id,
+          },
+          opts: options,
+        })),
+      );
+    } catch (error) {
+      await this.cancelQueueJobsBulk(jobLogs.map((jobLog) => jobLog.id), {
+        errorMessage: 'Task cancelled because bulk queue add failed.',
+        result: {
+          bulkQueueAddFailed: true,
+          queueName,
+        },
+      });
+      throw error;
+    }
+
+    const attachInputs = jobs.map((job, index) => ({
+      jobId: jobLogs[index].id,
+      queueName,
+      queueJobId: String(job.id),
+      attempts: normalizedEntries[index].options.attempts ?? 1,
+    }));
+
+    try {
+      await this.attachQueueJobsBulk(attachInputs);
+    } catch {
+      await Promise.all(
+        attachInputs.map((input) => this.jobLogService.attachQueueJob(input)),
+      );
+    }
+
+    return jobs.map((job, index) => ({
+      jobId: jobLogs[index].id,
+      queueName,
+      queueJobId: String(job.id),
+      jobStatus: JobStatus.PENDING,
+    }));
   }
 
   async enqueueIdeaSnapshot(
@@ -636,6 +757,27 @@ export class QueueService implements OnModuleDestroy {
     );
   }
 
+  private async recordQueueInfluencesBulk(appliedFlags: boolean[]) {
+    if (!appliedFlags.length) {
+      return;
+    }
+
+    const behaviorMemoryService = this.behaviorMemoryService as BehaviorMemoryService & {
+      recordQueueInfluenceBulk?: (flags: boolean[]) => Promise<unknown>;
+    };
+
+    if (typeof behaviorMemoryService.recordQueueInfluenceBulk === 'function') {
+      await behaviorMemoryService.recordQueueInfluenceBulk(appliedFlags);
+      return;
+    }
+
+    await Promise.all(
+      appliedFlags.map((applied) =>
+        this.behaviorMemoryService.recordQueueInfluence(applied),
+      ),
+    );
+  }
+
   private async cancelQueueJobsBulk(
     jobIds: string[],
     args: {
@@ -695,6 +837,21 @@ export class QueueService implements OnModuleDestroy {
     return {
       priority: Math.min(200, 120 + Math.abs(totalBoost) * 8),
     };
+  }
+
+  private shouldSkipAnalysisPriorityLookup(jobOptionsOverride?: JobsOptions) {
+    return (
+      typeof jobOptionsOverride?.priority === 'number' &&
+      Number.isFinite(jobOptionsOverride.priority)
+    );
+  }
+
+  private hasBehaviorPriorityBoost(dto: RunAnalysisDto) {
+    return (
+      typeof dto.userPreferencePriorityBoost === 'number' &&
+      Number.isFinite(dto.userPreferencePriorityBoost) &&
+      dto.userPreferencePriorityBoost !== 0
+    );
   }
 
   private getQueue(queueName: QueueName) {

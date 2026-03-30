@@ -1544,6 +1544,116 @@ test('historical repair global gate caps mixed-lane inflight work', async () => 
   );
 });
 
+test('decision_recalc lane uses bulk single-analysis enqueue when available', async () => {
+  const bulkCalls = [];
+  const singleCalls = [];
+  const logs = [];
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueSingleAnalysesBulk: async (entries) => {
+        bulkCalls.push(entries);
+        return entries.map((_entry, index) => ({
+          jobId: `job-${index + 1}`,
+          queueName: 'analysis.single',
+          queueJobId: `queue-job-${index + 1}`,
+          jobStatus: 'PENDING',
+        }));
+      },
+      enqueueSingleAnalysis: async (repositoryId) => {
+        singleCalls.push(repositoryId);
+      },
+    },
+    {
+      runPriorityReport: async () => ({
+        summary: {},
+        items: [],
+      }),
+    },
+  );
+
+  service.logger.log = (message) => {
+    logs.push(message);
+  };
+
+  const outcomes = await service.enqueueHistoricalDecisionRecalc(
+    [
+      buildDispatchPlan({
+        repoId: 'repo-bulk-1',
+        action: 'decision_recalc',
+        priorityScore: 166,
+        recalcGate: {
+          recalcGateDecision: 'allow_recalc',
+          recalcGateReason: 'recalc_new_signal_detected',
+          recalcSignalChanged: true,
+          recalcSignalDiffSummary: 'user_conflict_changed',
+          recalcGateConfidence: 'HIGH',
+          changedFields: ['user_conflict'],
+          replayedConflictSignals: [],
+        },
+      }),
+      buildDispatchPlan({
+        repoId: 'repo-bulk-2',
+        action: 'decision_recalc',
+        priorityScore: 152,
+        routerPriorityClass: 'P0',
+        requiresReview: true,
+        recalcGate: {
+          recalcGateDecision: 'allow_recalc_but_expect_no_change',
+          recalcGateReason: 'recalc_signal_minor_change',
+          recalcSignalChanged: true,
+          recalcSignalDiffSummary: 'headline_conflict_changed',
+          recalcGateConfidence: 'MEDIUM',
+          changedFields: ['headline_conflict'],
+          replayedConflictSignals: [],
+        },
+      }),
+    ],
+    new Map(),
+  );
+
+  assert.equal(bulkCalls.length, 1);
+  assert.equal(singleCalls.length, 0);
+  assert.equal(bulkCalls[0].length, 2);
+  assert.equal(
+    bulkCalls[0][0].jobOptionsOverride.priority,
+    service.toSingleAnalysisQueuePriority('decision_recalc', 166, 'P1'),
+  );
+  assert.equal(
+    bulkCalls[0][1].jobOptionsOverride.priority,
+    service.toSingleAnalysisQueuePriority('decision_recalc', 152, 'P0'),
+  );
+  assert.equal(bulkCalls[0][0].metadata.historicalRepairAction, 'decision_recalc');
+  assert.equal(outcomes[0].outcomeReason, 'queued_decision_recalc_execution');
+  assert.equal(
+    outcomes[1].outcomeReason,
+    'queued_decision_recalc_execution_low_expected_value',
+  );
+  assert.ok(outcomes.every((outcome) => outcome.outcomeStatus === 'partial'));
+  const telemetryLog = logs.find((entry) =>
+    entry.includes('historical_repair lane_telemetry lane=decision_recalc'),
+  );
+  assert.ok(telemetryLog);
+  assert.match(telemetryLog, /bulkBatches=1/);
+});
+
 test('runHistoricalRepairLoop emits standardized loop telemetry fields', async () => {
   const logs = [];
   const service = new HistoricalDataRecoveryService(

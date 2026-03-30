@@ -11,6 +11,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { AdaptiveSchedulerService } from '../scheduler/adaptive-scheduler.service';
 import { ClaudeReviewService } from './claude-review.service';
+import { RunAnalysisDto } from './dto/run-analysis.dto';
 import { RepositoryDecisionService } from './repository-decision.service';
 import { RepositoryInsightService } from './repository-insight.service';
 import { TrainingKnowledgeExportService } from './training-knowledge-export.service';
@@ -104,6 +105,7 @@ const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_FALLBACK = 20;
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CHUNK_SIZE = 100;
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CONCURRENCY = 2;
 const HISTORICAL_REPAIR_SNAPSHOT_BULK_BATCH_SIZE = 50;
+const HISTORICAL_REPAIR_SINGLE_ANALYSIS_BULK_BATCH_SIZE = 50;
 const HISTORICAL_REPAIR_RATE_PRECISION = 2;
 const HISTORICAL_REPAIR_LANE_CONCURRENCY = {
   refresh_only: {
@@ -1648,127 +1650,179 @@ export class HistoricalDataRecoveryService {
     plans: HistoricalRepairDispatchPlan[],
     inflightIndex: HistoricalRepairInflightIndex,
   ) {
+    if (!plans.length) {
+      return [];
+    }
+
     const concurrency = this.resolveHistoricalRepairLaneConcurrency(
       'decision_recalc',
       plans.length,
     );
     const telemetry = this.createHistoricalRepairLaneTelemetry();
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
 
     try {
-      return await runWithConcurrency<
-        HistoricalRepairDispatchPlan,
-        HistoricalRepairDispatchOutcome
-      >(plans, concurrency, async (plan) => {
-        const startedAt = Date.now();
-        const item = plan.item;
+      const filtered = plans.reduce<{
+        allowedPlans: HistoricalRepairDispatchPlan[];
+        skippedOutcomeMap: Map<
+          HistoricalRepairDispatchPlan,
+          HistoricalRepairDispatchOutcome
+        >;
+      }>(
+        (acc, plan) => {
+          if (
+            plan.recalcGate?.recalcGateDecision === 'suppress_replay' ||
+            plan.recalcGate?.recalcGateDecision === 'suppress_cleanup'
+          ) {
+            acc.skippedOutcomeMap.set(plan, {
+              plan,
+              outcomeStatus: 'skipped',
+              outcomeReason: plan.recalcGate.recalcGateReason,
+              executionDurationMs: 0,
+              executionUsedFallback: true,
+            });
+            return acc;
+          }
 
-        if (plan.recalcGate?.recalcGateDecision === 'suppress_replay') {
-          return {
+          const suppression = this.shouldSuppressHistoricalRepairPlan({
+            lane: 'decision_recalc',
             plan,
-            outcomeStatus: 'skipped',
-            outcomeReason: plan.recalcGate.recalcGateReason,
-            executionDurationMs: Date.now() - startedAt,
-            executionUsedFallback: true,
-          };
-        }
-        if (plan.recalcGate?.recalcGateDecision === 'suppress_cleanup') {
-          return {
-            plan,
-            outcomeStatus: 'skipped',
-            outcomeReason: plan.recalcGate.recalcGateReason,
-            executionDurationMs: Date.now() - startedAt,
-            executionUsedFallback: true,
-          };
-        }
+            inflightIndex,
+          });
+          if (!suppression.suppressed) {
+            acc.allowedPlans.push(plan);
+            return acc;
+          }
 
-        const suppression = this.shouldSuppressHistoricalRepairPlan({
-          lane: 'decision_recalc',
-          plan,
-          inflightIndex,
-        });
-        if (suppression.suppressed) {
           if (suppression.suppressionType === 'dedupe') {
             telemetry.dedupeSkipCount += 1;
           }
           if (suppression.suppressionType === 'terminal_no_requeue') {
             telemetry.terminalNoRequeueSkipCount += 1;
           }
-          return {
+          acc.skippedOutcomeMap.set(plan, {
             plan,
             outcomeStatus: 'skipped',
             outcomeReason: suppression.reason ?? 'decision_recalc_suppressed',
-            executionDurationMs: Date.now() - startedAt,
+            executionDurationMs: 0,
             executionUsedFallback: true,
-          };
+          });
+          return acc;
+        },
+        {
+          allowedPlans: [],
+          skippedOutcomeMap: new Map(),
+        },
+      );
+
+      if (!filtered.allowedPlans.length) {
+        return plans
+          .map((plan) => filtered.skippedOutcomeMap.get(plan) ?? null)
+          .filter(Boolean) as HistoricalRepairDispatchOutcome[];
+      }
+
+      const outcomeMap = new Map<
+        HistoricalRepairDispatchPlan,
+        HistoricalRepairDispatchOutcome
+      >(filtered.skippedOutcomeMap);
+      const planBatches = this.chunkItems(
+        filtered.allowedPlans,
+        HISTORICAL_REPAIR_SINGLE_ANALYSIS_BULK_BATCH_SIZE,
+      );
+
+      for (const planBatch of planBatches) {
+        if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+          telemetry.bulkBatchCount += 1;
+          const bulkStartedAt = Date.now();
+
+          try {
+            await this.runWithinHistoricalRepairGlobalGate({
+              telemetry,
+              handler: () =>
+                bulkQueueService.enqueueSingleAnalysesBulk!(
+                  planBatch.map((plan) =>
+                    this.buildHistoricalDecisionRecalcBulkEntry(plan),
+                  ),
+                  'historical_repair',
+                ),
+            });
+            const durationMs = Date.now() - bulkStartedAt;
+            for (const plan of planBatch) {
+              outcomeMap.set(
+                plan,
+                this.buildHistoricalDecisionRecalcQueuedOutcome(
+                  plan,
+                  durationMs,
+                ),
+              );
+            }
+            continue;
+          } catch (error) {
+            telemetry.bulkFallbackCount += 1;
+            this.logger.warn(
+              `historical_repair bulk single-analysis lane failed lane=decision_recalc batchSize=${planBatch.length} reason=${this.readErrorMessage(error) || 'unknown'} fallback=single_enqueue`,
+            );
+          }
         }
 
-        try {
-          await this.runWithinHistoricalRepairGlobalGate({
+        const fallbackOutcomes =
+          await this.enqueueHistoricalDecisionRecalcFallbackBatch({
+            plans: planBatch,
+            concurrency,
             telemetry,
-            handler: () =>
-              this.queueService.enqueueSingleAnalysis(
-                item.repoId,
-                {
-                  runFastFilter: false,
-                  runCompleteness: false,
-                  runIdeaFit: false,
-                  runIdeaExtract: false,
-                  forceRerun: true,
-                  userPreferencePriorityBoost: this.toPriorityBoost(
-                    item.historicalRepairPriorityScore,
-                    plan.routerDecision.routerPriorityClass,
-                    plan.routerDecision.requiresReview,
-                  ),
-                  userPreferencePriorityReasons: [
-                    `historical_repair:${item.historicalRepairBucket}`,
-                    `historical_action:${item.historicalRepairAction}`,
-                    `router_tier:${plan.routerDecision.capabilityTier}`,
-                    `router_priority:${plan.routerDecision.routerPriorityClass}`,
-                  ],
-                },
-                'historical_repair',
-                {
-                  metadata: {
-                    historicalRepairLane: item.historicalRepairBucket,
-                    historicalRepairAction: item.historicalRepairAction,
-                    historicalRepairPriorityScore:
-                      item.historicalRepairPriorityScore,
-                    ...plan.routerMetadata,
-                  },
-                  jobOptionsOverride: {
-                    priority: this.toSingleAnalysisQueuePriority(
-                      item.historicalRepairAction,
-                      item.historicalRepairPriorityScore,
-                      plan.routerDecision.routerPriorityClass,
-                    ),
-                  },
-                },
-              ),
           });
-          return {
-            plan,
-            outcomeStatus: 'partial',
-            outcomeReason:
-              plan.recalcGate?.recalcGateDecision ===
-              'allow_recalc_but_expect_no_change'
-                ? 'queued_decision_recalc_execution_low_expected_value'
-                : 'queued_decision_recalc_execution',
-            executionDurationMs: Date.now() - startedAt,
-            executionUsedReview: plan.routerDecision.requiresReview,
-          };
-        } catch (error) {
-          return this.buildHistoricalRepairDispatchFailureOutcome({
-            plan,
-            lane: 'decision_recalc',
-            fallbackReason: 'decision_recalc_enqueue_failed',
-            startedAt,
-            error,
-          });
+        for (const outcome of fallbackOutcomes) {
+          outcomeMap.set(outcome.plan, outcome);
         }
-      });
+      }
+
+      return plans
+        .map((plan) => outcomeMap.get(plan) ?? null)
+        .filter(Boolean) as HistoricalRepairDispatchOutcome[];
     } finally {
       this.logHistoricalRepairLaneTelemetry('decision_recalc', telemetry);
     }
+  }
+
+  private async enqueueHistoricalDecisionRecalcFallbackBatch(args: {
+    plans: HistoricalRepairDispatchPlan[];
+    concurrency: number;
+    telemetry: HistoricalRepairLaneTelemetry;
+  }) {
+    return runWithConcurrency<
+      HistoricalRepairDispatchPlan,
+      HistoricalRepairDispatchOutcome
+    >(args.plans, args.concurrency, async (plan) => {
+      const startedAt = Date.now();
+      const queueInput = this.buildHistoricalDecisionRecalcQueueInput(plan);
+
+      try {
+        await this.runWithinHistoricalRepairGlobalGate({
+          telemetry: args.telemetry,
+          handler: () =>
+            this.queueService.enqueueSingleAnalysis(
+              queueInput.repositoryId,
+              queueInput.dto,
+              'historical_repair',
+              queueInput.options,
+            ),
+        });
+        return this.buildHistoricalDecisionRecalcQueuedOutcome(
+          plan,
+          Date.now() - startedAt,
+        );
+      } catch (error) {
+        return this.buildHistoricalRepairDispatchFailureOutcome({
+          plan,
+          lane: 'decision_recalc',
+          fallbackReason: 'decision_recalc_enqueue_failed',
+          startedAt,
+          error,
+        });
+      }
+    });
   }
 
   private async enqueueHistoricalSnapshotLane(args: {
@@ -2008,6 +2062,77 @@ export class HistoricalDataRecoveryService {
           plan.routerDecision.routerPriorityClass,
         ),
       },
+    };
+  }
+
+  private buildHistoricalDecisionRecalcQueueInput(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    const item = plan.item;
+    return {
+      repositoryId: item.repoId,
+      dto: {
+        runFastFilter: false,
+        runCompleteness: false,
+        runIdeaFit: false,
+        runIdeaExtract: false,
+        forceRerun: true,
+        userPreferencePriorityBoost: this.toPriorityBoost(
+          item.historicalRepairPriorityScore,
+          plan.routerDecision.routerPriorityClass,
+          plan.routerDecision.requiresReview,
+        ),
+        userPreferencePriorityReasons: [
+          `historical_repair:${item.historicalRepairBucket}`,
+          `historical_action:${item.historicalRepairAction}`,
+          `router_tier:${plan.routerDecision.capabilityTier}`,
+          `router_priority:${plan.routerDecision.routerPriorityClass}`,
+        ],
+      } satisfies RunAnalysisDto,
+      options: {
+        metadata: {
+          historicalRepairLane: item.historicalRepairBucket,
+          historicalRepairAction: item.historicalRepairAction,
+          historicalRepairPriorityScore: item.historicalRepairPriorityScore,
+          ...plan.routerMetadata,
+        },
+        jobOptionsOverride: {
+          priority: this.toSingleAnalysisQueuePriority(
+            item.historicalRepairAction,
+            item.historicalRepairPriorityScore,
+            plan.routerDecision.routerPriorityClass,
+          ),
+        },
+      },
+    };
+  }
+
+  private buildHistoricalDecisionRecalcBulkEntry(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    const queueInput = this.buildHistoricalDecisionRecalcQueueInput(plan);
+    return {
+      repositoryId: queueInput.repositoryId,
+      dto: queueInput.dto,
+      metadata: queueInput.options.metadata,
+      jobOptionsOverride: queueInput.options.jobOptionsOverride,
+    };
+  }
+
+  private buildHistoricalDecisionRecalcQueuedOutcome(
+    plan: HistoricalRepairDispatchPlan,
+    executionDurationMs: number,
+  ): HistoricalRepairDispatchOutcome {
+    return {
+      plan,
+      outcomeStatus: 'partial',
+      outcomeReason:
+        plan.recalcGate?.recalcGateDecision ===
+        'allow_recalc_but_expect_no_change'
+          ? 'queued_decision_recalc_execution_low_expected_value'
+          : 'queued_decision_recalc_execution',
+      executionDurationMs,
+      executionUsedReview: plan.routerDecision.requiresReview,
     };
   }
 
