@@ -2915,9 +2915,17 @@ export class HistoricalDataRecoveryService {
       };
     }
 
+    const treatQueuedEvidenceRepairAsLowYield = Boolean(
+      this.isLowYieldWatchOnlyEvidenceRepairCandidate(args.plan.item),
+    );
     const consecutiveLowYield = recentOutcomes
       .slice(0, HISTORICAL_REPAIR_LOW_YIELD_CONSECUTIVE_THRESHOLD)
-      .every((record) => this.isHistoricalRepairLowYieldRecentOutcome(record));
+      .every((record) =>
+        this.isHistoricalRepairLowYieldRecentOutcome(
+          record,
+          treatQueuedEvidenceRepairAsLowYield,
+        ),
+      );
 
     return consecutiveLowYield
       ? {
@@ -2940,7 +2948,8 @@ export class HistoricalDataRecoveryService {
     if (
       item.needsImmediateFrontendDowngrade ||
       item.conflictDrivenDecisionRecalc ||
-      item.conflictFlag ||
+      (item.conflictFlag &&
+        !this.isLowYieldWatchOnlyEvidenceRepairCandidate(item)) ||
       item.isVisibleOnHome ||
       item.isVisibleOnFavorites ||
       item.appearedInDailySummary ||
@@ -2991,9 +3000,14 @@ export class HistoricalDataRecoveryService {
 
   private isHistoricalRepairLowYieldRecentOutcome(
     record: HistoricalRepairRecentOutcomeRecord,
+    treatQueuedEvidenceRepairAsLowYield = false,
   ) {
     return (
       record.outcomeStatus === 'no_change' ||
+      (treatQueuedEvidenceRepairAsLowYield &&
+        record.historicalRepairAction === 'evidence_repair' &&
+        record.outcomeStatus === 'partial' &&
+        record.outcomeReason === 'queued_evidence_repair_execution') ||
       record.outcomeReason ===
         'low_yield_suppressed_consecutive_low_value_outcomes' ||
       record.outcomeReason === 'deep_targets_already_present' ||
@@ -3003,6 +3017,24 @@ export class HistoricalDataRecoveryService {
       this.isHistoricalRepairTerminalNoRequeueOutcomeReason(
         record.outcomeReason,
       )
+    );
+  }
+
+  private isLowYieldWatchOnlyEvidenceRepairCandidate(
+    item: HistoricalRepairPriorityItem,
+  ) {
+    return Boolean(
+      item.historicalRepairAction === 'evidence_repair' &&
+        item.historicalRepairBucket === 'stale_watch' &&
+        item.strictVisibilityLevel === 'DETAIL_ONLY' &&
+        item.repositoryValueTier !== 'HIGH' &&
+        item.moneyPriority !== 'P0' &&
+        item.moneyPriority !== 'P1' &&
+        !item.isVisibleOnHome &&
+        !item.isVisibleOnFavorites &&
+        !item.appearedInDailySummary &&
+        !item.appearedInTelegram &&
+        !item.historicalTrustedButWeak,
     );
   }
 

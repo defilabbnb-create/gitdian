@@ -2395,6 +2395,183 @@ test('runHistoricalRepairLoop suppresses low-yield repos after three consecutive
   );
 });
 
+test('runHistoricalRepairLoop suppresses stale-watch detail-only evidence_repair after repeated queued churn', async () => {
+  const snapshotCalls = [];
+  const lowYieldItem = buildPriorityReportItem({
+    repoId: 'repo-evidence-low-yield',
+    action: 'evidence_repair',
+    bucket: 'stale_watch',
+    reason: 'detail-only conflict repair churn',
+    priorityScore: 112,
+    strictVisibilityLevel: 'DETAIL_ONLY',
+    repositoryValueTier: 'MEDIUM',
+    moneyPriority: 'P2',
+    conflictFlag: true,
+    evidenceConflictCount: 2,
+    keyEvidenceGaps: ['user_conflict'],
+    trustedBlockingGaps: ['user_conflict'],
+    conflictDrivenGaps: ['user_conflict'],
+    decisionRecalcGaps: [],
+    missingDrivenGaps: [],
+    weakDrivenGaps: ['distribution_weak'],
+    evidenceCoverageRate: 0.42,
+    isVisibleOnHome: false,
+    isVisibleOnFavorites: false,
+    appearedInDailySummary: false,
+    appearedInTelegram: false,
+    historicalTrustedButWeak: false,
+  });
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async ({ where }) => {
+          if (
+            where.configKey ===
+            'analysis.historical_repair.recent_outcomes.latest'
+          ) {
+            return {
+              configValue: {
+                schemaVersion: 'historical_repair_recent_outcomes_v1',
+                generatedAt: '2026-03-29T03:00:00.000Z',
+                maxItemsPerRepository: 6,
+                items: [
+                  buildRecentOutcomeRecord({
+                    repoId: lowYieldItem.repoId,
+                    loggedAt: '2026-03-29T03:00:00.000Z',
+                    action: 'evidence_repair',
+                    bucket: 'stale_watch',
+                    outcomeStatus: 'partial',
+                    outcomeReason: 'queued_evidence_repair_execution',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.42,
+                  }),
+                  buildRecentOutcomeRecord({
+                    repoId: lowYieldItem.repoId,
+                    loggedAt: '2026-03-28T03:00:00.000Z',
+                    action: 'evidence_repair',
+                    bucket: 'stale_watch',
+                    outcomeStatus: 'partial',
+                    outcomeReason: 'queued_evidence_repair_execution',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.42,
+                  }),
+                  buildRecentOutcomeRecord({
+                    repoId: lowYieldItem.repoId,
+                    loggedAt: '2026-03-27T03:00:00.000Z',
+                    action: 'evidence_repair',
+                    bucket: 'stale_watch',
+                    outcomeStatus: 'partial',
+                    outcomeReason: 'queued_evidence_repair_execution',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.42,
+                  }),
+                ],
+              },
+            };
+          }
+
+          return null;
+        },
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueIdeaSnapshotsBulk: async (entries) => {
+        snapshotCalls.push(entries);
+        return [];
+      },
+    },
+    {
+      runPriorityReport: async () => ({
+        generatedAt: '2026-03-30T00:00:00.000Z',
+        summary: {
+          visibleBrokenCount: 0,
+          highValueWeakCount: 0,
+          staleWatchCount: 1,
+          archiveOrNoiseCount: 0,
+          historicalTrustedButWeakCount: 0,
+          immediateFrontendDowngradeCount: 0,
+          evidenceCoverageRate: 0.42,
+          keyEvidenceMissingCount: 0,
+          evidenceConflictCount: 1,
+          evidenceWeakButVisibleCount: 0,
+          conflictDrivenDecisionRecalcCount: 0,
+          actionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 1,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          visibleBrokenActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          highValueWeakActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+        },
+        items: [lowYieldItem],
+        samples: {},
+      }),
+    },
+  );
+
+  service.saveSystemConfig = async () => {};
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 0,
+    globalPendingCount: 0,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 0,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: false,
+    minPriorityScore: 0,
+  });
+
+  assert.equal(snapshotCalls.length, 0);
+  assert.equal(result.execution.evidenceRepair, 0);
+  assert.equal(result.loopTelemetry.loopLowYieldSkipCount, 1);
+  assert.equal(
+    result.analysisOutcomeSummary.actionOutcomeStatusBreakdown.evidence_repair
+      .skipped,
+    1,
+  );
+});
+
 test('runHistoricalRepairLoop does not low-yield suppress repos when a new decision signal is present', async () => {
   const analysisCalls = [];
   const recalcItem = buildPriorityReportItem({

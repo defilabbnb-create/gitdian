@@ -441,6 +441,16 @@ function resolveHistoricalRepairAction(args: {
       args.evidenceWeakOnly &&
       !args.historicalTrustedButWeak,
   );
+  const watchOnlyConflictPrefersDowngrade = Boolean(
+    watchOnlyDecisionRecalcCandidate &&
+      item.needsFrontendDowngrade &&
+      !args.historicalTrustedButWeak &&
+      !args.finalDecisionButNoDeep &&
+      !args.coreEvidenceGap &&
+      !args.keyEvidenceMissing &&
+      item.missingDrivenGaps.length === 0 &&
+      (args.evidenceConflict || args.evidenceDecisionConflict),
+  );
 
   if (item.historicalRepairBucket === 'archive_or_noise') {
     return {
@@ -563,6 +573,12 @@ function resolveHistoricalRepairAction(args: {
     if (weakOnlyStaleWatchPrefersRefresh) {
       return {
         action: 'refresh_only',
+        conflictDrivenDecisionRecalc: false,
+      };
+    }
+    if (watchOnlyConflictPrefersDowngrade) {
+      return {
+        action: 'downgrade_only',
         conflictDrivenDecisionRecalc: false,
       };
     }

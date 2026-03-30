@@ -131,7 +131,32 @@ test('user and monetization evidence conflicts prefer decision_recalc', () => {
   assert.equal(decisionRecalc.conflictDrivenDecisionRecalc, true);
 });
 
-test('detail-only stale-watch conflicts no longer occupy decision_recalc backlog by default', () => {
+test('detail-only stale-watch conflicts no longer stay on repair backlog by default', () => {
+  const item = priorityItem({
+    isVisibleOnHome: false,
+    isVisibleOnFavorites: false,
+    appearedInDailySummary: false,
+    appearedInTelegram: false,
+    hasDetailPageExposure: true,
+    displayStatus: 'BASIC_READY',
+    moneyPriority: 'P2',
+    repositoryValueTier: 'MEDIUM',
+    collectionTier: 'WATCH',
+    evidenceConflictCount: 2,
+    keyEvidenceConflictCount: 2,
+    evidenceConflictDimensions: ['user', 'monetization'],
+    evidenceWeakCount: 2,
+    keyEvidenceWeakCount: 2,
+    evidenceWeakDimensions: ['distribution', 'market'],
+    qualityReasonSummary: 'detail-only watchlist conflict should stay on cheaper repair path',
+  });
+
+  assert.equal(item.historicalRepairBucket, 'stale_watch');
+  assert.equal(item.strictVisibilityLevel, 'DETAIL_ONLY');
+  assert.equal(item.historicalRepairAction, 'downgrade_only');
+});
+
+test('detail-only stale-watch conflicts with missing gaps still prefer evidence repair', () => {
   const item = priorityItem({
     isVisibleOnHome: false,
     isVisibleOnFavorites: false,
@@ -144,10 +169,12 @@ test('detail-only stale-watch conflicts no longer occupy decision_recalc backlog
     evidenceConflictCount: 2,
     keyEvidenceConflictCount: 2,
     evidenceConflictDimensions: ['user', 'monetization'],
-    evidenceWeakCount: 2,
-    keyEvidenceWeakCount: 2,
-    evidenceWeakDimensions: ['distribution', 'market'],
-    qualityReasonSummary: 'detail-only watchlist conflict should stay on cheaper repair path',
+    keyEvidenceMissingCount: 1,
+    evidenceMissingDimensions: ['market'],
+    evidenceWeakCount: 1,
+    keyEvidenceWeakCount: 1,
+    evidenceWeakDimensions: ['distribution'],
+    qualityReasonSummary: 'detail-only watch conflict with missing evidence still merits repair',
   });
 
   assert.equal(item.historicalRepairBucket, 'stale_watch');
