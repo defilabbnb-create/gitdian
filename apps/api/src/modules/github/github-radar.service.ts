@@ -602,9 +602,16 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
         deepQueue,
         targetCategories,
       );
+      const analysisPoolFrozenForNewEntries =
+        await this.isAnalysisPoolFrozenForNewEntries();
 
       const backfillConcurrency = this.readInt('GITHUB_BACKFILL_CONCURRENCY', 1);
       const snapshotHighWatermark = this.resolveSnapshotHighWatermark();
+
+      if (analysisPoolFrozenForNewEntries) {
+        await this.updateSchedulerReason(state, 'analysis_pool_frozen');
+        return;
+      }
 
       const keywordSupply = await this.gitHubKeywordSupplyService.maybeRunKeywordSupply({
         mode: state.mode,
@@ -651,11 +658,6 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
             : 'pending_backfill_running'
           : 'backfill_concurrency_saturated';
         await this.updateSchedulerReason(state, pendingReason);
-        return;
-      }
-
-      if (await this.isAnalysisPoolFrozenForNewEntries()) {
-        await this.updateSchedulerReason(state, 'analysis_pool_frozen');
         return;
       }
 
@@ -1099,48 +1101,183 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
         },
       }),
     );
+    const { allowedEntries, blockedRepositoryIds } =
+      await this.filterAnalysisSingleEntriesForFrozenPool(queueEntries);
+
+    if (!allowedEntries.length) {
+      if (blockedRepositoryIds.length > 0) {
+        await this.recordSchedulerEvent('top_up_deep_analysis_skipped_frozen', {
+          skipped: blockedRepositoryIds.length,
+          queueSizeBefore: deepQueue.total,
+        });
+      }
+      return 0;
+    }
+
+    let queuedEntries = allowedEntries;
+    let fallbackBlockedRepositoryIds: string[] = [];
 
     if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
       try {
-        await bulkQueueService.enqueueSingleAnalysesBulk(queueEntries, 'radar');
+        await bulkQueueService.enqueueSingleAnalysesBulk(allowedEntries, 'radar');
       } catch (error) {
         this.logger.warn(
-          `radar deep backlog bulk enqueue failed batchSize=${queueEntries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
+          `radar deep backlog bulk enqueue failed batchSize=${allowedEntries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
         );
-        await this.enqueueDeepBacklogEntriesIndividually(queueEntries, 'radar');
+        const fallbackResult = await this.enqueueDeepBacklogEntriesIndividually(
+          allowedEntries,
+          'radar',
+        );
+        queuedEntries = fallbackResult.queuedEntries;
+        fallbackBlockedRepositoryIds = fallbackResult.blockedRepositoryIds;
       }
     } else {
-      await this.enqueueDeepBacklogEntriesIndividually(queueEntries, 'radar');
+      const fallbackResult = await this.enqueueDeepBacklogEntriesIndividually(
+        allowedEntries,
+        'radar',
+      );
+      queuedEntries = fallbackResult.queuedEntries;
+      fallbackBlockedRepositoryIds = fallbackResult.blockedRepositoryIds;
+    }
+
+    const totalBlockedRepositoryIds = [
+      ...new Set([...blockedRepositoryIds, ...fallbackBlockedRepositoryIds]),
+    ];
+
+    if (!queuedEntries.length) {
+      if (totalBlockedRepositoryIds.length > 0) {
+        await this.recordSchedulerEvent('top_up_deep_analysis_skipped_frozen', {
+          skipped: totalBlockedRepositoryIds.length,
+          queueSizeBefore: deepQueue.total,
+        });
+      }
+      return 0;
     }
 
     await this.recordSchedulerEvent('top_up_deep_analysis', {
-      queued: eligibleCandidates.length,
+      queued: queuedEntries.length,
       queueSizeBefore: deepQueue.total,
+      blockedByFrozenPool: totalBlockedRepositoryIds.length,
     });
 
-    return eligibleCandidates.length;
+    return queuedEntries.length;
+  }
+
+  private async filterAnalysisSingleEntriesForFrozenPool(
+    entries: SingleAnalysisBulkEntries,
+  ) {
+    if (!entries.length || typeof this.prisma.systemConfig?.findUnique !== 'function') {
+      return {
+        allowedEntries: entries,
+        blockedRepositoryIds: [],
+      };
+    }
+
+    const [freezeRow, snapshotRow] = await Promise.all([
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+        },
+      }),
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+        },
+      }),
+    ]);
+    const gate = evaluateAnalysisPoolIntakeGate({
+      freezeState: readAnalysisPoolFreezeState(freezeRow?.configValue),
+      snapshot: readFrozenAnalysisPoolBatchSnapshot(snapshotRow?.configValue),
+      source: 'analysis_single',
+      repositoryIds: entries.map((entry) => entry.repositoryId),
+    });
+
+    if (
+      !gate.analysisPoolFrozen ||
+      gate.decision === 'allow_unfrozen' ||
+      gate.decision === 'allow_existing_member'
+    ) {
+      return {
+        allowedEntries: entries,
+        blockedRepositoryIds: [],
+      };
+    }
+
+    const blockedRepositoryIds = [...new Set(gate.blockedRepositoryIds)];
+    if (!blockedRepositoryIds.length) {
+      return {
+        allowedEntries: [],
+        blockedRepositoryIds: [],
+      };
+    }
+
+    const blockedRepositoryIdSet = new Set(blockedRepositoryIds);
+    return {
+      allowedEntries: entries.filter(
+        (entry) => !blockedRepositoryIdSet.has(entry.repositoryId),
+      ),
+      blockedRepositoryIds,
+    };
   }
 
   private async enqueueDeepBacklogEntriesIndividually(
     entries: SingleAnalysisBulkEntries,
     triggeredBy: string,
   ) {
+    const queuedEntries: SingleAnalysisBulkEntries = [];
+    const blockedRepositoryIds = new Set<string>();
+
     await runWithConcurrency(
       entries,
       this.resolveDeepFallbackEnqueueConcurrency(entries.length),
       async (entry) => {
-        await this.queueService.enqueueSingleAnalysis(
-          entry.repositoryId,
-          entry.dto,
-          entry.triggeredBy ?? triggeredBy,
-          {
-            parentJobId: entry.parentJobId,
-            metadata: entry.metadata,
-            jobOptionsOverride: entry.jobOptionsOverride,
-          },
-        );
+        try {
+          await this.queueService.enqueueSingleAnalysis(
+            entry.repositoryId,
+            entry.dto,
+            entry.triggeredBy ?? triggeredBy,
+            {
+              parentJobId: entry.parentJobId,
+              metadata: entry.metadata,
+              jobOptionsOverride: entry.jobOptionsOverride,
+            },
+          );
+          queuedEntries.push(entry);
+        } catch (error) {
+          const message = this.readErrorMessage(error);
+          if (this.isFrozenPoolSingleAnalysisError(message)) {
+            blockedRepositoryIds.add(entry.repositoryId);
+            this.logger.warn(
+              `radar deep backlog skipped frozen entry repositoryId=${entry.repositoryId} reason=${message}`,
+            );
+            return;
+          }
+
+          throw error;
+        }
       },
     );
+
+    return {
+      queuedEntries,
+      blockedRepositoryIds: [...blockedRepositoryIds],
+    };
+  }
+
+  private isFrozenPoolSingleAnalysisError(message: string) {
+    return (
+      message.includes('analysis_pool_frozen_non_member:analysis_single') ||
+      message.includes('analysis_pool_frozen:analysis_single') ||
+      message.includes('analysis_pool_frozen_unscoped:analysis_single')
+    );
+  }
+
+  private readErrorMessage(error: unknown) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error ?? 'Unknown error');
   }
 
   private resolveDeepFallbackEnqueueConcurrency(entryCount: number) {

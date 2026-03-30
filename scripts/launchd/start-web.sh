@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+export GITDIAN_SERVICE_NAME="web"
 source "$SCRIPT_DIR/load-env.sh"
 
 resolve_next_bin() {
@@ -38,6 +39,7 @@ if artifact_missing_or_stale \
 fi
 
 export NODE_ENV="production"
+log_runtime_summary
 
 NEXT_BIN="$(resolve_next_bin)"
 

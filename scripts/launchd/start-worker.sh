@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+export GITDIAN_SERVICE_NAME="worker"
 source "$SCRIPT_DIR/load-env.sh"
 
 if artifact_missing_or_stale \
@@ -17,5 +18,6 @@ fi
 
 export NODE_ENV="production"
 export ENABLE_QUEUE_WORKERS="true"
+log_runtime_summary
 
 exec "$NODE_BIN" "$ROOT/apps/api/dist/worker.js"

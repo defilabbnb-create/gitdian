@@ -49,6 +49,15 @@ function buildService(overrides = {}) {
       enqueueSingleAnalysesBulk: async () => [],
       enqueueSingleAnalysis: async () => {},
     },
+    overrides.frozenAnalysisPoolService ?? {
+      includeRepositoryIdsInFrozenPoolSnapshot: async () => ({
+        requestedRepositoryCount: 0,
+        addedRepositoryCount: 0,
+        alreadyMemberCount: 0,
+        unresolvedRepositoryCount: 0,
+        totalRepositoryCount: 0,
+      }),
+    },
   );
 }
 
@@ -227,6 +236,213 @@ test('queueRepositoryCandidates falls back to single enqueue when bulk deep enqu
   assert.ok(
     logs.some((entry) =>
       entry.includes('github deep child bulk enqueue failed'),
+    ),
+  );
+});
+
+test('queueRepositoryCandidates retries frozen deep entries after frozen-pool promotion', async () => {
+  const singleCalls = [];
+  const promotionCalls = [];
+  const logs = [];
+  const service = buildService({
+    prisma: {
+      repository: {
+        findMany: async () => [
+          createRepository('repo-ok'),
+          createRepository('repo-frozen'),
+        ],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+    },
+    queueService: {
+      enqueueIdeaSnapshotsBulk: async () => [],
+      enqueueSingleAnalysesBulk: async () => {
+        throw new Error(
+          'analysis_pool_frozen_non_member:analysis_single blocked=repo-frozen',
+        );
+      },
+      enqueueSingleAnalysis: async (repositoryId, _dto, _triggeredBy, options) => {
+        singleCalls.push({
+          repositoryId,
+          frozenPoolPromotionApplied:
+            options?.metadata?.frozenPoolPromotionApplied === true,
+        });
+        if (
+          repositoryId === 'repo-frozen' &&
+          options?.metadata?.frozenPoolPromotionApplied !== true
+        ) {
+          throw new Error(
+            'analysis_pool_frozen_non_member:analysis_single blocked=repo-frozen',
+          );
+        }
+      },
+    },
+    frozenAnalysisPoolService: {
+      includeRepositoryIdsInFrozenPoolSnapshot: async (payload) => {
+        promotionCalls.push(payload);
+        return {
+          requestedRepositoryCount: payload.repositoryIds.length,
+          addedRepositoryCount: payload.repositoryIds.length,
+          alreadyMemberCount: 0,
+          unresolvedRepositoryCount: 0,
+          totalRepositoryCount: payload.repositoryIds.length,
+        };
+      },
+    },
+  });
+
+  installQueueRepositoryCandidatesStubs(service, {
+    shouldRefreshIdeaSnapshot: () => false,
+    shouldRefreshDeepAnalysis: () => true,
+  });
+  service.logger.warn = (message) => {
+    logs.push(message);
+  };
+
+  const result = await service.queueRepositoryCandidates({
+    repositoryIds: ['repo-ok', 'repo-frozen'],
+    windowDate: '2026-03-30',
+    runIdeaSnapshot: false,
+    runFastFilter: true,
+    runDeepAnalysis: true,
+    deepAnalysisOnlyIfPromising: true,
+    targetCategories: ['tools'],
+    parentJobId: 'root-job-2b',
+    triggeredBy: 'backfill',
+    fromBackfill: true,
+  });
+
+  assert.equal(result.snapshotQueued, 0);
+  assert.equal(result.deepAnalysisQueued, 2);
+  assert.deepEqual(singleCalls, [
+    {
+      repositoryId: 'repo-ok',
+      frozenPoolPromotionApplied: false,
+    },
+    {
+      repositoryId: 'repo-frozen',
+      frozenPoolPromotionApplied: false,
+    },
+    {
+      repositoryId: 'repo-frozen',
+      frozenPoolPromotionApplied: true,
+    },
+  ]);
+  assert.deepEqual(promotionCalls, [
+    {
+      repositoryIds: ['repo-frozen'],
+      reason: 'github_deep_child_enqueue',
+    },
+  ]);
+  assert.ok(
+    logs.some((entry) =>
+      entry.includes('github deep child bulk enqueue failed'),
+    ),
+  );
+});
+
+test('queueRepositoryCandidates retries frozen snapshot entries after frozen-pool promotion', async () => {
+  const bulkCalls = [];
+  const singleCalls = [];
+  const promotionCalls = [];
+  const logs = [];
+  const service = buildService({
+    prisma: {
+      repository: {
+        findMany: async () => [
+          createRepository('repo-ok'),
+          createRepository('repo-frozen'),
+        ],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+    },
+    queueService: {
+      enqueueIdeaSnapshotsBulk: async (entries) => {
+        bulkCalls.push(entries);
+        throw new Error(
+          'analysis_pool_frozen_non_member:analysis_snapshot blocked=repo-frozen',
+        );
+      },
+      enqueueIdeaSnapshot: async (payload) => {
+        singleCalls.push(payload);
+        if (
+          payload.repositoryId === 'repo-frozen' &&
+          payload.frozenPoolPromotionApplied !== true
+        ) {
+          throw new Error(
+            'analysis_pool_frozen_non_member:analysis_snapshot blocked=repo-frozen',
+          );
+        }
+        return {
+          jobId: `job-${payload.repositoryId}`,
+          queueName: 'analysis.snapshot',
+          queueJobId: `queue-job-${payload.repositoryId}`,
+          jobStatus: 'PENDING',
+        };
+      },
+      enqueueSingleAnalysesBulk: async () => [],
+      enqueueSingleAnalysis: async () => {},
+    },
+    frozenAnalysisPoolService: {
+      includeRepositoryIdsInFrozenPoolSnapshot: async (payload) => {
+        promotionCalls.push(payload);
+        return {
+          requestedRepositoryCount: payload.repositoryIds.length,
+          addedRepositoryCount: payload.repositoryIds.length,
+          alreadyMemberCount: 0,
+          unresolvedRepositoryCount: 0,
+          totalRepositoryCount: payload.repositoryIds.length,
+        };
+      },
+    },
+  });
+
+  installQueueRepositoryCandidatesStubs(service, {
+    shouldRefreshIdeaSnapshot: () => true,
+    shouldRefreshDeepAnalysis: () => false,
+  });
+  service.logger.warn = (message) => {
+    logs.push(message);
+  };
+
+  const result = await service.queueRepositoryCandidates({
+    repositoryIds: ['repo-ok', 'repo-frozen'],
+    windowDate: '2026-03-30',
+    runIdeaSnapshot: true,
+    runFastFilter: true,
+    runDeepAnalysis: false,
+    deepAnalysisOnlyIfPromising: true,
+    targetCategories: ['tools'],
+    parentJobId: 'root-job-3',
+    triggeredBy: 'radar',
+    fromBackfill: false,
+  });
+
+  assert.equal(bulkCalls.length, 1);
+  assert.equal(singleCalls.length, 3);
+  assert.deepEqual(
+    singleCalls.map((payload) => payload.repositoryId),
+    ['repo-ok', 'repo-frozen', 'repo-frozen'],
+  );
+  assert.equal(
+    singleCalls[2].frozenPoolPromotionApplied,
+    true,
+  );
+  assert.deepEqual(promotionCalls, [
+    {
+      repositoryIds: ['repo-frozen'],
+      reason: 'github_snapshot_enqueue',
+    },
+  ]);
+  assert.equal(result.snapshotQueued, 2);
+  assert.equal(result.deepAnalysisQueued, 0);
+  assert.ok(
+    logs.some((entry) =>
+      entry.includes('github snapshot bulk enqueue failed'),
     ),
   );
 });

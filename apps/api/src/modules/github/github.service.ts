@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { JobStatus, Prisma, RepositorySourceType } from '@prisma/client';
+import { JobsOptions } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   IdeaSnapshotOutput,
@@ -9,6 +10,7 @@ import {
   IdeaMainCategory,
   normalizeIdeaMainCategory,
 } from '../analysis/idea-snapshot-taxonomy';
+import { FrozenAnalysisPoolService } from '../analysis/frozen-analysis-pool.service';
 import { FastFilterService } from '../fast-filter/fast-filter.service';
 import { JobLogService } from '../job-log/job-log.service';
 import { QUEUE_JOB_TYPES } from '../queue/queue.constants';
@@ -118,6 +120,13 @@ type QueuedRepositoryCandidateSummary = {
   }>;
   topRepositoryIds: string[];
 };
+type IdeaSnapshotBulkEntry = {
+  payload: GitHubIdeaSnapshotJobPayload;
+  triggeredBy?: string;
+  parentJobId?: string;
+  jobOptionsOverride?: JobsOptions;
+};
+type IdeaSnapshotBulkEntries = IdeaSnapshotBulkEntry[];
 
 type DeepRuntimeStatsState = {
   date: string;
@@ -198,6 +207,7 @@ export class GitHubService {
     private readonly jobLogService: JobLogService,
     private readonly settingsService: SettingsService,
     private readonly queueService: QueueService,
+    private readonly frozenAnalysisPoolService: FrozenAnalysisPoolService,
   ) {}
 
   async fetchRepositories(dto: FetchRepositoriesDto) {
@@ -866,17 +876,22 @@ export class GitHubService {
     const bulkSnapshotTargets = repositoryOutcomes.filter(
       (outcome) => outcome.shouldQueueSnapshot,
     );
+    let snapshotQueued = 0;
     if (args.runIdeaSnapshot && bulkSnapshotTargets.length > 0) {
-      await this.queueService.enqueueIdeaSnapshotsBulk(
+      snapshotQueued = await this.enqueueIdeaSnapshotCandidates(
         bulkSnapshotTargets.map(({ repository }) => ({
-          repositoryId: repository.id,
-          fromBackfill: args.fromBackfill,
-          windowDate: args.windowDate,
-          runFastFilter: args.runFastFilter,
-          runDeepAnalysis: args.runDeepAnalysis,
-          deepAnalysisOnlyIfPromising: args.deepAnalysisOnlyIfPromising,
-          targetCategories: args.targetCategories,
-          rootJobId: args.parentJobId,
+          payload: {
+            repositoryId: repository.id,
+            fromBackfill: args.fromBackfill,
+            windowDate: args.windowDate,
+            runFastFilter: args.runFastFilter,
+            runDeepAnalysis: args.runDeepAnalysis,
+            deepAnalysisOnlyIfPromising: args.deepAnalysisOnlyIfPromising,
+            targetCategories: args.targetCategories,
+            rootJobId: args.parentJobId,
+          },
+          triggeredBy: args.triggeredBy,
+          parentJobId: args.parentJobId ?? undefined,
         })),
         args.triggeredBy,
         args.parentJobId ?? undefined,
@@ -885,8 +900,9 @@ export class GitHubService {
     const deepDirectTargets = repositoryOutcomes.filter(
       (outcome) => outcome.shouldQueueDeepAnalysisDirect,
     );
+    let deepAnalysisQueued = 0;
     if (deepDirectTargets.length > 0) {
-      await this.enqueueDeepAnalysisChildJobs(
+      deepAnalysisQueued = await this.enqueueDeepAnalysisChildJobs(
         deepDirectTargets.map(({ repository }) =>
           this.buildDeepAnalysisChildQueueEntry({
             repositoryId: repository.id,
@@ -901,7 +917,6 @@ export class GitHubService {
     }
 
     const categoryCounts = new Map<string, number>();
-    const deepAnalysisQueued = deepDirectTargets.length;
     let deepSkipped = 0;
     let promisingCandidates = 0;
     let goodIdeas = 0;
@@ -971,7 +986,7 @@ export class GitHubService {
 
     return {
       repositoryIds: repositories.map((repository) => repository.id),
-      snapshotQueued: bulkSnapshotTargets.length,
+      snapshotQueued,
       deepAnalysisQueued,
       deepSkipped,
       promisingCandidates,
@@ -1086,9 +1101,9 @@ export class GitHubService {
   private async enqueueDeepAnalysisChildJobs(
     entries: SingleAnalysisBulkEntries,
     triggeredBy: string,
-  ) {
+  ): Promise<number> {
     if (!entries.length) {
-      return;
+      return 0;
     }
 
     const bulkQueueService = this.queueService as QueueService & {
@@ -1097,7 +1112,7 @@ export class GitHubService {
     if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
       try {
         await bulkQueueService.enqueueSingleAnalysesBulk(entries, triggeredBy);
-        return;
+        return entries.length;
       } catch (error) {
         this.logger.warn(
           `github deep child bulk enqueue failed batchSize=${entries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
@@ -1105,21 +1120,233 @@ export class GitHubService {
       }
     }
 
+    const fallbackResult = await this.enqueueDeepAnalysisChildJobsIndividually(
+      entries,
+      triggeredBy,
+    );
+    let queuedCount = fallbackResult.queuedCount;
+
+    if (!fallbackResult.retryAfterFrozenPromotion.length) {
+      return queuedCount;
+    }
+
+    try {
+      const promotion =
+        await this.frozenAnalysisPoolService.includeRepositoryIdsInFrozenPoolSnapshot(
+          {
+            repositoryIds: fallbackResult.retryAfterFrozenPromotion.map(
+              (entry) => entry.repositoryId,
+            ),
+            reason: 'github_deep_child_enqueue',
+          },
+        );
+      this.logger.log(
+        `github deep child promoted frozen-pool members requested=${promotion.requestedRepositoryCount} added=${promotion.addedRepositoryCount} alreadyMember=${promotion.alreadyMemberCount} unresolved=${promotion.unresolvedRepositoryCount}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `github deep child frozen-pool promotion failed repositoryCount=${fallbackResult.retryAfterFrozenPromotion.length} reason=${error instanceof Error ? error.message : 'unknown'}`,
+      );
+      return queuedCount;
+    }
+
+    queuedCount += (
+      await this.enqueueDeepAnalysisChildJobsIndividually(
+        fallbackResult.retryAfterFrozenPromotion,
+        triggeredBy,
+        true,
+      )
+    ).queuedCount;
+
+    return queuedCount;
+  }
+
+  private async enqueueDeepAnalysisChildJobsIndividually(
+    entries: SingleAnalysisBulkEntries,
+    triggeredBy: string,
+    frozenPoolPromotionApplied = false,
+  ) {
+    let queuedCount = 0;
+    const retryAfterFrozenPromotion: SingleAnalysisBulkEntries = [];
+
     await this.runWithConcurrency(
       entries,
       this.resolveDeepAnalysisFallbackEnqueueConcurrency(entries.length),
       async (entry) => {
-        await this.queueService.enqueueSingleAnalysis(
-          entry.repositoryId,
-          entry.dto,
-          entry.triggeredBy ?? triggeredBy,
+        const metadata = frozenPoolPromotionApplied
+          ? {
+              ...(entry.metadata ?? {}),
+              frozenPoolPromotionApplied: true,
+            }
+          : entry.metadata;
+
+        try {
+          await this.queueService.enqueueSingleAnalysis(
+            entry.repositoryId,
+            entry.dto,
+            entry.triggeredBy ?? triggeredBy,
+            {
+              parentJobId: entry.parentJobId,
+              metadata,
+              jobOptionsOverride: entry.jobOptionsOverride,
+            },
+          );
+          queuedCount += 1;
+        } catch (error) {
+          const reason =
+            error instanceof Error ? error.message : 'queue_enqueue_failed';
+
+          if (
+            !frozenPoolPromotionApplied &&
+            this.isFrozenSingleRetryReason(reason)
+          ) {
+            retryAfterFrozenPromotion.push(entry);
+            return;
+          }
+
+          if (
+            frozenPoolPromotionApplied &&
+            this.isFrozenSingleRetryReason(reason)
+          ) {
+            this.logger.warn(
+              `github deep child enqueue skipped repositoryId=${entry.repositoryId} reason=${reason}`,
+            );
+            return;
+          }
+
+          throw error;
+        }
+      },
+    );
+
+    return {
+      queuedCount,
+      retryAfterFrozenPromotion,
+    };
+  }
+
+  private async enqueueIdeaSnapshotCandidates(
+    entries: IdeaSnapshotBulkEntries,
+    triggeredBy: string,
+    parentJobId?: string,
+  ): Promise<number> {
+    try {
+      await this.queueService.enqueueIdeaSnapshotsBulk(
+        entries,
+        triggeredBy,
+        parentJobId,
+      );
+      return entries.length;
+    } catch (error) {
+      this.logger.warn(
+        `github snapshot bulk enqueue failed batchSize=${entries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
+      );
+    }
+
+    return this.enqueueIdeaSnapshotCandidatesIndividually(
+      entries,
+      triggeredBy,
+      parentJobId,
+    );
+  }
+
+  private async enqueueIdeaSnapshotCandidatesIndividually(
+    entries: IdeaSnapshotBulkEntries,
+    triggeredBy: string,
+    parentJobId?: string,
+    allowFrozenPoolPromotion = true,
+  ): Promise<number> {
+    let queuedCount = 0;
+    const retryAfterFrozenPromotion: IdeaSnapshotBulkEntry[] = [];
+
+    await this.runWithConcurrency(
+      entries,
+      this.resolveIdeaSnapshotFallbackEnqueueConcurrency(entries.length),
+      async (entry) => {
+        try {
+          await this.queueService.enqueueIdeaSnapshot(
+            entry.payload,
+            entry.triggeredBy ?? triggeredBy,
+            {
+              parentJobId: entry.parentJobId ?? parentJobId,
+              jobOptionsOverride: entry.jobOptionsOverride,
+            },
+          );
+          queuedCount += 1;
+        } catch (error) {
+          const reason =
+            error instanceof Error ? error.message : 'queue_enqueue_failed';
+
+          if (
+            allowFrozenPoolPromotion &&
+            this.isFrozenSnapshotRetryReason(reason)
+          ) {
+            retryAfterFrozenPromotion.push(entry);
+            return;
+          }
+
+          this.logger.warn(
+            `github snapshot enqueue skipped repositoryId=${entry.payload.repositoryId} reason=${reason}`,
+          );
+        }
+      },
+    );
+
+    if (!retryAfterFrozenPromotion.length) {
+      return queuedCount;
+    }
+
+    try {
+      const promotion =
+        await this.frozenAnalysisPoolService.includeRepositoryIdsInFrozenPoolSnapshot(
           {
-            parentJobId: entry.parentJobId,
-            metadata: entry.metadata,
-            jobOptionsOverride: entry.jobOptionsOverride,
+            repositoryIds: retryAfterFrozenPromotion.map(
+              (entry) => entry.payload.repositoryId,
+            ),
+            reason: 'github_snapshot_enqueue',
           },
         );
+      this.logger.log(
+        `github snapshot promoted frozen-pool members requested=${promotion.requestedRepositoryCount} added=${promotion.addedRepositoryCount} alreadyMember=${promotion.alreadyMemberCount} unresolved=${promotion.unresolvedRepositoryCount}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `github snapshot frozen-pool promotion failed repositoryCount=${retryAfterFrozenPromotion.length} reason=${error instanceof Error ? error.message : 'unknown'}`,
+      );
+      return queuedCount;
+    }
+
+    const retriedEntries = retryAfterFrozenPromotion.map((entry) => ({
+      ...entry,
+      payload: {
+        ...entry.payload,
+        frozenPoolPromotionApplied: true,
       },
+    }));
+
+    return (
+      queuedCount +
+      (await this.enqueueIdeaSnapshotCandidatesIndividually(
+        retriedEntries,
+        triggeredBy,
+        parentJobId,
+        false,
+      ))
+    );
+  }
+
+  private isFrozenSnapshotRetryReason(reason: string) {
+    return reason.includes('analysis_pool_frozen_non_member:analysis_snapshot');
+  }
+
+  private isFrozenSingleRetryReason(reason: string) {
+    return reason.includes('analysis_pool_frozen_non_member:analysis_single');
+  }
+
+  private resolveIdeaSnapshotFallbackEnqueueConcurrency(entryCount: number) {
+    return Math.min(
+      entryCount,
+      this.readPositiveNumberEnv('IDEA_SNAPSHOT_CONCURRENCY', 8),
     );
   }
 

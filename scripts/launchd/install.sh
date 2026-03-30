@@ -37,6 +37,46 @@ copy_runtime_env_if_exists() {
   copy_if_exists "$source_file" "$target_file"
 }
 
+merge_runtime_env_if_exists() {
+  local base_file="$1"
+  local overlay_file="$2"
+  local target_file="$3"
+  local temp_file
+
+  if [[ "$PRESERVE_RUNTIME_ENV" == "1" && -f "$target_file" ]]; then
+    chmod 600 "$target_file"
+    return 0
+  fi
+
+  if [[ ! -f "$base_file" && ! -f "$overlay_file" ]]; then
+    rm -f "$target_file"
+    return 0
+  fi
+
+  temp_file="$(mktemp)"
+
+  if [[ -f "$base_file" ]]; then
+    cat "$base_file" > "$temp_file"
+  else
+    : > "$temp_file"
+  fi
+
+  if [[ -f "$overlay_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+
+      if grep -q "^${line%%=*}=" "$temp_file"; then
+        continue
+      fi
+
+      printf '%s\n' "$line" >> "$temp_file"
+    done < "$overlay_file"
+  fi
+
+  mv "$temp_file" "$target_file"
+  chmod 600 "$target_file"
+}
+
 wait_for_port_release() {
   local port="$1"
   local attempts="${2:-30}"
@@ -54,9 +94,25 @@ wait_for_port_release() {
   return 1
 }
 
+bootstrap_launch_agent() {
+  local label="$1"
+  local plist="$2"
+  local domain="gui/$(id -u)"
+
+  launchctl bootstrap "$domain" "$plist"
+
+  if launchctl print "$domain/$label" >/dev/null 2>&1; then
+    launchctl kickstart -k "$domain/$label" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  echo "Warning: launchd service $label was not immediately visible after bootstrap; relying on RunAtLoad." >&2
+}
+
 copy_runtime_env_if_exists "$ROOT/.env" "$RUNTIME_HOME/root.env"
-copy_runtime_env_if_exists "$ROOT/apps/api/.env" "$RUNTIME_HOME/api.env"
-copy_runtime_env_if_exists "$ROOT/apps/web/.env" "$RUNTIME_HOME/web.env"
+merge_runtime_env_if_exists "$ROOT/.env" "$ROOT/apps/api/.env" "$RUNTIME_HOME/api.env"
+merge_runtime_env_if_exists "$ROOT/.env" "$ROOT/apps/api/.env" "$RUNTIME_HOME/worker.env"
+merge_runtime_env_if_exists "$ROOT/.env" "$ROOT/apps/web/.env" "$RUNTIME_HOME/web.env"
 
 for script_name in load-env.sh start-api.sh start-worker.sh start-web.sh; do
   cp "$ROOT/scripts/launchd/$script_name" "$BIN_DIR/$script_name"
@@ -174,8 +230,7 @@ for label in com.gitdian.api com.gitdian.worker com.gitdian.web; do
 done
 
 for label in com.gitdian.api com.gitdian.worker com.gitdian.web; do
-  launchctl bootstrap "gui/$(id -u)" "$PLIST_DIR/$label.plist"
-  launchctl kickstart -k "gui/$(id -u)/$label"
+  bootstrap_launch_agent "$label" "$PLIST_DIR/$label.plist"
 done
 
 echo "Installed gitdian LaunchAgents."
