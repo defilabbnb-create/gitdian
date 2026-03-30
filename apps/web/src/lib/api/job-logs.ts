@@ -8,10 +8,7 @@ import {
   JobLogQueryState,
   buildJobLogListSearchParams,
 } from '@/lib/types/repository';
-
-function getApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
-}
+import { getApiBaseUrl } from '@/lib/api/base-url';
 
 function buildTimeoutSignal(timeoutMs?: number) {
   if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "autoglm-browser-agent": {
+      "command": "node",
+      "args": [
+        "/Users/v188/Documents/gitdian/scripts/local-browser-mcp.mjs"
+      ]
+    }
+  }
+}

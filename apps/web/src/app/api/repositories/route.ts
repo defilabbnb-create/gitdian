@@ -13,6 +13,23 @@ function buildRepositoryProxyUrl(request: NextRequest) {
   return `${baseUrl}/api/repositories${request.nextUrl.search}`;
 }
 
+function tryParseJsonBody(body: string) {
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(request: NextRequest) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REPOSITORY_PROXY_TIMEOUT_MS);
@@ -27,12 +44,27 @@ export async function GET(request: NextRequest) {
       },
     });
     const body = await response.text();
+    const parsedBody = tryParseJsonBody(body);
 
-    return new NextResponse(body, {
+    if (!parsedBody) {
+      const message = response.ok
+        ? '完整机会池返回了非 JSON 数据，系统已自动拦截。'
+        : '完整机会池上游暂时不可用，请稍后重试。';
+
+      return NextResponse.json(
+        {
+          success: false,
+          message,
+        },
+        {
+          status: response.ok ? 502 : response.status,
+        },
+      );
+    }
+
+    return NextResponse.json(parsedBody, {
       status: response.status,
       headers: {
-        'Content-Type':
-          response.headers.get('content-type') ?? 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
       },
     });

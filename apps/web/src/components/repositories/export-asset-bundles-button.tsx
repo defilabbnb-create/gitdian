@@ -1,10 +1,7 @@
 'use client';
 
 import { createExportFilename, downloadTextFile } from '@/lib/export-utils';
-
-function getApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
-}
+import { getApiBaseUrl } from '@/lib/api/base-url';
 
 async function downloadEndpoint(
   path: string,

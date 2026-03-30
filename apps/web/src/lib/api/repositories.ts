@@ -17,10 +17,13 @@ import {
   buildRepositoryListSearchParams,
 } from '@/lib/types/repository';
 import { normalizeRepositoryItem } from '@/lib/api/normalizers';
+import { getApiBaseUrl } from '@/lib/api/base-url';
 
-function getApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
-}
+type ApiPayload<T> =
+  | (ApiSuccessResponse<T> & {
+      message?: string;
+    })
+  | ApiErrorShape;
 
 function getRepositoryListApiUrl(search: string) {
   if (typeof window !== 'undefined') {
@@ -89,6 +92,24 @@ function normalizeRepositoryNumbers<T extends RepositoryListItem>(item: T): T {
   };
 }
 
+async function parseApiPayload<T>(
+  response: Response,
+  fallbackMessage: string,
+) {
+  const raw = await response.text();
+  const trimmed = raw.trim();
+
+  if (!trimmed) {
+    throw new ApiRequestError(fallbackMessage, response.status);
+  }
+
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    throw new ApiRequestError(fallbackMessage, response.status);
+  }
+}
+
 export async function getRepositories(
   query: RepositoryListQueryState,
   options: {
@@ -113,11 +134,10 @@ export async function getRepositories(
     },
   });
 
-  const payload = (await response.json()) as
-    | (ApiSuccessResponse<RepositoryListResponse> & {
-        message?: string;
-      })
-    | ApiErrorShape;
+  const payload = await parseApiPayload<ApiPayload<RepositoryListResponse>>(
+    response,
+    'Repository list returned invalid JSON.',
+  );
 
   if (!response.ok || !('success' in payload && payload.success)) {
     const message = Array.isArray(payload.message)
@@ -153,11 +173,10 @@ export async function getRepositoryById(
     },
   });
 
-  const payload = (await response.json()) as
-    | (ApiSuccessResponse<RepositoryDetail> & {
-        message?: string;
-      })
-    | ApiErrorShape;
+  const payload = await parseApiPayload<ApiPayload<RepositoryDetail>>(
+    response,
+    'Repository detail returned invalid JSON.',
+  );
 
   if (!response.ok || !('success' in payload && payload.success)) {
     const message = Array.isArray(payload.message)
@@ -186,11 +205,9 @@ export async function updateRepositoryManualInsight(
     body: JSON.stringify(payload),
   });
 
-  const body = (await response.json()) as
-    | (ApiSuccessResponse<RepositoryManualOverrideRecord | null> & {
-        message?: string;
-      })
-    | ApiErrorShape;
+  const body = await parseApiPayload<
+    ApiPayload<RepositoryManualOverrideRecord | null>
+  >(response, 'Repository manual insight returned invalid JSON.');
 
   if (!response.ok || !('success' in body && body.success)) {
     const message = Array.isArray(body.message)
@@ -216,11 +233,10 @@ export async function getRepositoryOverviewSummary(options: { timeoutMs?: number
     },
   });
 
-  const payload = (await response.json()) as
-    | (ApiSuccessResponse<RepositoryOverviewSummary> & {
-        message?: string;
-      })
-    | ApiErrorShape;
+  const payload = await parseApiPayload<ApiPayload<RepositoryOverviewSummary>>(
+    response,
+    'Repository summary returned invalid JSON.',
+  );
 
   if (!response.ok || !('success' in payload && payload.success)) {
     const message = Array.isArray(payload.message)
