@@ -418,6 +418,80 @@ test('display target users prefer repository metadata when final decision copy i
   );
 });
 
+test('display target users trims subject-led snapshot copy down to the actual audience', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh: '面向博彩运营方的数字开奖与资金管理后端系统',
+        },
+      },
+      finalDecision: {
+        moneyDecision: {
+          targetUsersZh: '',
+        },
+        decisionSummary: {
+          targetUsersZh: '',
+        },
+      },
+    }),
+  );
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(getRepositoryDisplayTargetUsersLabel(repository, summary), '博彩运营方');
+});
+
+test('display target users can recover React Native audience from repository metadata', () => {
+  const repository = createRepositoryFixture({
+    description:
+      'Autonomous AI Agent SDK for React Native & Expo with natural language UI control and testing.',
+    topics: ['react-native', 'expo', 'ui-automation', 'voice-ai', 'mcp'],
+    finalDecision: {
+      decisionSummary: {
+        targetUsersZh: '开发者和小团队',
+      },
+      moneyDecision: {
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+    analysis: {
+      moneyPriority: {
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+  });
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(
+    getRepositoryDisplayTargetUsersLabel(repository, summary),
+    'React Native 开发者和移动应用团队',
+  );
+});
+
+test('display target users does not swallow action clauses from subject-led orchestration headlines', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh:
+            '面向开发团队将 Linear 工单转化为沙箱 AI 编码代理并输出 PR 的本地编排服务',
+        },
+      },
+      finalDecision: {
+        moneyDecision: {
+          targetUsersZh: '',
+        },
+        decisionSummary: {
+          targetUsersZh: '',
+        },
+      },
+    }),
+  );
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(getRepositoryDisplayTargetUsersLabel(repository, summary), '开发团队');
+});
+
 test('homepage display infers concrete target users, reason, and monetization from repository-specific signals', () => {
   const concreteHeadline =
     'macOS 用户利用本地大模型进行会议转录和语音输入，产出纯文本记录。';

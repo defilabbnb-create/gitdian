@@ -155,7 +155,23 @@ function inferTargetUsersFromCopy(value: unknown) {
     return null;
   }
 
+  const normalizeTargetUsersCandidate = (input: string | null | undefined) => {
+    const trimmed = input
+      ?.replace(/^一个让/u, '')
+      ?.replace(/^为/u, '')
+      ?.replace(/^(?:主要)?面向/u, '')
+      ?.replace(/^(?:最)?适合/u, '')
+      ?.replace(/的(?:工具|平台|系统|服务|后端(?:系统|服务)?|扩展|应用|SDK|API|客户端|项目).*$/u, '')
+      ?.replace(/(?:将|通过|利用|借助|在).+$/u, '')
+      ?.replace(/[，。；;：:、]+$/gu, '')
+      .trim();
+
+    return trimmed || null;
+  };
+
   const patterns = [
+    /^面向(.+?)(?:的|将|通过|利用|借助|在)/u,
+    /^为(.+?)提供/u,
     /^(.+?用户)(?:利用|使用|通过|借助|在)/u,
     /主要面向(.+?)(?:，|。|；|;|并|但|且|$)/u,
     /面向(.+?)(?:，|。|；|;|并|但|且|$)/u,
@@ -167,8 +183,10 @@ function inferTargetUsersFromCopy(value: unknown) {
   for (const pattern of patterns) {
     const matched = normalized.match(pattern);
 
-    if (matched?.[1]?.trim()) {
-      return matched[1].trim();
+    const candidate = normalizeTargetUsersCandidate(matched?.[1]);
+
+    if (candidate) {
+      return candidate;
     }
   }
 

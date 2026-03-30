@@ -135,3 +135,26 @@ test('normalizeRepositoryItem keeps concrete snapshot reason and inferred users 
   assert.doesNotMatch(normalized.finalDecision?.decisionSummary.reasonZh ?? '', /Granola|WisprFlow|SaaS/);
   assert.doesNotMatch(normalized.finalDecision?.decisionSummary.reasonZh ?? '', /技术成熟度/);
 });
+
+test('normalizeRepositoryItem extracts concise target users from subject-led snapshot copy', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      ideaSnapshotJson: {
+        oneLinerZh: '面向博彩运营方的数字开奖与资金管理后端系统',
+      },
+    },
+    finalDecision: {
+      moneyDecision: {
+        targetUsersZh: '',
+      },
+      decisionSummary: {
+        targetUsersZh: '',
+      },
+    },
+  });
+
+  const normalized = normalizeRepositoryItem(repository);
+
+  assert.equal(normalized.finalDecision?.moneyDecision.targetUsersZh, '博彩运营方');
+  assert.equal(normalized.finalDecision?.decisionSummary.targetUsersZh, '博彩运营方');
+});

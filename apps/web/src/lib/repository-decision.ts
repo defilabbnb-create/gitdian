@@ -1027,8 +1027,11 @@ function inferTargetUsersFromHeadline(headline: string) {
   ) => {
     const trimmed = value
       ?.replace(/^一个让/u, '')
+      ?.replace(/^为/u, '')
       ?.replace(/^(?:主要)?面向/u, '')
       .replace(/^(?:最)?适合/u, '')
+      .replace(/的(?:工具|平台|系统|服务|后端(?:系统|服务)?|扩展|应用|SDK|API|客户端|项目).*$/u, '')
+      .replace(/(?:将|通过|利用|借助|在).+$/u, '')
       .replace(/[，。；;：:、]+$/gu, '')
       .trim();
 
@@ -1072,6 +1075,12 @@ function inferTargetUsersFromHeadline(headline: string) {
     map?: (value: string) => string | null;
     dedicatedScene?: boolean;
   }> = [
+    {
+      pattern: /^面向(.+?)(?:的|将|通过|利用|借助|在)/u,
+    },
+    {
+      pattern: /^为(.+?)提供/u,
+    },
     {
       pattern: /^(.+?用户)(?:利用|使用|通过|借助|在)/u,
     },
@@ -1143,6 +1152,36 @@ const REPOSITORY_METADATA_HINTS: RepositoryMetadataHint[] = [
       /(meeting|transcri|transcript|voice input|dictat|speech[- ]to[- ]text|speech to text|whisper|voice typing|audio notes|macos)/i,
     subject: '一个面向 macOS 的会议转录和语音输入工具',
     targetUsers: '需要会议转录或语音输入的 macOS 用户',
+  },
+  {
+    pattern:
+      /(react[- ]native|expo|mobile[- ]ai|voice[- ]ai|gemini live|ui[- ]automation)/i,
+    subject: '一个面向 React Native 应用的自主 AI 代理与自动化测试 SDK',
+    targetUsers: 'React Native 开发者和移动应用团队',
+  },
+  {
+    pattern:
+      /(parallel ai coding|coding sessions orchestrated from markdown|workflow orchestration for ai coding agents|coding control plane|linear[- ]driven coding|autonomous ticket|merged pr|sandbox ai coding|agent orchestration)/i,
+    subject: '一个用于编排并行 AI 编码任务和 PR 流程的工程工作台',
+    targetUsers: '需要并行调度 AI 编码任务的开发团队',
+  },
+  {
+    pattern:
+      /(ui validation|ui audit|design system|qa engineers?|browser extension for automated ui validation|webpage against them)/i,
+    subject: '一个在浏览器里验证 UI 标准并审查页面质量的扩展',
+    targetUsers: '前端开发者、设计师和 QA 团队',
+  },
+  {
+    pattern:
+      /(bruno[- ]inspired|api client|request interception|browser extension)/i,
+    subject: '一个带请求拦截和浏览器扩展能力的 Web API 客户端',
+    targetUsers: '需要调试和管理接口请求的开发者',
+  },
+  {
+    pattern:
+      /(status dashboard|real[- ]time status|api status|cloudflare workers|runtime metrics)/i,
+    subject: '一个展示 AI API 实时状态和运行指标的监控面板',
+    targetUsers: '需要监控 AI API 与服务状态的开发团队',
   },
   {
     pattern: /(snippet|code snippet|snippets? manager)/i,
