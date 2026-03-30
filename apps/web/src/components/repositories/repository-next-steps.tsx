@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { startTransition, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createFavorite, updateFavorite } from '@/lib/api/favorites';

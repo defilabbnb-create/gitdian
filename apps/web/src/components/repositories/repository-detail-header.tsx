@@ -1,3 +1,4 @@
+import React from 'react';
 import {
   getMoneyPriorityTone,
 } from '@/lib/repository-decision';
@@ -16,11 +17,13 @@ export function RepositoryDetailHeader({
   decisionViewModel,
 }: RepositoryDetailHeaderProps) {
   const categorySummary =
-    decisionViewModel.behaviorContext.categoryLabel ??
-    repository.analysis?.insightJson?.categoryDisplay?.label ??
-    repository.finalDecision?.decisionSummary?.categoryLabelZh ??
-    repository.finalDecision?.categoryLabelZh ??
-    '待分类';
+    decisionViewModel.flags.historicalRepairHoldback
+      ? '分类待复核，等重算后再确认。'
+      : decisionViewModel.behaviorContext.categoryLabel ??
+        repository.analysis?.insightJson?.categoryDisplay?.label ??
+        repository.finalDecision?.decisionSummary?.categoryLabelZh ??
+        repository.finalDecision?.categoryLabelZh ??
+        '待分类';
   const monetizationSummary =
     decisionViewModel.displayState === 'trusted'
       ? decisionViewModel.display.monetizationLabel

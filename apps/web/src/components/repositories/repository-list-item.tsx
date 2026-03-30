@@ -21,11 +21,13 @@ export function RepositoryListItemCard({
 }: RepositoryListItemProps) {
   const decisionView = buildRepositoryDecisionViewModel(repository);
   const categoryLabel =
-    decisionView.behaviorContext.categoryLabel ??
-    repository.analysis?.insightJson?.categoryDisplay?.label ??
-    repository.finalDecision?.decisionSummary?.categoryLabelZh ??
-    repository.finalDecision?.categoryLabelZh ??
-    '待分类';
+    decisionView.flags.historicalRepairHoldback
+      ? '分类待复核'
+      : decisionView.behaviorContext.categoryLabel ??
+        repository.analysis?.insightJson?.categoryDisplay?.label ??
+        repository.finalDecision?.decisionSummary?.categoryLabelZh ??
+        repository.finalDecision?.categoryLabelZh ??
+        '待分类';
   const showCreatedAtGithub =
     query.view === 'newRadar' ||
     query.view === 'backfilledPromising' ||

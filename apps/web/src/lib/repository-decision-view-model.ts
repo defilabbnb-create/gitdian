@@ -163,6 +163,7 @@ export type RepositoryDecisionViewModel = {
   flags: {
     fallback: boolean;
     conflict: boolean;
+    historicalRepairHoldback: boolean;
     incomplete: boolean;
     missingKeyAnalysis: boolean;
     hasFinalDecision: boolean;
@@ -479,6 +480,11 @@ function appendConservativeSuffix(
   return /[。！？]$/.test(base) ? `${base}${suffix}` : `${base}。${suffix}`;
 }
 
+function trimDisplaySentence(value: string | null | undefined) {
+  const normalized = normalizeFallbackDisplayValue(value)?.replace(/[。！？]+$/u, '');
+  return normalized ? normalized : null;
+}
+
 function shouldKeepStandaloneDisplayReason(value: string | null): value is string {
   if (!value) {
     return false;
@@ -610,7 +616,12 @@ function buildDisplayTargetUsers(args: {
   repository: RepositoryDecisionViewModelTarget;
   summary: RepositoryDecisionSummary;
   fallbackAnalysis: ReturnType<typeof getRepositoryFallbackIdeaAnalysis>;
+  historicalRepairHoldback: boolean;
 }) {
+  if (args.displayState !== 'trusted' && args.historicalRepairHoldback) {
+    return '目标用户标签待复核，先按仓库实际使用场景重新确认。';
+  }
+
   const displayTargetUsers = normalizeFallbackDisplayValue(
     getRepositoryDisplayTargetUsersLabel(
       args.repository as RepositoryDecisionSourceTarget,
@@ -1379,8 +1390,27 @@ function buildHeadline(
   repository: RepositoryDecisionViewModelTarget,
   summary: RepositoryDecisionSummary,
   displayState: RepositoryDecisionDisplayState,
+  historicalRepairHoldback: boolean,
 ) {
   const forceDegrade = displayState !== 'trusted';
+  const historicalEvidenceSummary = getHistoricalEvidenceSummary(repository);
+
+  if (forceDegrade && historicalRepairHoldback) {
+    const baseHeadline =
+      trimDisplaySentence(repository.analysis?.ideaSnapshotJson?.oneLinerZh) ??
+      trimDisplaySentence(summary.oneLiner) ??
+      trimDisplaySentence(repository.description) ??
+      '这个仓库';
+    const holdbackSuffix =
+      historicalEvidenceSummary && historicalEvidenceSummary.length <= 36
+        ? historicalEvidenceSummary
+        : '当前判断待重算，先别把它当成已分析完成项目。';
+
+    return {
+      headline: appendConservativeSuffix(baseHeadline, holdbackSuffix),
+      homepageHeadline: appendConservativeSuffix(baseHeadline, '当前判断待重算。'),
+    };
+  }
 
   return {
     headline: getRepositoryDecisionHeadline(
@@ -1548,7 +1578,12 @@ export function buildRepositoryDecisionViewModel(
   });
   const caution = buildDisplayCaution(guardedDisplayState);
   const verdictLabel = buildDisplayVerdict(guardedDisplayState, summary);
-  const headlines = buildHeadline(repository, summary, guardedDisplayState);
+  const headlines = buildHeadline(
+    repository,
+    summary,
+    guardedDisplayState,
+    historicalRepairHoldback,
+  );
   const monetization = buildDisplayMonetization({
     displayState: guardedDisplayState,
     repository,
@@ -1560,6 +1595,7 @@ export function buildRepositoryDecisionViewModel(
     repository,
     summary,
     fallbackAnalysis,
+    historicalRepairHoldback,
   });
   const worthDoingLabel = buildDisplayWorthDoing(guardedDisplayState, summary);
   const cta = buildCta(guardedDisplayState);
@@ -1669,6 +1705,7 @@ export function buildRepositoryDecisionViewModel(
     flags: {
       fallback,
       conflict,
+      historicalRepairHoldback,
       incomplete: missingKeyAnalysis,
       missingKeyAnalysis,
       hasFinalDecision,

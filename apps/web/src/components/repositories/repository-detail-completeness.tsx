@@ -1,3 +1,4 @@
+import React from 'react';
 import { RepositoryDetailAnalysisCard } from '@/components/repositories/repository-detail-analysis-card';
 import type { RepositoryDecisionViewModel } from '@/lib/repository-decision-view-model';
 

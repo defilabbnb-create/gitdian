@@ -392,6 +392,10 @@ test('historical repair degraded repositories hide strong priority and stale mod
   const repository = normalizeRepositoryItem(
     createRepositoryFixture({
       analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh:
+            'Unity-Environmental-University 的教务人员使用的 Chrome、Firefox 浏览器扩展，用于在 Stratus 和 Canvas 系统间叠加 Salesforce 界面并简化学生成绩查看流程。',
+        },
         ideaFitJson: {
           opportunityLevel: 'B',
           coreJudgement: '这是一个值得快速推进的浏览器工具机会。',
@@ -453,10 +457,14 @@ test('historical repair degraded repositories hide strong priority and stale mod
   const decisionView = buildRepositoryDecisionViewModel(repository);
 
   assert.equal(decisionView.displayState, 'degraded');
+  assert.equal(decisionView.flags.historicalRepairHoldback, true);
   assert.equal(decisionView.display.priorityLabel, '优先级待复核');
   assert.equal(decisionView.detail.statusLabel, '待重算');
+  assert.match(decisionView.display.headline, /教务人员|Salesforce|成绩查看流程/);
+  assert.doesNotMatch(decisionView.display.headline, /帮开发者部署和交付应用/);
   assert.match(decisionView.display.reason, /重算判断|用户冲突|收费冲突|执行冲突/);
   assert.doesNotMatch(decisionView.display.reason, /典型工具型机会/);
+  assert.match(decisionView.display.targetUsersLabel, /目标用户标签待复核/);
   assert.equal(decisionView.analysisModules.ideaExtract.statusLabel, '历史结果待重算');
   assert.match(decisionView.analysisModules.ideaExtract.detailSummary, /历史结果|待重算/);
   assert.doesNotMatch(decisionView.analysisModules.ideaExtract.detailSummary, /部署和交付应用/);

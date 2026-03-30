@@ -1,3 +1,4 @@
+import React from 'react';
 import type { RepositoryDecisionAnalysisModuleViewModel } from '@/lib/repository-decision-view-model';
 import { RepositoryOriginalAnalysisDisclosure } from '@/components/repositories/repository-original-analysis-disclosure';
 

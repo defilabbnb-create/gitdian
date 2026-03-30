@@ -1,3 +1,4 @@
+import React from 'react';
 import type { RepositoryDecisionViewModel } from '@/lib/repository-decision-view-model';
 
 type RepositoryDetailConclusionProps = {
