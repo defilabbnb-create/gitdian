@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { Prisma, RepositoryRoughLevel } from '@prisma/client';
+import { JobStatus, Prisma, RepositoryRoughLevel } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { FastFilterService } from '../fast-filter/fast-filter.service';
@@ -513,6 +513,31 @@ export class AnalysisOrchestratorService {
 
   private async ensureMissingDeepAnalysisQueued(repositoryId: string) {
     try {
+      const existingBackstopJob = await this.prisma.jobLog.findFirst({
+        where: {
+          jobName: 'analysis.run_single',
+          queueName: 'analysis.single',
+          triggeredBy: 'analysis_backstop',
+          jobStatus: {
+            in: [JobStatus.PENDING, JobStatus.RUNNING],
+          },
+          payload: {
+            path: ['repositoryId'],
+            equals: repositoryId,
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (existingBackstopJob) {
+        this.logger.log(
+          `missing_deep_backstop already queued repositoryId=${repositoryId} jobId=${existingBackstopJob.id}`,
+        );
+        return;
+      }
+
       const repository = await this.prisma.repository.findUnique({
         where: { id: repositoryId },
         include: {
@@ -550,9 +575,30 @@ export class AnalysisOrchestratorService {
         return;
       }
 
-      const runCompleteness = !repository.analysis?.completenessJson;
-      const runIdeaFit = !repository.analysis?.ideaFitJson;
-      const runIdeaExtract = !repository.analysis?.extractedIdeaJson;
+      const completenessMissingJson =
+        repository.analysis?.completenessJson == null &&
+        repository.completenessScore != null;
+      const ideaFitMissingJson =
+        repository.analysis?.ideaFitJson == null && repository.ideaFitScore != null;
+      const runCompleteness =
+        completenessMissingJson || !this.hasCompletenessResult(repository);
+      const runIdeaFit = ideaFitMissingJson || !this.hasIdeaFitResult(repository);
+      let runIdeaExtract = !repository.analysis?.extractedIdeaJson;
+      const forceRerun = completenessMissingJson || ideaFitMissingJson;
+      if (!runCompleteness && !runIdeaFit && !runIdeaExtract) {
+        return;
+      }
+
+      if (runIdeaExtract) {
+        const extractGate = await this.shouldRunIdeaExtract(repositoryId);
+        if (!extractGate.shouldRun) {
+          runIdeaExtract = false;
+          this.logger.log(
+            `missing_deep_backstop skipped idea_extract repositoryId=${repositoryId} reason=${extractGate.reason} trace=${extractGate.trace.join(',')}`,
+          );
+        }
+      }
+
       if (!runCompleteness && !runIdeaFit && !runIdeaExtract) {
         return;
       }
@@ -571,13 +617,14 @@ export class AnalysisOrchestratorService {
           runCompleteness,
           runIdeaFit,
           runIdeaExtract,
-          forceRerun: false,
+          forceRerun,
         },
         'analysis_backstop',
         {
           metadata: {
             missingDeepAfterFinalDecision: true,
             recoveryMode: 'forced_missing_deep',
+            forceBackfillMissingJson: forceRerun,
           },
         },
       );

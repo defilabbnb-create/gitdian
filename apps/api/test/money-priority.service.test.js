@@ -107,3 +107,61 @@ test('keeps infra projects on cautious monetization wording', () => {
     '更适合先验证价值，再判断是否具备收费空间。',
   );
 });
+
+test('drops English-heavy business labels from zh fields and falls back to Chinese-safe summaries', () => {
+  const service = createService();
+  const result = service.calculate({
+    repository: {
+      fullName: 'telegram/supercharged-agent',
+      description: 'Managed Telegram AI agent hosting',
+      topics: ['telegram', 'ai-agent'],
+      stars: 58,
+      categoryL1: 'ai',
+      categoryL2: 'ai-agent',
+    },
+    insight: {
+      verdict: 'GOOD',
+      action: 'BUILD',
+      projectReality: {
+        type: 'product',
+        hasRealUser: true,
+        hasClearUseCase: true,
+        isDirectlyMonetizable: true,
+      },
+    },
+    extractedIdea: {
+      targetUsers: [
+        'SMB customer support teams',
+        'AI automation agencies',
+      ],
+    },
+    claudeReview: {
+      hasRealUser: true,
+      hasClearUseCase: true,
+      hasProductizationPath: true,
+      isDirectlyMonetizable: true,
+      businessJudgement: {
+        isFounderFit: true,
+        isSmallTeamFriendly: true,
+        hasNearTermMonetizationPath: true,
+        moneyPriorityHint: 'HIGH_VALUE',
+        moneyReasonZh: '用户和场景都比较清楚。',
+      },
+      businessSignals: {
+        targetUser: 'SMB customer support teams, AI automation agencies',
+        willingnessToPay: 'high',
+        monetizationModel:
+          'Subscription tiers based on message volume and premium features',
+        urgency: 'high',
+        founderFit: true,
+        buildDifficulty: 'medium',
+      },
+    },
+  });
+
+  assert.equal(result.targetUsersZh, '有明确用户，但还需要你再确认细分人群');
+  assert.equal(
+    result.monetizationSummaryZh,
+    '可以先从团队版、托管版或服务化交付验证是否有人付费。',
+  );
+});

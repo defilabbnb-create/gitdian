@@ -87,6 +87,7 @@ type HomepageSelection = {
   top3: Candidate[];
   newOpportunities: Candidate[];
   profile: BehaviorMemoryProfile;
+  selectionMode: 'trusted' | 'provisional' | 'empty';
 };
 
 export function HomeFeaturedRepositories({
@@ -158,6 +159,7 @@ export function HomeFeaturedRepositories({
   }
 
   const top1 = selection.top1;
+  const isProvisionalSelection = selection.selectionMode === 'provisional';
   const top1Reason = top1.decisionView.display.reason;
   const top1Users = sanitizeTopSignalValue(
     top1.decisionView.display.targetUsersLabel,
@@ -172,7 +174,7 @@ export function HomeFeaturedRepositories({
           今天最该推进
         </p>
         <h1 className="mt-2 text-4xl font-semibold tracking-tight text-slate-950 md:text-[3.2rem]">
-          今天先做这一个。
+          {isProvisionalSelection ? '今天先补这一个。' : '今天先做这一个。'}
         </h1>
         {selection.profile.preferredCategories.length ||
         selection.profile.avoidedCategories.length ? (
@@ -208,7 +210,9 @@ export function HomeFeaturedRepositories({
           {top1.headline}
         </Link>
         <p className="mt-4 text-lg font-semibold text-amber-200">
-          这是今天最值得先做的项目
+          {isProvisionalSelection
+            ? '这是今天最值得先补证据的候选'
+            : '这是今天最值得先做的项目'}
         </p>
 
         <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
@@ -230,7 +234,10 @@ export function HomeFeaturedRepositories({
 
         <div className="mt-6 grid gap-3 lg:grid-cols-3">
           <TopSignal label="用户是谁" value={top1Users} />
-          <TopSignal label="为什么值得做" value={top1Reason} />
+          <TopSignal
+            label={isProvisionalSelection ? '为什么先看它' : '为什么值得做'}
+            value={top1Reason}
+          />
           <TopSignal label="能不能收费" value={top1Monetization} />
         </div>
 
@@ -273,7 +280,9 @@ export function HomeFeaturedRepositories({
               Top 2-4
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-              接下来直接验证的 3 个机会
+              {isProvisionalSelection
+                ? '接下来优先补证据的 3 个候选'
+                : '接下来直接验证的 3 个机会'}
             </h2>
           </div>
 
@@ -551,7 +560,7 @@ function RecommendationBreakdownChips({
   );
 }
 
-function selectHomepageDecisionTerminal(
+export function selectHomepageDecisionTerminal(
   items: RepositoryListItem[],
   actionMap: Map<string, ActionLoopEntry>,
   profile: BehaviorMemoryProfile,
@@ -570,10 +579,42 @@ function selectHomepageDecisionTerminal(
     )
     .filter((candidate): candidate is Candidate => candidate !== null);
 
-  const candidates = seededCandidates
+  const strictCandidates = seededCandidates
     .filter((candidate) => passesHomepageTerminalGuard(candidate))
     .sort((left, right) => compareCandidates(left, right));
+  const provisionalCandidates = seededCandidates
+    .filter((candidate) => passesHomepageProvisionalFallbackGuard(candidate))
+    .sort((left, right) => compareCandidates(left, right));
+  const strictSelection = buildHomepageSelection(strictCandidates, profile);
+  if (strictSelection.top1) {
+    return {
+      ...strictSelection,
+      selectionMode: 'trusted',
+    };
+  }
 
+  const provisionalSelection = buildHomepageSelection(
+    provisionalCandidates,
+    profile,
+  );
+  if (provisionalSelection.top1) {
+    return {
+      ...provisionalSelection,
+      selectionMode: 'provisional',
+    };
+  }
+
+  return {
+    ...strictSelection,
+    profile,
+    selectionMode: 'empty',
+  };
+}
+
+function buildHomepageSelection(
+  candidates: Candidate[],
+  profile: BehaviorMemoryProfile,
+) {
   const activeTop1 =
     candidates.find(
       (candidate) =>
@@ -831,6 +872,80 @@ function passesHomepageTerminalGuard(candidate: Candidate) {
   return true;
 }
 
+function passesHomepageProvisionalFallbackGuard(candidate: Candidate) {
+  if (
+    candidate.actionStatus === 'COMPLETED' ||
+    candidate.actionStatus === 'DROPPED'
+  ) {
+    return false;
+  }
+
+  if (candidate.decisionView.displayState !== 'provisional') {
+    return false;
+  }
+
+  if (
+    candidate.behaviorRecommendation.blocked &&
+    candidate.actionStatus !== 'IN_PROGRESS' &&
+    candidate.actionStatus !== 'VALIDATING'
+  ) {
+    return false;
+  }
+
+  if (hasLowValueHomepageSignal(candidate.summary)) {
+    return false;
+  }
+
+  if (
+    (candidate.summary.moneyPriority.tier !== 'P0' &&
+      candidate.summary.moneyPriority.tier !== 'P1') ||
+    candidate.summary.source === 'fallback' ||
+    candidate.summary.action === 'IGNORE'
+  ) {
+    return false;
+  }
+
+  if (
+    !candidate.hasRealUser ||
+    !candidate.hasClearUseCase ||
+    !candidate.isDirectlyMonetizable ||
+    candidate.hasUnclearUser ||
+    candidate.isLowConfidence ||
+    candidate.isStructurallyWeak
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.projectType === 'demo' ||
+    candidate.projectType === 'model' ||
+    candidate.projectType === 'infra' ||
+    candidate.looksInfraLike
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.oneLinerStrength === 'WEAK' ||
+    (!candidate.isStrongHeadline &&
+      candidate.summary.moneyPriority.tier !== 'P0') ||
+    candidate.hasDisplayConflict
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.guard.fallback ||
+    candidate.guard.snapshotConflict ||
+    candidate.guard.severeConflict ||
+    candidate.guard.weakStrength
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function compareCandidates(left: Candidate, right: Candidate) {
   const actionDelta =
     getActionPriorityWeight(right.actionStatus) -
@@ -1007,7 +1122,9 @@ export function HomeNewOpportunitiesStrip({
           新机会
         </p>
         <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-          已经自动避开你验证失败的方向，剩下这些值得新开一轮判断。
+          {selection.selectionMode === 'provisional'
+            ? '这些方向还没到高信任结论，但值得先补一轮证据。'
+            : '已经自动避开你验证失败的方向，剩下这些值得新开一轮判断。'}
         </h2>
       </div>
 

@@ -33,6 +33,7 @@ function createJsonResponse(body) {
   return {
     ok: true,
     status: 200,
+    headers: new Headers(),
     json: async () => body,
   };
 }
@@ -92,6 +93,61 @@ test('openai provider retries once after a 429 response', async () => {
   global.fetch = originalFetch;
 });
 
+test('openai provider rotates across configured ananapi models on retryable failures', async () => {
+  const originalFetch = global.fetch;
+  const requestedModels = [];
+  let attempts = 0;
+
+  await withEnv(
+    {
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_MODEL: 'gpt-5.4-mini',
+      OPENAI_MODEL_CANDIDATES: 'gpt-5.4,gpt-5.2,gpt-5.1',
+      OPENAI_BASE_URL: 'https://www.ananapi.com/v1',
+      OPENAI_RETRY_MAX: '2',
+      OPENAI_MAX_CONCURRENCY: '2',
+    },
+    async () => {
+      global.fetch = async (_url, init) => {
+        attempts += 1;
+        const payload = JSON.parse(String(init?.body ?? '{}'));
+        requestedModels.push(payload.model);
+
+        if (attempts === 1) {
+          return {
+            ok: false,
+            status: 502,
+            headers: new Headers(),
+            text: async () => 'bad gateway',
+          };
+        }
+
+        return createJsonResponse({
+          choices: [
+            {
+              message: {
+                content: '{"ok":true}',
+              },
+            },
+          ],
+        });
+      };
+
+      const provider = new OpenAiProvider();
+      const result = await provider.generateJson({
+        taskType: 'basic_analysis',
+        prompt: 'Return {"ok":true}',
+      });
+
+      assert.equal(attempts, 2);
+      assert.deepEqual(requestedModels, ['gpt-5.4-mini', 'gpt-5.4']);
+      assert.deepEqual(result.data, { ok: true });
+    },
+  );
+
+  global.fetch = originalFetch;
+});
+
 test('openai provider limits in-process request concurrency', async () => {
   const originalFetch = global.fetch;
   let concurrent = 0;
@@ -132,6 +188,57 @@ test('openai provider limits in-process request concurrency', async () => {
 
       assert.equal(maxConcurrent, 1);
       assert.equal(results.length, 3);
+    },
+  );
+
+  global.fetch = originalFetch;
+});
+
+test('openai provider shrinks adaptive concurrency after rate-limit pressure', async () => {
+  const originalFetch = global.fetch;
+  let attempts = 0;
+
+  await withEnv(
+    {
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_MODEL: 'gpt-5.4-mini',
+      OPENAI_BASE_URL: 'https://www.ananapi.com/v1',
+      OPENAI_RETRY_MAX: '1',
+      OPENAI_MAX_CONCURRENCY: '4',
+      OPENAI_CONCURRENCY_RECOVERY_SUCCESS_COUNT: '10',
+    },
+    async () => {
+      global.fetch = async () => {
+        attempts += 1;
+
+        if (attempts === 1) {
+          return {
+            ok: false,
+            status: 429,
+            headers: new Headers({ 'retry-after': '0' }),
+            text: async () => 'rate limited',
+          };
+        }
+
+        return createJsonResponse({
+          choices: [
+            {
+              message: {
+                content: '{"ok":true}',
+              },
+            },
+          ],
+        });
+      };
+
+      const provider = new OpenAiProvider();
+      const result = await provider.generateJson({
+        taskType: 'basic_analysis',
+        prompt: 'Return {"ok":true}',
+      });
+
+      assert.deepEqual(result.data, { ok: true });
+      assert.equal(provider.resolveMaxConcurrency() < 4, true);
     },
   );
 

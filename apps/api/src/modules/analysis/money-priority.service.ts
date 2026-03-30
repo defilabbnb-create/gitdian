@@ -372,17 +372,22 @@ export class MoneyPriorityService {
     }
 
     const targetUsers = this.extractTargetUsers(input);
-    const targetUsersZh =
-      this.cleanText(businessSignals.targetUser, 160) ||
-      (targetUsers.length > 0
-        ? targetUsers.join('、')
+    const extractedTargetUsersZh = targetUsers
+      .map((item) => this.localizeChineseBusinessText(item, 80))
+      .filter((item) => item.length > 0);
+    const fallbackTargetUsersZh =
+      extractedTargetUsersZh.length > 0
+        ? extractedTargetUsersZh.join('、')
         : isDeveloperWorkflowTool
           ? hasRealUser
             ? '开发者 / 工程团队'
             : '主要面向开发者，但具体用户场景还不明确。'
           : hasRealUser
             ? '有明确用户，但还需要你再确认细分人群'
-            : '目标用户仍不清晰，需要进一步确认。');
+            : '目标用户仍不清晰，需要进一步确认。';
+    const targetUsersZh =
+      this.localizeChineseBusinessText(businessSignals.targetUser, 160) ||
+      fallbackTargetUsersZh;
     const monetizationSummaryZh = this.buildMonetizationSummaryZh(
       businessSignals,
       businessJudgement.hasNearTermMonetizationPath,
@@ -897,6 +902,11 @@ export class MoneyPriorityService {
     hasClearUseCase: boolean,
     projectType: ProjectRealityType,
   ) {
+    const monetizationModelZh = this.localizeChineseBusinessText(
+      businessSignals.monetizationModel,
+      180,
+    );
+
     if (!hasRealUser || !hasClearUseCase) {
       return '收费路径还不够清楚，建议先确认真实用户和场景。';
     }
@@ -915,13 +925,13 @@ export class MoneyPriorityService {
 
     if (isDirectlyMonetizable || businessSignals.willingnessToPay === 'high') {
       return (
-        this.cleanText(businessSignals.monetizationModel, 180) ||
+        monetizationModelZh ||
         '可以先从团队版、托管版或服务化交付验证是否有人付费。'
       );
     }
 
     return (
-      this.cleanText(businessSignals.monetizationModel, 180) ||
+      monetizationModelZh ||
       '更适合先验证价值，再判断是否具备收费空间。'
     );
   }
@@ -1462,6 +1472,34 @@ export class MoneyPriorityService {
     return normalized.length <= maxLength
       ? normalized
       : normalized.slice(0, maxLength);
+  }
+
+  private localizeChineseBusinessText(value: unknown, maxLength: number) {
+    const normalized = this.cleanText(value, maxLength);
+    if (!normalized) {
+      return '';
+    }
+
+    return this.looksEnglishHeavyText(normalized) ? '' : normalized;
+  }
+
+  private looksEnglishHeavyText(value: string) {
+    const normalized = value.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    const asciiLetters = (normalized.match(/[A-Za-z]/g) ?? []).length;
+    const cjkChars = (normalized.match(/[\u4e00-\u9fff]/g) ?? []).length;
+    const englishTokens =
+      normalized.match(/[A-Za-z][A-Za-z0-9-]{2,}/g) ?? [];
+
+    return (
+      asciiLetters >= 8 &&
+      (cjkChars === 0 ||
+        asciiLetters > cjkChars * 2 ||
+        englishTokens.length >= 2)
+    );
   }
 
   private clamp(value: number, min: number, max: number) {

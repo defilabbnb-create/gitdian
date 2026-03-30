@@ -303,6 +303,25 @@ const STRONG_MONETIZATION_PATTERNS = [
   /较直接的收费可能/,
 ];
 
+const ANALYSIS_TERM_LABELS: Record<string, string> = {
+  technical_maturity: '技术成熟度',
+  monetization: '收费',
+  execution: '执行',
+  market: '市场',
+  distribution: '分发',
+  retention: '留存',
+  acquisition: '获客',
+  productization: '产品化',
+  product: '产品',
+  user: '用户',
+  users: '用户',
+  audience: '用户',
+  problem: '问题',
+  solution: '解决方案',
+  pricing: '定价',
+  channel: '渠道',
+};
+
 export const HOMEPAGE_LOW_PRIORITY_FALLBACK =
   '这个项目暂时更适合放在低优先观察池里。';
 export const HOMEPAGE_REVIEWING_FALLBACK =
@@ -627,6 +646,28 @@ function cleanDecisionText(value: unknown) {
   return normalized;
 }
 
+function localizeAnalysisTerms(value: string) {
+  let normalized = value;
+
+  for (const [key, label] of Object.entries(ANALYSIS_TERM_LABELS)) {
+    normalized = normalized.replace(new RegExp(`\\b${key}\\b`, 'gi'), label);
+  }
+
+  return normalized
+    .replace(/\s*\/\s*/g, '、')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function cleanLocalizedDecisionText(value: unknown) {
+  const normalized = cleanText(value);
+  if (!normalized) {
+    return '';
+  }
+
+  return cleanDecisionText(localizeAnalysisTerms(normalized));
+}
+
 function pickText(...values: Array<unknown>) {
   for (const value of values) {
     const normalized = cleanText(value);
@@ -638,9 +679,135 @@ function pickText(...values: Array<unknown>) {
   return '';
 }
 
+function pickLocalizedText(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = cleanLocalizedDecisionText(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
 function inferTargetUsersFromHeadline(headline: string) {
   const matched = headline.match(/^一个帮(.+?)做.+的(?:工具|系统|平台|项目)/);
   return matched?.[1]?.trim() ?? null;
+}
+
+function trimHeadlinePunctuation(text: string | null | undefined) {
+  const normalized = cleanLocalizedDecisionText(text)
+    .replace(/[。！!？?，,；;：:]+$/gu, '')
+    .trim();
+  return normalized || null;
+}
+
+function resolveSpecificFallbackSubject(
+  repository: RepositoryDecisionTarget,
+  summary: RepositoryDecisionSummary,
+) {
+  const analysisState = getRepositoryAnalysisState(repository);
+  const safeHeadline = [
+    summary.oneLiner,
+    repository.analysis?.insightJson?.oneLinerZh,
+    repository.description,
+  ]
+    .map((value) => trimHeadlinePunctuation(value ?? ''))
+    .find((value): value is string => {
+      if (!value) {
+        return false;
+      }
+
+      return !isGenericOneLiner(value) && !isTemplatedDecisionHeadline(value);
+    });
+
+  if (safeHeadline) {
+    return safeHeadline;
+  }
+
+  const targetUsers = [
+    !hasUnclearUserLabel(summary.targetUsersLabel) ? summary.targetUsersLabel : '',
+    analysisState?.lightAnalysis?.targetUsers ?? '',
+    inferTargetUsersFromHeadline(summary.oneLiner) ?? '',
+  ]
+    .map((value) => trimHeadlinePunctuation(value))
+    .find((value): value is string => Boolean(value));
+  const categoryLabel = [
+    summary.category.sub,
+    summary.moneyPriority.projectTypeLabel,
+    summary.category.label,
+  ]
+    .map((value) => trimHeadlinePunctuation(value))
+    .find((value): value is string => Boolean(value) && value !== '待分类');
+
+  if (targetUsers && categoryLabel) {
+    return `面向${targetUsers}的${categoryLabel}项目`;
+  }
+
+  if (targetUsers) {
+    return `面向${targetUsers}的项目`;
+  }
+
+  if (categoryLabel) {
+    return `一个${categoryLabel}方向项目`;
+  }
+
+  return null;
+}
+
+function buildSpecificFallbackHeadline(
+  repository: RepositoryDecisionTarget,
+  summary: RepositoryDecisionSummary,
+  mode: 'low_priority' | 'technical' | 'reviewing',
+) {
+  const finalizeHeadline = (value: string) => {
+    const sentence = /[。！？]$/.test(value) ? value : `${value}。`;
+    return sentence.length <= 96
+      ? sentence
+      : `${sentence.slice(0, 95).trimEnd()}…`;
+  };
+  const reason = pickLocalizedText(
+    repository.analysisState?.lightAnalysis?.whyItMatters,
+    repository.analysisState?.lightAnalysis?.caution,
+    repository.analysis?.ideaSnapshotJson?.reason,
+    repository.analysis?.insightJson?.verdictReason,
+    summary.verdictReason,
+    summary.recommendedMoveLabel,
+    repository.analysisState?.lightAnalysis?.nextStep,
+  ).replace(/^[，、；：\s]+/, '');
+
+  if (reason) {
+    if (/^(这个项目|这个方向|当前|README|仓库)/.test(reason)) {
+      return finalizeHeadline(reason);
+    }
+
+    const reasonLed =
+      mode === 'technical'
+        ? `这个项目更像技术能力或参考实现，但${reason}`
+        : mode === 'low_priority'
+          ? summary.action === 'CLONE'
+            ? `这个方向可借鉴，但${reason}`
+            : `这个项目先观察，${reason}`
+          : `这个项目还在补充判断，但${reason}`;
+
+    return finalizeHeadline(reasonLed);
+  }
+
+  const subject = resolveSpecificFallbackSubject(repository, summary);
+
+  if (!subject) {
+    return null;
+  }
+
+  if (mode === 'low_priority') {
+    return `${subject}，当前先放观察池。`;
+  }
+
+  if (mode === 'technical') {
+    return `${subject}，中文摘要还要再校正。`;
+  }
+
+  return `${subject}，先结合结论和详情再判断。`;
 }
 
 function founderPriorityToMoneyDecision(
@@ -1000,7 +1167,10 @@ function pickRepositoryHeadlineFallback(
     summary.action === 'IGNORE' ||
     summary.source === 'fallback'
   ) {
-    return ONE_LINER_LOW_PRIORITY_FALLBACK;
+    return (
+      buildSpecificFallbackHeadline(repository, summary, 'low_priority') ??
+      ONE_LINER_LOW_PRIORITY_FALLBACK
+    );
   }
 
   if (
@@ -1009,10 +1179,16 @@ function pickRepositoryHeadlineFallback(
     validation.riskFlags.includes('use_case_conflict') ||
     isStructurallyWeakHomepageCandidate(repository, summary)
   ) {
-    return ONE_LINER_TECHNICAL_FALLBACK;
+    return (
+      buildSpecificFallbackHeadline(repository, summary, 'technical') ??
+      ONE_LINER_TECHNICAL_FALLBACK
+    );
   }
 
-  return ONE_LINER_REVIEWING_FALLBACK;
+  return (
+    buildSpecificFallbackHeadline(repository, summary, 'reviewing') ??
+    ONE_LINER_REVIEWING_FALLBACK
+  );
 }
 
 function headlineLooksLikeConcreteProduct(text: string) {
@@ -1388,62 +1564,88 @@ export function getRepositoryFallbackIdeaAnalysis(
   summary: RepositoryDecisionSummary = getRepositoryDecisionSummary(repository),
 ): RepositoryFallbackIdeaAnalysis {
   const analysisState = getRepositoryAnalysisState(repository);
-  if (analysisState?.lightAnalysis) {
-    return {
-      headline: sanitizeDecisionHeadlineStrict(repository, summary),
-      targetUsers: analysisState.lightAnalysis.targetUsers,
-      useCase:
-        analysisState.lightAnalysis.whyItMatters ||
-        analysisState.lightAnalysis.nextStep,
-      monetization: analysisState.lightAnalysis.monetization,
-      whyItMatters: analysisState.lightAnalysis.whyItMatters,
-      nextStep: analysisState.lightAnalysis.nextStep,
-      caution: analysisState.lightAnalysis.caution ?? null,
-    };
-  }
-
   const insight = repository.analysis?.insightJson;
   const snapshot = repository.analysis?.ideaSnapshotJson;
   const projectReality = insight?.projectReality;
-  const headline = sanitizeDecisionHeadlineStrict(repository, summary);
+  const headline = pickRepositoryHeadlineFallback(
+    repository,
+    summary,
+    getRepositoryHeadlineValidation(repository, summary),
+  );
   const snapshotSkipped =
     snapshot?.isPromising === false || snapshot?.nextAction === 'SKIP';
-  const targetUsers = !hasUnclearUserLabel(summary.targetUsersLabel)
-    ? summary.targetUsersLabel
-    : inferTargetUsersFromHeadline(headline) ??
-      '先从最可能的真实用户访谈开始确认谁会持续使用它。';
-  const monetization = !hasUnclearMonetizationLabel(summary.monetizationLabel)
-    ? summary.monetizationLabel
-    : summary.action === 'BUILD'
+  const targetUsers =
+    pickLocalizedText(
+      analysisState?.lightAnalysis?.targetUsers,
+      !hasUnclearUserLabel(summary.targetUsersLabel)
+        ? summary.targetUsersLabel
+        : null,
+    ) ||
+    inferTargetUsersFromHeadline(headline) ||
+    '先从最可能的真实用户访谈开始确认谁会持续使用它。';
+  const monetization =
+    pickLocalizedText(
+      analysisState?.lightAnalysis?.monetization,
+      !hasUnclearMonetizationLabel(summary.monetizationLabel)
+        ? summary.monetizationLabel
+        : null,
+    ) ||
+    (summary.action === 'BUILD'
       ? '先按团队订阅、专业版或托管服务验证有没有人愿意付费。'
-      : '先验证是否有人愿意为这个场景持续付费，再决定是否继续投入。';
+      : '先验证是否有人愿意为这个场景持续付费，再决定是否继续投入。');
+  const useCase =
+    pickLocalizedText(
+      analysisState?.lightAnalysis?.whyItMatters,
+      analysisState?.lightAnalysis?.nextStep,
+      snapshotSkipped ? snapshot?.reason : null,
+      insight?.verdictReason,
+      summary.verdictReason,
+      summary.recommendedMoveLabel,
+    ) || '先把这个项目压缩成一个能明确用户、场景和收费方式的最小验证版本。';
+  const whyItMatters =
+    pickLocalizedText(
+      analysisState?.lightAnalysis?.whyItMatters,
+      snapshotSkipped ? snapshot?.reason : null,
+    ) ||
+    (snapshotSkipped
+      ? '基础判断认为这个项目还不够像独立产品，当前更适合先观察而不是继续重投入。'
+      : getRepositoryHomepageDecisionReason(repository, summary));
+  const nextStep =
+    pickLocalizedText(analysisState?.lightAnalysis?.nextStep) ||
+    (snapshotSkipped
+      ? '暂不投入，先放进观察池；只有当后面出现更明确用户、独立价值或收费路径时再继续补分析。'
+      : summary.action === 'BUILD'
+        ? '立即做一个最小可验证版本，再用真实用户确认范围。'
+        : summary.action === 'CLONE'
+          ? '先快速验证核心场景，再决定要不要继续抄到产品级。'
+          : '先放进观察池，除非后面出现更强信号再重新投入。');
+  const caution =
+    pickLocalizedText(
+      analysisState?.lightAnalysis?.caution,
+      projectReality?.whyNotProduct,
+      snapshotSkipped ? snapshot?.oneLinerZh : null,
+    ) || null;
+
+  if (analysisState?.lightAnalysis) {
+    return {
+      headline,
+      targetUsers,
+      useCase,
+      monetization,
+      whyItMatters,
+      nextStep,
+      caution,
+    };
+  }
 
   return {
     headline,
     targetUsers,
-    useCase:
-      (snapshotSkipped && cleanDecisionText(snapshot?.reason)) ||
-      cleanDecisionText(insight?.verdictReason) ||
-      cleanDecisionText(summary.verdictReason) ||
-      cleanDecisionText(summary.recommendedMoveLabel) ||
-      '先把这个项目压缩成一个能明确用户、场景和收费方式的最小验证版本。',
+    useCase,
     monetization,
-    whyItMatters: snapshotSkipped
-      ? cleanDecisionText(snapshot?.reason) ||
-        '基础判断认为这个项目还不够像独立产品，当前更适合先观察而不是继续重投入。'
-      : getRepositoryHomepageDecisionReason(repository, summary),
-    nextStep:
-      snapshotSkipped
-        ? '暂不投入，先放进观察池；只有当后面出现更明确用户、独立价值或收费路径时再继续补分析。'
-        : summary.action === 'BUILD'
-        ? '立即做一个最小可验证版本，再用真实用户确认范围。'
-        : summary.action === 'CLONE'
-          ? '先快速验证核心场景，再决定要不要继续抄到产品级。'
-          : '先放进观察池，除非后面出现更强信号再重新投入。',
-    caution:
-      cleanDecisionText(projectReality?.whyNotProduct) ||
-      (snapshotSkipped ? cleanDecisionText(snapshot?.oneLinerZh) : null) ||
-      null,
+    whyItMatters,
+    nextStep,
+    caution,
   };
 }
 

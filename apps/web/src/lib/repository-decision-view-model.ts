@@ -8,6 +8,7 @@ import {
   getRepositoryDeepAnalysisStatus,
   getRepositoryDisplayMonetizationLabel,
   getRepositoryDisplayTargetUsersLabel,
+  getRepositoryFallbackIdeaAnalysis,
   getRepositoryHomepageDecisionReason,
   getRepositoryHomepageHeadline,
   getRepositoryHomepageMonetizationAnswer,
@@ -367,10 +368,28 @@ function buildDisplayConfidence(
   };
 }
 
+function normalizeFallbackDisplayValue(value: string | null | undefined) {
+  const normalized = value?.trim();
+
+  return normalized ? normalized : null;
+}
+
+function appendConservativeSuffix(
+  base: string | null,
+  suffix: string,
+) {
+  if (!base) {
+    return suffix;
+  }
+
+  return /[。！？]$/.test(base) ? `${base}${suffix}` : `${base}。${suffix}`;
+}
+
 function buildDisplayReason(args: {
   displayState: RepositoryDecisionDisplayState;
   repository: RepositoryDecisionViewModelTarget;
   summary: RepositoryDecisionSummary;
+  fallbackAnalysis: ReturnType<typeof getRepositoryFallbackIdeaAnalysis>;
   fallback: boolean;
   conflict: boolean;
   hasFinalDecisionWithoutDeep: boolean;
@@ -383,6 +402,10 @@ function buildDisplayReason(args: {
     );
   }
 
+  const fallbackReason =
+    normalizeFallbackDisplayValue(args.fallbackAnalysis.whyItMatters) ??
+    normalizeFallbackDisplayValue(args.fallbackAnalysis.useCase);
+
   if (args.fallback) {
     return '当前仍是 fallback 或兜底判断，先别把它当成已经稳定的产品结论。';
   }
@@ -392,14 +415,20 @@ function buildDisplayReason(args: {
   }
 
   if (args.hasFinalDecisionWithoutDeep) {
-    return '当前只有基础判断，深分析还没补齐，先别把它当成已验证机会。';
+    return appendConservativeSuffix(
+      fallbackReason,
+      '深分析还没补齐，先别把它当成已验证机会。',
+    );
   }
 
   if (args.missingKeyAnalysis) {
-    return '关键分析还没补齐，先补分析后再决定要不要继续投入。';
+    return appendConservativeSuffix(
+      fallbackReason,
+      '关键分析还没补齐，先补分析后再决定要不要继续投入。',
+    );
   }
 
-  return '当前结论还不够稳定，先按保守动作处理。';
+  return fallbackReason ?? '当前结论还不够稳定，先按保守动作处理。';
 }
 
 function buildDisplayCaution(displayState: RepositoryDecisionDisplayState) {
@@ -423,24 +452,35 @@ function buildDisplayTargetUsers(args: {
   displayState: RepositoryDecisionDisplayState;
   repository: RepositoryDecisionViewModelTarget;
   summary: RepositoryDecisionSummary;
+  fallbackAnalysis: ReturnType<typeof getRepositoryFallbackIdeaAnalysis>;
 }) {
   return args.displayState === 'trusted'
     ? getRepositoryDisplayTargetUsersLabel(
         args.repository as RepositoryDecisionSourceTarget,
         args.summary,
       )
-    : SAFE_TARGET_USERS_LABEL;
+    : args.displayState === 'provisional'
+      ? normalizeFallbackDisplayValue(args.fallbackAnalysis.targetUsers) ??
+        SAFE_TARGET_USERS_LABEL
+      : SAFE_TARGET_USERS_LABEL;
 }
 
 function buildDisplayMonetization(args: {
   displayState: RepositoryDecisionDisplayState;
   repository: RepositoryDecisionViewModelTarget;
   summary: RepositoryDecisionSummary;
+  fallbackAnalysis: ReturnType<typeof getRepositoryFallbackIdeaAnalysis>;
 }) {
   if (args.displayState !== 'trusted') {
+    const fallbackMonetization =
+      args.displayState === 'provisional'
+        ? normalizeFallbackDisplayValue(args.fallbackAnalysis.monetization) ??
+          SAFE_MONETIZATION_LABEL
+        : SAFE_MONETIZATION_LABEL;
+
     return {
-      monetizationLabel: SAFE_MONETIZATION_LABEL,
-      homepageMonetizationLabel: SAFE_MONETIZATION_LABEL,
+      monetizationLabel: fallbackMonetization,
+      homepageMonetizationLabel: fallbackMonetization,
     };
   }
 
@@ -1165,10 +1205,12 @@ export function buildRepositoryDecisionViewModel(
     summary.moneyPriority.tier,
     summary.moneyPriority.label,
   );
+  const fallbackAnalysis = getRepositoryFallbackIdeaAnalysis(repositoryRecord, summary);
   const reason = buildDisplayReason({
     displayState,
     repository,
     summary,
+    fallbackAnalysis,
     fallback,
     conflict,
     hasFinalDecisionWithoutDeep,
@@ -1181,11 +1223,13 @@ export function buildRepositoryDecisionViewModel(
     displayState,
     repository,
     summary,
+    fallbackAnalysis,
   });
   const targetUsersLabel = buildDisplayTargetUsers({
     displayState,
     repository,
     summary,
+    fallbackAnalysis,
   });
   const worthDoingLabel = buildDisplayWorthDoing(displayState, summary);
   const cta = buildCta(displayState);

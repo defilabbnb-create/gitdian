@@ -35,6 +35,7 @@ function createService(options = {}) {
   const completenessCalls = [];
   const ideaFitCalls = [];
   const ideaExtractCalls = [];
+  const enqueueCalls = [];
   let repositoryFindUniqueCount = 0;
   let ensureMissingDeepCallCount = 0;
 
@@ -44,6 +45,9 @@ function createService(options = {}) {
         repositoryFindUniqueCount += 1;
         return createRepository(options.repositoryOverrides);
       },
+    },
+    jobLog: {
+      findFirst: async () => options.existingBackstopJob ?? null,
     },
     systemConfig: {
       findUnique: async () => null,
@@ -135,7 +139,12 @@ function createService(options = {}) {
       }),
     },
     {
-      get: () => null,
+      get: () =>
+        options.queueService ?? {
+          enqueueSingleAnalysis: async (...args) => {
+            enqueueCalls.push(args);
+          },
+        },
     },
   );
 
@@ -167,6 +176,7 @@ function createService(options = {}) {
     completenessCalls,
     ideaFitCalls,
     ideaExtractCalls,
+    enqueueCalls,
     getRepositoryFindUniqueCount: () => repositoryFindUniqueCount,
     getEnsureMissingDeepCallCount: () => ensureMissingDeepCallCount,
   };
@@ -358,4 +368,150 @@ test('batch orchestration respects concurrency caps while preserving item order'
       );
     },
   );
+});
+
+test('missing deep backstop does not re-enqueue idea extract when the gate blocks it', async () => {
+  const repository = createRepository({
+    analysis: {
+      completenessJson: { ok: true },
+      ideaFitJson: { ok: true },
+      extractedIdeaJson: null,
+    },
+    finalDecision: {
+      repoId: 'repo-1',
+    },
+    analysisState: {
+      deepReady: false,
+      analysisStatus: 'DISPLAY_READY',
+    },
+  });
+  const { service, enqueueCalls } = createService({
+    repositoryOverrides: repository,
+    stubEnsureMissingDeep: false,
+  });
+
+  service.shouldRunIdeaExtract = async () => ({
+    shouldRun: false,
+    mode: 'skip',
+    reason: 'strength_not_strong',
+    trace: ['one_liner_strength_weak'],
+    strength: 'WEAK',
+    effectiveStrength: 'WEAK',
+  });
+
+  await service.ensureMissingDeepAnalysisQueued('repo-1');
+
+  assert.equal(enqueueCalls.length, 0);
+});
+
+test('missing deep backstop still queues remaining deep steps when idea extract is gate-blocked', async () => {
+  const repository = createRepository({
+    analysis: {
+      completenessJson: null,
+      ideaFitJson: { ok: true },
+      extractedIdeaJson: null,
+    },
+    finalDecision: {
+      repoId: 'repo-1',
+    },
+    analysisState: {
+      deepReady: false,
+      analysisStatus: 'DISPLAY_READY',
+    },
+  });
+  const { service, enqueueCalls } = createService({
+    repositoryOverrides: repository,
+    stubEnsureMissingDeep: false,
+  });
+
+  service.shouldRunIdeaExtract = async () => ({
+    shouldRun: false,
+    mode: 'skip',
+    reason: 'strength_not_strong',
+    trace: ['one_liner_strength_weak'],
+    strength: 'WEAK',
+    effectiveStrength: 'WEAK',
+  });
+
+  await service.ensureMissingDeepAnalysisQueued('repo-1');
+
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0][0], 'repo-1');
+  assert.deepEqual(enqueueCalls[0][1], {
+    runFastFilter: false,
+    runCompleteness: true,
+    runIdeaFit: false,
+    runIdeaExtract: false,
+    forceRerun: false,
+  });
+});
+
+test('missing deep backstop force-reruns legacy score-only deep steps so json can be backfilled', async () => {
+  const repository = createRepository({
+    completenessScore: 78,
+    ideaFitScore: 82,
+    analysis: {
+      completenessJson: null,
+      ideaFitJson: null,
+      extractedIdeaJson: { ok: true },
+    },
+    finalDecision: {
+      repoId: 'repo-1',
+    },
+    analysisState: {
+      deepReady: false,
+      analysisStatus: 'DISPLAY_READY',
+    },
+  });
+  const { service, enqueueCalls } = createService({
+    repositoryOverrides: repository,
+    stubEnsureMissingDeep: false,
+  });
+
+  await service.ensureMissingDeepAnalysisQueued('repo-1');
+
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0][0], 'repo-1');
+  assert.deepEqual(enqueueCalls[0][1], {
+    runFastFilter: false,
+    runCompleteness: true,
+    runIdeaFit: true,
+    runIdeaExtract: false,
+    forceRerun: true,
+  });
+  assert.deepEqual(enqueueCalls[0][3], {
+    metadata: {
+      missingDeepAfterFinalDecision: true,
+      recoveryMode: 'forced_missing_deep',
+      forceBackfillMissingJson: true,
+    },
+  });
+});
+
+test('missing deep backstop does not enqueue duplicate backstop work for the same repository', async () => {
+  const repository = createRepository({
+    analysis: {
+      completenessJson: null,
+      ideaFitJson: null,
+      extractedIdeaJson: null,
+    },
+    finalDecision: {
+      repoId: 'repo-1',
+    },
+    analysisState: {
+      deepReady: false,
+      analysisStatus: 'DISPLAY_READY',
+    },
+  });
+  const { service, enqueueCalls } = createService({
+    repositoryOverrides: repository,
+    existingBackstopJob: {
+      id: 'job-1',
+    },
+    stubEnsureMissingDeep: false,
+  });
+
+  await service.ensureMissingDeepAnalysisQueued('repo-1');
+
+  assert.equal(enqueueCalls.length, 0);
 });

@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { FormEvent, startTransition, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { getRepositoryViewMeta } from '@/lib/repository-view-meta';
 import {
   buildRepositoryListSearchParams,
   RepositoryListQueryState,
@@ -19,12 +20,37 @@ const PRIMARY_FILTER_KEYS = [
   'moneyPriority',
 ] as const;
 
+const COMMON_CATEGORY_SUGGESTIONS = [
+  '开发工具',
+  'AI工具',
+  '自动化工具',
+  '数据工具',
+  '浏览器扩展',
+  '效率工具',
+  '工作流工具',
+  '部署工具',
+  '可观测性',
+  '安全工具',
+  'API 平台',
+  '内容创作',
+] as const;
+
+type ActiveFilterChip = {
+  key: string;
+  label: string;
+  hidden?: boolean;
+};
+
 export function RepositoryFilters({ query }: RepositoryFiltersProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [isPending] = useTransition();
   const advancedFilterCount = countAdvancedFilters(query);
   const showAdvancedByDefault = advancedFilterCount > 0;
+  const activeFilterChips = buildActiveFilterChips(query);
+  const hiddenActiveFilterCount = activeFilterChips.filter(
+    (chip) => chip.hidden,
+  ).length;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -142,6 +168,24 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
     });
   }
 
+  function handleClearHiddenFilters() {
+    const search = buildRepositoryListSearchParams({
+      ...query,
+      page: 1,
+      view:
+        query.view === 'newRadar' || query.view === 'backfilledPromising'
+          ? 'all'
+          : query.view,
+      hasPromisingIdeaSnapshot: undefined,
+      hasManualInsight: undefined,
+      createdAfterDays: undefined,
+    });
+
+    startTransition(() => {
+      router.push(search ? `${pathname}?${search}` : pathname);
+    });
+  }
+
   return (
     <form
       onSubmit={handleSubmit}
@@ -178,6 +222,58 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
           </button>
         </div>
       </div>
+
+      {activeFilterChips.length ? (
+        <section className="mt-5 rounded-[24px] border border-slate-200 bg-white px-4 py-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-950">当前生效条件</p>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                {hiddenActiveFilterCount > 0
+                  ? `有 ${hiddenActiveFilterCount} 项条件不会在表单里直接显示，但会继续影响结果。`
+                  : '下面这些条件都会直接影响当前结果。'}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {hiddenActiveFilterCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={handleClearHiddenFilters}
+                  disabled={isPending}
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  移除隐藏条件
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={isPending}
+                className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                清空全部条件
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {activeFilterChips.map((chip) => (
+              <span
+                key={chip.key}
+                className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${
+                  chip.hidden
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+                }`}
+              >
+                {chip.hidden ? '隐藏条件 · ' : ''}
+                {chip.label}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[1.4fr_1fr_1fr_1fr]">
         <FilterField label="搜索">
@@ -393,12 +489,23 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
             </FilterField>
 
             <FilterField label="最终分类">
-              <input
-                name="finalCategory"
-                defaultValue={query.finalCategory ?? ''}
-                placeholder="开发工具 / 安全工具"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-              />
+              <>
+                <input
+                  list="repository-final-category-options"
+                  name="finalCategory"
+                  defaultValue={query.finalCategory ?? ''}
+                  placeholder="开发工具 / 安全工具"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                />
+                <datalist id="repository-final-category-options">
+                  {COMMON_CATEGORY_SUGGESTIONS.map((category) => (
+                    <option key={category} value={category} />
+                  ))}
+                </datalist>
+                <p className="text-xs leading-5 text-slate-500">
+                  支持关键词匹配。常见分类可以直接选，避免手输分类名不一致。
+                </p>
+              </>
             </FilterField>
 
             <FilterField label="判断来源">
@@ -554,4 +661,234 @@ function countAdvancedFilters(query: RepositoryListQueryState) {
 
     return count + 1;
   }, 0);
+}
+
+function buildActiveFilterChips(
+  query: RepositoryListQueryState,
+): ActiveFilterChip[] {
+  const chips: ActiveFilterChip[] = [];
+
+  if (query.view !== 'moneyFirst') {
+    chips.push({
+      key: `view:${query.view}`,
+      label: `当前视角 · ${getRepositoryViewMeta(query.view).label}`,
+    });
+  }
+
+  if (query.keyword) {
+    chips.push({
+      key: 'keyword',
+      label: `搜索 · ${query.keyword}`,
+    });
+  }
+
+  if (query.finalVerdict) {
+    chips.push({
+      key: 'finalVerdict',
+      label: `最终结论 · ${formatFinalVerdict(query.finalVerdict)}`,
+    });
+  }
+
+  if (query.recommendedAction) {
+    chips.push({
+      key: 'recommendedAction',
+      label: `建议动作 · ${formatRecommendedAction(query.recommendedAction)}`,
+    });
+  }
+
+  if (query.moneyPriority) {
+    chips.push({
+      key: 'moneyPriority',
+      label: `挣钱优先级 · ${query.moneyPriority}`,
+    });
+  }
+
+  if (query.language) {
+    chips.push({
+      key: 'language',
+      label: `语言 · ${query.language}`,
+    });
+  }
+
+  if (query.opportunityLevel) {
+    chips.push({
+      key: 'opportunityLevel',
+      label: `创业等级 · ${formatOpportunityLevel(query.opportunityLevel)}`,
+    });
+  }
+
+  if (typeof query.isFavorited === 'boolean') {
+    chips.push({
+      key: 'isFavorited',
+      label: `收藏 · ${query.isFavorited ? '仅已收藏' : '仅未收藏'}`,
+    });
+  }
+
+  if (typeof query.roughPass === 'boolean') {
+    chips.push({
+      key: 'roughPass',
+      label: `粗筛结果 · ${query.roughPass ? '仅已通过' : '仅未通过'}`,
+    });
+  }
+
+  if (typeof query.hasCompletenessAnalysis === 'boolean') {
+    chips.push({
+      key: 'hasCompletenessAnalysis',
+      label: `完整性分析 · ${query.hasCompletenessAnalysis ? '已完成' : '未完成'}`,
+    });
+  }
+
+  if (typeof query.hasIdeaFitAnalysis === 'boolean') {
+    chips.push({
+      key: 'hasIdeaFitAnalysis',
+      label: `Idea Fit · ${query.hasIdeaFitAnalysis ? '已完成' : '未完成'}`,
+    });
+  }
+
+  if (typeof query.hasExtractedIdea === 'boolean') {
+    chips.push({
+      key: 'hasExtractedIdea',
+      label: `点子提取 · ${query.hasExtractedIdea ? '已完成' : '未完成'}`,
+    });
+  }
+
+  if (typeof query.hasPromisingIdeaSnapshot === 'boolean') {
+    chips.push({
+      key: 'hasPromisingIdeaSnapshot',
+      label: `候选快照 · ${query.hasPromisingIdeaSnapshot ? '仅保留 promising' : '排除 promising'}`,
+      hidden: true,
+    });
+  }
+
+  if (typeof query.hasGoodInsight === 'boolean') {
+    chips.push({
+      key: 'hasGoodInsight',
+      label: `好点子结论 · ${query.hasGoodInsight ? '只看好点子' : '排除好点子'}`,
+    });
+  }
+
+  if (typeof query.hasManualInsight === 'boolean') {
+    chips.push({
+      key: 'hasManualInsight',
+      label: `人工判断 · ${query.hasManualInsight ? '只看我判断过的' : '排除人工判断'}`,
+      hidden: true,
+    });
+  }
+
+  if (query.finalCategory) {
+    chips.push({
+      key: 'finalCategory',
+      label: `最终分类 · ${query.finalCategory}`,
+    });
+  }
+
+  if (query.decisionSource) {
+    chips.push({
+      key: 'decisionSource',
+      label: `判断来源 · ${formatDecisionSource(query.decisionSource)}`,
+    });
+  }
+
+  if (typeof query.hasConflict === 'boolean') {
+    chips.push({
+      key: 'hasConflict',
+      label: `冲突状态 · ${query.hasConflict ? '只看有冲突' : '只看无冲突'}`,
+    });
+  }
+
+  if (typeof query.needsRecheck === 'boolean') {
+    chips.push({
+      key: 'needsRecheck',
+      label: `复查状态 · ${query.needsRecheck ? '只看待复查' : '只看已收敛'}`,
+    });
+  }
+
+  if (typeof query.hasTrainingHints === 'boolean') {
+    chips.push({
+      key: 'hasTrainingHints',
+      label: `训练提示 · ${query.hasTrainingHints ? '只看可教学样本' : '排除训练提示'}`,
+    });
+  }
+
+  if (typeof query.createdAfterDays === 'number') {
+    chips.push({
+      key: 'createdAfterDays',
+      label: `创建时间 · 最近 ${query.createdAfterDays} 天`,
+      hidden: true,
+    });
+  }
+
+  if (typeof query.minStars === 'number') {
+    chips.push({
+      key: 'minStars',
+      label: `Stars ≥ ${query.minStars}`,
+    });
+  }
+
+  if (typeof query.minFinalScore === 'number') {
+    chips.push({
+      key: 'minFinalScore',
+      label: `总分 ≥ ${query.minFinalScore}`,
+    });
+  }
+
+  return chips;
+}
+
+function formatFinalVerdict(value: NonNullable<RepositoryListQueryState['finalVerdict']>) {
+  if (value === 'GOOD') {
+    return '只看值得做';
+  }
+
+  if (value === 'OK') {
+    return '只看可继续看';
+  }
+
+  return '只看建议跳过';
+}
+
+function formatRecommendedAction(
+  value: NonNullable<RepositoryListQueryState['recommendedAction']>,
+) {
+  if (value === 'BUILD') {
+    return '只看值得做';
+  }
+
+  if (value === 'CLONE') {
+    return '只看值得借鉴';
+  }
+
+  return '只看建议跳过';
+}
+
+function formatOpportunityLevel(
+  value: NonNullable<RepositoryListQueryState['opportunityLevel']>,
+) {
+  if (value === 'HIGH') {
+    return '高潜力';
+  }
+
+  if (value === 'MEDIUM') {
+    return '中潜力';
+  }
+
+  return '低潜力';
+}
+
+function formatDecisionSource(
+  value: NonNullable<RepositoryListQueryState['decisionSource']>,
+) {
+  if (value === 'manual') {
+    return '人工';
+  }
+
+  if (value === 'claude') {
+    return '历史复核';
+  }
+
+  if (value === 'local') {
+    return '主分析';
+  }
+
+  return '兜底';
 }

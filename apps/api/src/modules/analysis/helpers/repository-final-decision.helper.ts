@@ -72,9 +72,10 @@ export function buildRepositoryDecisionDisplaySummary(input: {
   const reasonZh =
     cleanText(input.reasonZh, 320) || '还缺少足够证据，建议先结合摘要和详情再判断。';
   const targetUsersZh =
-    cleanText(input.moneyDecision.targetUsersZh, 120) || '用户还不够清楚';
+    cleanChineseText(input.moneyDecision.targetUsersZh, 120) || '用户还不够清楚';
   const monetizationSummaryZh =
-    cleanText(input.moneyDecision.monetizationSummaryZh, 160) || '收费路径还不够清楚';
+    cleanChineseText(input.moneyDecision.monetizationSummaryZh, 160) ||
+    '收费路径还不够清楚';
   const recommendedMoveZh =
     cleanText(input.moneyDecision.recommendedMoveZh, 120) ||
     (input.action === 'BUILD'
@@ -171,4 +172,29 @@ function cleanText(value: unknown, maxLength: number) {
   }
 
   return String(value).trim().replace(/\s+/g, ' ').slice(0, maxLength);
+}
+
+function cleanChineseText(value: unknown, maxLength: number) {
+  const normalized = cleanText(value, maxLength);
+  if (!normalized) {
+    return '';
+  }
+
+  return looksEnglishHeavyText(normalized) ? '' : normalized;
+}
+
+function looksEnglishHeavyText(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const asciiLetters = (normalized.match(/[A-Za-z]/g) ?? []).length;
+  const cjkChars = (normalized.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const englishTokens = normalized.match(/[A-Za-z][A-Za-z0-9-]{2,}/g) ?? [];
+
+  return (
+    asciiLetters >= 8 &&
+    (cjkChars === 0 || asciiLetters > cjkChars * 2 || englishTokens.length >= 2)
+  );
 }
