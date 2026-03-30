@@ -17,12 +17,13 @@ const DECISION_RECALC_GATE_CONFIG_KEY = 'analysis.decision_recalc_gate.latest';
 const OUTCOME_CONFIG_KEY = 'analysis.outcome.latest';
 const RUN_CONFIG_KEY = 'analysis.historical_recovery.run.latest';
 
-type CliOptions = {
+export type CliOptions = {
   json?: boolean;
   pretty?: boolean;
   noWrite?: boolean;
   outputDir?: string | null;
   limit?: number;
+  writeBaseline?: boolean;
 };
 
 function parseBoolean(value: string | undefined, fallback = true) {
@@ -41,12 +42,13 @@ function parseBoolean(value: string | undefined, fallback = true) {
   return fallback;
 }
 
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     json: false,
     pretty: true,
     noWrite: false,
     outputDir: null,
+    writeBaseline: undefined,
   };
 
   for (const rawArg of argv) {
@@ -66,6 +68,10 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (flag === 'no-write') {
       options.noWrite = parseBoolean(value, true);
+      options.writeBaseline = false;
+    }
+    if (flag === 'write') {
+      options.writeBaseline = parseBoolean(value, true);
     }
     if (flag === 'output-dir' && value) {
       options.outputDir = value;
@@ -79,6 +85,14 @@ function parseArgs(argv: string[]): CliOptions {
   }
 
   return options;
+}
+
+export function shouldWriteBaseline(options: CliOptions) {
+  if (typeof options.writeBaseline === 'boolean') {
+    return options.writeBaseline;
+  }
+
+  return false;
 }
 
 function readObject(value: unknown) {
@@ -125,7 +139,8 @@ async function main() {
       previousSnapshotMap: buildDecisionRecalcGateSnapshotMap(previousSnapshot),
     });
 
-    if (!options.noWrite) {
+    const persistBaseline = shouldWriteBaseline(options);
+    if (persistBaseline) {
       await prisma.systemConfig.upsert({
         where: { configKey: DECISION_RECALC_GATE_CONFIG_KEY },
         update: {
@@ -189,4 +204,6 @@ async function main() {
   }
 }
 
-void main();
+if (require.main === module) {
+  void main();
+}
