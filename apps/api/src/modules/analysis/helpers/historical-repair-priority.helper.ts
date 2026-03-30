@@ -459,6 +459,16 @@ function resolveHistoricalRepairAction(args: {
       args.finalDecisionButNoDeep &&
       hasDeepRepairGap,
   );
+  const detailOnlyHighValueWeakPrefersRefresh = Boolean(
+    item.historicalRepairBucket === 'high_value_weak' &&
+      item.strictVisibilityLevel === 'DETAIL_ONLY' &&
+      item.displayStatus === 'BASIC_READY' &&
+      !args.coreEvidenceGap &&
+      !args.keyEvidenceMissing &&
+      !hasDeepRepairGap &&
+      !args.finalDecisionButNoDeep &&
+      args.evidenceWeakOnly,
+  );
 
   if (item.historicalRepairBucket === 'archive_or_noise') {
     return {
@@ -542,6 +552,12 @@ function resolveHistoricalRepairAction(args: {
     if (hasDeepRepairGap || args.finalDecisionButNoDeep) {
       return {
         action: 'deep_repair',
+        conflictDrivenDecisionRecalc: false,
+      };
+    }
+    if (detailOnlyHighValueWeakPrefersRefresh) {
+      return {
+        action: 'refresh_only',
         conflictDrivenDecisionRecalc: false,
       };
     }

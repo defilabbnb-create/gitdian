@@ -299,6 +299,26 @@ test('weak-only evidence prefers evidence repair instead of deep repair', () => 
   assert.equal(item.historicalRepairAction, 'evidence_repair');
 });
 
+test('detail-only basic-ready high-value weak-only evidence prefers refresh', () => {
+  const item = priorityItem({
+    hasDetailPageExposure: true,
+    displayStatus: 'BASIC_READY',
+    moneyPriority: 'P0',
+    repositoryValueTier: 'HIGH',
+    collectionTier: 'CORE',
+    evidenceWeakCount: 2,
+    keyEvidenceWeakCount: 2,
+    evidenceWeakDimensions: ['distribution', 'market'],
+    evidenceMissingDimensions: [],
+    evidenceConflictDimensions: [],
+    qualityReasonSummary: 'detail-only high-value weak evidence should stay on refresh path first',
+  });
+
+  assert.equal(item.historicalRepairBucket, 'high_value_weak');
+  assert.equal(item.strictVisibilityLevel, 'DETAIL_ONLY');
+  assert.equal(item.historicalRepairAction, 'refresh_only');
+});
+
 test('stale-watch weak-only evidence prefers refresh over evidence repair', () => {
   const item = priorityItem({
     hasDetailPageExposure: true,
