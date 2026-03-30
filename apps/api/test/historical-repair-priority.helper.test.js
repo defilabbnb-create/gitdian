@@ -343,6 +343,57 @@ test('detail-only trusted-ready no-claude-review high-value weak state prefers r
   assert.equal(item.historicalRepairAction, 'refresh_only');
 });
 
+test('detail-only unsafe no-claude-review pure market-conflict high-value weak state prefers refresh', () => {
+  const item = priorityItem({
+    hasDetailPageExposure: true,
+    displayStatus: 'UNSAFE',
+    hasClaudeReview: false,
+    incompleteFlag: true,
+    missingReasons: ['NO_CLAUDE_REVIEW'],
+    moneyPriority: 'P0',
+    repositoryValueTier: 'HIGH',
+    collectionTier: 'CORE',
+    evidenceConflictCount: 1,
+    keyEvidenceConflictCount: 1,
+    evidenceConflictDimensions: ['market'],
+    evidenceWeakCount: 0,
+    keyEvidenceWeakCount: 0,
+    evidenceWeakDimensions: [],
+    evidenceMissingDimensions: [],
+    qualityReasonSummary: 'detail-only market conflict is pending review but should refresh first',
+  });
+
+  assert.equal(item.historicalRepairBucket, 'high_value_weak');
+  assert.equal(item.strictVisibilityLevel, 'DETAIL_ONLY');
+  assert.equal(item.historicalTrustedButWeak, true);
+  assert.equal(item.historicalRepairAction, 'refresh_only');
+});
+
+test('detail-only unsafe no-claude-review market-conflict with extra weak gaps stays on evidence repair', () => {
+  const item = priorityItem({
+    hasDetailPageExposure: true,
+    displayStatus: 'UNSAFE',
+    hasClaudeReview: false,
+    incompleteFlag: true,
+    missingReasons: ['NO_CLAUDE_REVIEW'],
+    moneyPriority: 'P0',
+    repositoryValueTier: 'HIGH',
+    collectionTier: 'CORE',
+    evidenceConflictCount: 1,
+    keyEvidenceConflictCount: 1,
+    evidenceConflictDimensions: ['market'],
+    evidenceWeakCount: 1,
+    keyEvidenceWeakCount: 1,
+    evidenceWeakDimensions: ['distribution'],
+    evidenceMissingDimensions: [],
+    qualityReasonSummary: 'market conflict plus weak evidence should keep evidence repair path',
+  });
+
+  assert.equal(item.historicalRepairBucket, 'high_value_weak');
+  assert.equal(item.strictVisibilityLevel, 'DETAIL_ONLY');
+  assert.equal(item.historicalRepairAction, 'evidence_repair');
+});
+
 test('stale-watch weak-only evidence prefers refresh over evidence repair', () => {
   const item = priorityItem({
     hasDetailPageExposure: true,

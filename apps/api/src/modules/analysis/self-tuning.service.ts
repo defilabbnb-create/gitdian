@@ -173,8 +173,22 @@ export function resolveSelfTuningPolicy(input: {
 }) {
   const basePolicy = buildSelfTuningPolicy(input.systemLoadLevel);
   const lowSnapshotPressure = input.snapshotQueueSize <= 50;
+  const highLoadDeepDrainPressure = input.deepQueueSize >= 800;
   const deepDrainPressure = input.deepQueueSize >= 2_000;
   const stableIdeaExtractTimeoutRate = input.ideaExtractTimeoutRate <= 0.05;
+
+  if (
+    input.systemLoadLevel === 'HIGH_LOAD' &&
+    lowSnapshotPressure &&
+    highLoadDeepDrainPressure &&
+    stableIdeaExtractTimeoutRate
+  ) {
+    return {
+      ...basePolicy,
+      ideaExtractMaxInflight: Math.max(basePolicy.ideaExtractMaxInflight, 3),
+      policyMode: 'high_load_deep_drain_relief' as const,
+    };
+  }
 
   if (
     input.systemLoadLevel === 'EXTREME' &&

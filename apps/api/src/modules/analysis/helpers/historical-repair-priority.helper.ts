@@ -486,6 +486,26 @@ function resolveHistoricalRepairAction(args: {
       !args.evidenceDecisionConflict &&
       item.evidenceRepairGaps.length === 0,
   );
+  const detailOnlyMarketConflictNoClaudeReviewHighValueWeakPrefersRefresh = Boolean(
+    item.historicalRepairBucket === 'high_value_weak' &&
+      item.strictVisibilityLevel === 'DETAIL_ONLY' &&
+      item.displayStatus === 'UNSAFE' &&
+      item.incompleteFlag &&
+      item.missingReasons.length === 1 &&
+      item.missingReasons[0] === 'NO_CLAUDE_REVIEW' &&
+      item.hasFinalDecision &&
+      item.hasDeep &&
+      !item.fallbackFlag &&
+      !item.conflictFlag &&
+      !args.coreEvidenceGap &&
+      !args.keyEvidenceMissing &&
+      !hasDeepRepairGap &&
+      !args.finalDecisionButNoDeep &&
+      !args.evidenceDecisionConflict &&
+      item.conflictDrivenGaps.length === 1 &&
+      item.conflictDrivenGaps[0] === 'market_conflict' &&
+      item.evidenceRepairGaps.length === 0,
+  );
 
   if (item.historicalRepairBucket === 'archive_or_noise') {
     return {
@@ -579,6 +599,12 @@ function resolveHistoricalRepairAction(args: {
       };
     }
     if (detailOnlyClaudeReviewPendingHighValueWeakPrefersRefresh) {
+      return {
+        action: 'refresh_only',
+        conflictDrivenDecisionRecalc: false,
+      };
+    }
+    if (detailOnlyMarketConflictNoClaudeReviewHighValueWeakPrefersRefresh) {
       return {
         action: 'refresh_only',
         conflictDrivenDecisionRecalc: false,

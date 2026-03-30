@@ -135,6 +135,29 @@ test('resolveSelfTuningPolicy relaxes idea extract inflight during deep-drain-on
   );
 });
 
+test('resolveSelfTuningPolicy restores normal extract inflight during stable high-load deep drain', () => {
+  assert.deepEqual(
+    resolveSelfTuningPolicy({
+      systemLoadLevel: 'HIGH_LOAD',
+      snapshotQueueSize: 0,
+      deepQueueSize: 1288,
+      ideaExtractTimeoutRate: 0.01,
+    }),
+    {
+      ideaExtractMaxInflight: 3,
+      claudeConcurrency: 3,
+      claudeAllowedPriorities: ['P0', 'P1'],
+      telegramSelectionMode: 'STRONG_PREFERRED',
+      effectiveStrengthPolicy: {
+        strong: 'normal',
+        medium: 'tightened',
+        weak: 'disabled',
+      },
+      policyMode: 'high_load_deep_drain_relief',
+    },
+  );
+});
+
 test('resolveSelfTuningPolicy keeps default extreme limits when timeouts are elevated', () => {
   assert.deepEqual(
     resolveSelfTuningPolicy({
