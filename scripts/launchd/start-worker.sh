@@ -20,4 +20,6 @@ export NODE_ENV="production"
 export ENABLE_QUEUE_WORKERS="true"
 log_runtime_summary
 
+cd "$ROOT/apps/api"
+
 exec "$NODE_BIN" "$ROOT/apps/api/dist/worker.js"

@@ -120,6 +120,70 @@ test('downgraded repositories still surface specific light-analysis users and mo
   );
 });
 
+test('degraded repositories still surface concrete module summaries and localized conflict reasons', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      ideaFitJson: {
+        coreJudgement: '这个方向已经有明确使用场景，但市场验证还不够扎实。',
+        opportunityLevel: 'MEDIUM',
+      },
+      extractedIdeaJson: {
+        extractMode: 'light',
+        ideaSummary: '一款本地优先的代码片段管理 CLI 工具',
+        targetUsers: ['独立开发者'],
+        monetization: '可以先按专业版订阅收费。',
+      },
+      completenessJson: {
+        summary: 'README 已经说清了核心流程，但工程化和测试覆盖还偏薄。',
+        completenessLevel: 'MEDIUM',
+        runability: 'MEDIUM',
+      },
+    },
+    analysisState: {
+      displayStatus: 'UNSAFE',
+      trustedDisplayReady: false,
+      highConfidenceReady: false,
+      fullyAnalyzed: false,
+      unsafe: true,
+      incompleteReason: 'NO_CLAUDE_REVIEW',
+      incompleteReasons: ['NO_CLAUDE_REVIEW'],
+      lightAnalysis: {
+        targetUsers: '独立开发者',
+        monetization: '可以先按专业版订阅收费。',
+        whyItMatters: '冲突集中在 market',
+        nextStep: '先补市场证据再决定是否继续推进。',
+        source: 'snapshot',
+      },
+    },
+  });
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'degraded');
+  assert.match(decisionView.display.reason, /市场/);
+  assert.doesNotMatch(decisionView.display.reason, /market/);
+  assert.match(
+    decisionView.analysisModules.ideaExtract.detailSummary,
+    /代码片段管理 CLI 工具/,
+  );
+  assert.match(
+    decisionView.analysisModules.ideaExtract.detailSummary,
+    /目标用户：独立开发者/,
+  );
+  assert.match(
+    decisionView.analysisModules.ideaExtract.detailSummary,
+    /收费路径：可以先按专业版订阅收费/,
+  );
+  assert.equal(
+    decisionView.analysisModules.ideaExtract.originalAnalysis,
+    '一款本地优先的代码片段管理 CLI 工具',
+  );
+  assert.match(
+    decisionView.analysisModules.completeness.detailSummary,
+    /README 已经说清了核心流程/,
+  );
+});
+
 test('downgrades conflicts to degraded observe-first action', () => {
   const repository = createRepositoryFixture({
     finalDecision: {

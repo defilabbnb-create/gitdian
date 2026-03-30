@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { FormEvent, startTransition, useTransition } from 'react';
+import { FormEvent, startTransition, useEffect, useState, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { getRepositoryViewMeta } from '@/lib/repository-view-meta';
 import {
@@ -45,12 +45,17 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [isPending] = useTransition();
+  const [categoryDraft, setCategoryDraft] = useState(query.finalCategory ?? '');
   const advancedFilterCount = countAdvancedFilters(query);
   const showAdvancedByDefault = advancedFilterCount > 0;
   const activeFilterChips = buildActiveFilterChips(query);
   const hiddenActiveFilterCount = activeFilterChips.filter(
     (chip) => chip.hidden,
   ).length;
+
+  useEffect(() => {
+    setCategoryDraft(query.finalCategory ?? '');
+  }, [query.finalCategory]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,6 +84,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
     const needsRecheckValue = String(formData.get('needsRecheck') || '');
     const hasTrainingHintsValue = String(formData.get('hasTrainingHints') || '');
     const recommendedActionValue = String(formData.get('recommendedAction') || '');
+    const keepImplicitViewFilters = shouldKeepImplicitViewFilters(query.view);
 
     const search = buildRepositoryListSearchParams({
       page: 1,
@@ -111,12 +117,14 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
         hasExtractedIdeaValue === ''
           ? undefined
           : hasExtractedIdeaValue === 'true',
-      hasPromisingIdeaSnapshot: query.hasPromisingIdeaSnapshot,
+      hasPromisingIdeaSnapshot: keepImplicitViewFilters
+        ? query.hasPromisingIdeaSnapshot
+        : undefined,
       hasGoodInsight:
         hasGoodInsightValue === ''
           ? undefined
           : hasGoodInsightValue === 'true',
-      hasManualInsight: query.hasManualInsight,
+      hasManualInsight: undefined,
       finalVerdict:
         finalVerdictValue === ''
           ? undefined
@@ -146,7 +154,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
         recommendedActionValue === ''
           ? undefined
           : (recommendedActionValue as RepositoryListQueryState['recommendedAction']),
-      createdAfterDays: query.createdAfterDays,
+      createdAfterDays: keepImplicitViewFilters ? query.createdAfterDays : undefined,
       minStars: minStars > 0 ? minStars : undefined,
       minFinalScore: minFinalScore > 0 ? minFinalScore : undefined,
       sortBy:
@@ -493,7 +501,8 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
                 <input
                   list="repository-final-category-options"
                   name="finalCategory"
-                  defaultValue={query.finalCategory ?? ''}
+                  value={categoryDraft}
+                  onChange={(event) => setCategoryDraft(event.target.value)}
                   placeholder="开发工具 / 安全工具"
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
                 />
@@ -502,8 +511,32 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
                     <option key={category} value={category} />
                   ))}
                 </datalist>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {COMMON_CATEGORY_SUGGESTIONS.map((category) => {
+                    const isActive = categoryDraft === category;
+
+                    return (
+                      <button
+                        key={category}
+                        type="button"
+                        onClick={() =>
+                          setCategoryDraft((current) =>
+                            current === category ? '' : category,
+                          )
+                        }
+                        className={`inline-flex h-9 items-center justify-center rounded-full border px-3 text-xs font-semibold transition ${
+                          isActive
+                            ? 'border-slate-950 bg-slate-950 text-white'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        {category}
+                      </button>
+                    );
+                  })}
+                </div>
                 <p className="text-xs leading-5 text-slate-500">
-                  支持关键词匹配。常见分类可以直接选，避免手输分类名不一致。
+                  支持关键词匹配。可以直接点常见分类，也可以继续手输关键词，尽量减少分类口径不一致。
                 </p>
               </>
             </FilterField>
@@ -614,6 +647,12 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
       </details>
     </form>
   );
+}
+
+function shouldKeepImplicitViewFilters(
+  view: RepositoryListQueryState['view'],
+) {
+  return view === 'newRadar' || view === 'backfilledPromising';
 }
 
 function FilterField({

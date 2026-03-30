@@ -15,8 +15,11 @@ export function RepositoryDetailConclusion({
             主判断
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            当前只保留一个结论和一个下一步动作。
+            {decisionViewModel.display.headline}
           </h2>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+            当前先把结论和下一步动作收口到一屏里，下面的模块继续展开看细节。
+          </p>
         </div>
 
         <div className="divide-y divide-slate-200 rounded-[28px] border border-slate-200 bg-slate-50">

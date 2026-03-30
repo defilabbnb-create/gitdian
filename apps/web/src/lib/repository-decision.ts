@@ -315,6 +315,26 @@ const STRONG_MONETIZATION_PATTERNS = [
   /较直接的收费可能/,
 ];
 
+const GENERIC_HOMEPAGE_REASON_PATTERNS = [
+  /^已经有人在用，可以收费[。！]?$/,
+  /^替代已有工具，有明显优势[。！]?$/,
+  /^自动化明确场景，可快速落地[。！]?$/,
+  /^先确认真实用户、场景和投入价值，再决定要不要继续推进[。！]?$/,
+  /^基础判断偏保守.*$/,
+  /^后端最终判断还在补齐.*$/,
+  /^当前先按低优先展示.*$/,
+  /^先确认谁会持续使用它，再决定要不要继续投入[。！]?$/,
+];
+
+const STRONG_FORWARD_ACTION_PATTERNS = [
+  /立即做/,
+  /可以继续投入/,
+  /值得优先验证/,
+  /值得继续推进/,
+  /验证通过（可做）/,
+  /开始验证/,
+];
+
 const ANALYSIS_TERM_LABELS: Record<string, string> = {
   technical_maturity: '技术成熟度',
   monetization: '收费',
@@ -378,6 +398,57 @@ export function getCategoryDisplay(
   };
 }
 
+function getSnapshotCategoryDisplay(
+  repository: RepositoryDecisionTarget,
+): CategoryDisplay | null {
+  const snapshotCategory = repository.analysis?.ideaSnapshotJson?.category;
+
+  if (!snapshotCategory) {
+    return null;
+  }
+
+  const display = getCategoryDisplay(snapshotCategory.main, snapshotCategory.sub);
+  return display.label === '待分类' ? null : display;
+}
+
+function resolveRepositoryCategoryDisplay(
+  repository: RepositoryDecisionTarget,
+  fallback: {
+    mainCategory?: string | null;
+    subCategory?: string | null;
+  } = {},
+): CategoryDisplay {
+  const derived = getCategoryDisplay(
+    fallback.mainCategory ??
+      repository.finalDecision?.categoryMain ??
+      repository.analysis?.insightJson?.category?.main ??
+      repository.analysis?.ideaSnapshotJson?.category?.main ??
+      repository.categoryL1 ??
+      repository.finalDecision?.category ??
+      null,
+    fallback.subCategory ??
+      repository.finalDecision?.categorySub ??
+      repository.analysis?.insightJson?.category?.sub ??
+      repository.analysis?.ideaSnapshotJson?.category?.sub ??
+      repository.categoryL2 ??
+      null,
+  );
+  const snapshotDisplay = getSnapshotCategoryDisplay(repository);
+
+  return {
+    main: derived.main ?? snapshotDisplay?.main ?? null,
+    sub: derived.sub ?? snapshotDisplay?.sub ?? null,
+    label: pickText(
+      repository.analysis?.insightJson?.categoryDisplay?.label,
+      repository.finalDecision?.decisionSummary?.categoryLabelZh,
+      repository.finalDecision?.categoryLabelZh,
+      snapshotDisplay?.label,
+      derived.label,
+      '待分类',
+    ),
+  };
+}
+
 export function getRepositoryDecisionSummary(
   repository: RepositoryDecisionTarget,
 ): RepositoryDecisionSummary {
@@ -397,10 +468,10 @@ function buildThinFallbackSummary(
   const analysisState = getRepositoryAnalysisState(repository);
   const insight = repository.analysis?.insightJson;
   const snapshot = repository.analysis?.ideaSnapshotJson;
-  const fallbackCategory = getCategoryDisplay(
-    insight?.category?.main ?? repository.categoryL1,
-    insight?.category?.sub ?? repository.categoryL2,
-  );
+  const fallbackCategory = resolveRepositoryCategoryDisplay(repository, {
+    mainCategory: insight?.category?.main ?? repository.categoryL1,
+    subCategory: insight?.category?.sub ?? repository.categoryL2,
+  });
   const fallbackAction = insight?.action ?? 'CLONE';
   const fallbackVerdict = insight?.verdict ?? 'OK';
   const moneyPriority: MoneyPriorityDisplay = {
@@ -490,13 +561,15 @@ function buildSummaryFromFinalDecision(
   const insight = repository.analysis?.insightJson;
   const snapshot = repository.analysis?.ideaSnapshotJson;
   const analysisState = getRepositoryAnalysisState(repository);
-  const fallbackCategory = getCategoryDisplay(
-    finalDecision.categoryMain ??
+  const fallbackCategory = resolveRepositoryCategoryDisplay(repository, {
+    mainCategory:
+      finalDecision.categoryMain ??
       insight?.category?.main ??
       repository.categoryL1 ??
       finalDecision.category,
-    finalDecision.categorySub ?? insight?.category?.sub ?? repository.categoryL2,
-  );
+    subCategory:
+      finalDecision.categorySub ?? insight?.category?.sub ?? repository.categoryL2,
+  });
   const resolvedFounderPriority =
     normalizeFounderPriority(finalDecision.moneyPriority) ?? 'P3';
   const moneyDecision = repository.analysis?.moneyPriority?.moneyDecision
@@ -737,7 +810,7 @@ function cleanDecisionText(value: unknown) {
   return normalized;
 }
 
-function localizeAnalysisTerms(value: string) {
+export function localizeAnalysisTerms(value: string) {
   let normalized = value;
 
   for (const [key, label] of Object.entries(ANALYSIS_TERM_LABELS)) {
@@ -781,6 +854,38 @@ function pickLocalizedText(...values: Array<unknown>) {
   return '';
 }
 
+function hasStrongForwardActionPhrase(value: string) {
+  return STRONG_FORWARD_ACTION_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function pickConservativeLocalizedText(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = cleanLocalizedDecisionText(value);
+
+    if (normalized && !hasStrongForwardActionPhrase(normalized)) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
+function isGenericHomepageReason(value: string) {
+  return GENERIC_HOMEPAGE_REASON_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function pickSpecificHomepageReason(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = cleanLocalizedDecisionText(value);
+
+    if (normalized && !isGenericHomepageReason(normalized)) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
 function inferTargetUsersFromHeadline(headline: string) {
   const matched = headline.match(/^一个帮(.+?)做.+的(?:工具|系统|平台|项目)/);
   return matched?.[1]?.trim() ?? null;
@@ -799,8 +904,11 @@ function resolveSpecificFallbackSubject(
 ) {
   const analysisState = getRepositoryAnalysisState(repository);
   const safeHeadline = [
-    summary.oneLiner,
+    repository.analysis?.ideaSnapshotJson?.oneLinerZh,
+    repository.analysis?.extractedIdeaJson?.ideaSummary,
     repository.analysis?.insightJson?.oneLinerZh,
+    summary.oneLiner,
+    repository.coreAsset?.oneLinerZh,
     repository.description,
   ]
     .map((value) => trimHeadlinePunctuation(value ?? ''))
@@ -866,8 +974,22 @@ function buildSpecificFallbackHeadline(
     summary.recommendedMoveLabel,
     repository.analysisState?.lightAnalysis?.nextStep,
   ).replace(/^[，、；：\s]+/, '');
+  const subject = resolveSpecificFallbackSubject(repository, summary);
 
   if (reason) {
+    if (/^冲突集中在/.test(reason) && subject) {
+      const normalizedReason = reason
+        .replace(/^冲突集中在\s*/, '')
+        .replace(/[。！？]+$/u, '')
+        .trim();
+
+      if (normalizedReason) {
+        return finalizeHeadline(
+          `${subject}，但${normalizedReason}这块证据还有冲突。`,
+        );
+      }
+    }
+
     if (/^(这个项目|这个方向|当前|README|仓库)/.test(reason)) {
       return finalizeHeadline(reason);
     }
@@ -883,8 +1005,6 @@ function buildSpecificFallbackHeadline(
 
     return finalizeHeadline(reasonLed);
   }
-
-  const subject = resolveSpecificFallbackSubject(repository, summary);
 
   if (!subject) {
     return null;
@@ -1012,6 +1132,14 @@ function hasUnclearMonetizationLabel(label: string) {
     label.includes('先验证价值') ||
     label.includes('商业化路径不明确')
   );
+}
+
+function isGenericSafeTargetUsersLabel(label: string) {
+  return label === '独立开发者和小团队' || label === '开发者和小团队';
+}
+
+function isGenericSafeMonetizationLabel(label: string) {
+  return label === '可以做团队订阅';
 }
 
 function hasEnglishLeak(text: string) {
@@ -1146,13 +1274,17 @@ export function getRepositoryActionBehaviorContext(
   summary: RepositoryDecisionSummary = getRepositoryDecisionSummary(repository),
 ): RepositoryActionBehaviorContext {
   const signals = resolveRepositorySignals(repository);
+  const resolvedCategory = resolveRepositoryCategoryDisplay(repository, {
+    mainCategory: summary.category.main,
+    subCategory: summary.category.sub,
+  });
   const targetUsersLabel = getRepositoryDisplayTargetUsersLabel(repository, summary);
   const useCaseLabel = buildRepositoryUseCaseLabel(repository, summary);
   const patternKeys = Array.from(
     new Set(
       [
-        buildBehaviorPatternKey('category', summary.category.label),
-        buildBehaviorPatternKey('subcategory', summary.category.sub),
+        buildBehaviorPatternKey('category', resolvedCategory.label),
+        buildBehaviorPatternKey('subcategory', resolvedCategory.sub),
         buildBehaviorPatternKey('type', signals.projectType),
         buildBehaviorPatternKey('user', targetUsersLabel),
         buildBehaviorPatternKey('usecase', useCaseLabel),
@@ -1161,7 +1293,7 @@ export function getRepositoryActionBehaviorContext(
   ).slice(0, 12);
 
   return {
-    categoryLabel: summary.category.label || null,
+    categoryLabel: resolvedCategory.label || null,
     projectType: signals.projectType,
     targetUsersLabel: targetUsersLabel || null,
     useCaseLabel: useCaseLabel || null,
@@ -1668,6 +1800,10 @@ export function getRepositoryFallbackIdeaAnalysis(
   const targetUsers =
     pickLocalizedText(
       analysisState?.lightAnalysis?.targetUsers,
+      repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+      repository.analysis?.moneyPriority?.targetUsersZh,
+      repository.finalDecision?.moneyDecision?.targetUsersZh,
+      repository.finalDecision?.decisionSummary?.targetUsersZh,
       !hasUnclearUserLabel(summary.targetUsersLabel)
         ? summary.targetUsersLabel
         : null,
@@ -1677,6 +1813,10 @@ export function getRepositoryFallbackIdeaAnalysis(
   const monetization =
     pickLocalizedText(
       analysisState?.lightAnalysis?.monetization,
+      repository.analysis?.extractedIdeaJson?.monetization,
+      repository.analysis?.moneyPriority?.monetizationSummaryZh,
+      repository.finalDecision?.moneyDecision?.monetizationSummaryZh,
+      repository.finalDecision?.decisionSummary?.monetizationSummaryZh,
       !hasUnclearMonetizationLabel(summary.monetizationLabel)
         ? summary.monetizationLabel
         : null,
@@ -1687,6 +1827,9 @@ export function getRepositoryFallbackIdeaAnalysis(
   const useCase =
     pickLocalizedText(
       analysisState?.lightAnalysis?.whyItMatters,
+      pickConservativeLocalizedText(repository.analysis?.ideaFitJson?.coreJudgement),
+      repository.analysis?.extractedIdeaJson?.ideaSummary,
+      pickConservativeLocalizedText(repository.analysis?.completenessJson?.summary),
       analysisState?.lightAnalysis?.nextStep,
       snapshotSkipped ? snapshot?.reason : null,
       insight?.verdictReason,
@@ -1696,6 +1839,9 @@ export function getRepositoryFallbackIdeaAnalysis(
   const whyItMatters =
     pickLocalizedText(
       analysisState?.lightAnalysis?.whyItMatters,
+      pickConservativeLocalizedText(repository.analysis?.ideaFitJson?.coreJudgement),
+      pickConservativeLocalizedText(repository.analysis?.completenessJson?.summary),
+      repository.analysis?.extractedIdeaJson?.ideaSummary,
       snapshotSkipped ? snapshot?.reason : null,
     ) ||
     (snapshotSkipped
@@ -1816,10 +1962,17 @@ export function getRepositoryDisplayMonetizationLabel(
   const lightAnalysisMonetization = pickLocalizedText(
     repository.analysisState?.lightAnalysis?.monetization,
   );
+  const extractedIdeaMonetization = pickLocalizedText(
+    repository.analysis?.extractedIdeaJson?.monetization,
+    repository.analysis?.moneyPriority?.monetizationSummaryZh,
+    repository.finalDecision?.moneyDecision?.monetizationSummaryZh,
+    repository.finalDecision?.decisionSummary?.monetizationSummaryZh,
+  );
 
   if (
       !raw ||
       hasUnclearMonetizationLabel(raw) ||
+      (extractedIdeaMonetization && isGenericSafeMonetizationLabel(raw)) ||
       !signals.hasRealUser ||
       !signals.hasClearUseCase ||
       !signals.isDirectlyMonetizable ||
@@ -1841,6 +1994,13 @@ export function getRepositoryDisplayMonetizationLabel(
       return lightAnalysisMonetization;
     }
 
+    if (
+      extractedIdeaMonetization &&
+      !hasUnclearMonetizationLabel(extractedIdeaMonetization)
+    ) {
+      return extractedIdeaMonetization;
+    }
+
     return signals.hasRealUser && signals.hasClearUseCase
       ? '更适合先验证价值，再判断是否具备收费空间。'
       : '收费路径还不够清楚，建议先确认真实用户和场景。';
@@ -1859,12 +2019,19 @@ export function getRepositoryDisplayTargetUsersLabel(
   const lightAnalysisTargetUsers = pickLocalizedText(
     repository.analysisState?.lightAnalysis?.targetUsers,
   );
+  const extractedIdeaTargetUsers = pickLocalizedText(
+    repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+    repository.analysis?.moneyPriority?.targetUsersZh,
+    repository.finalDecision?.moneyDecision?.targetUsersZh,
+    repository.finalDecision?.decisionSummary?.targetUsersZh,
+  );
 
   if (
     !raw ||
     !signals.hasRealUser ||
     !signals.hasClearUseCase ||
     hasUnclearUserLabel(raw) ||
+    (extractedIdeaTargetUsers && isGenericSafeTargetUsersLabel(raw)) ||
     validation.riskFlags.includes('user_conflict') ||
     validation.riskFlags.includes('use_case_conflict') ||
     validation.riskFlags.includes('fallback_overclaim') ||
@@ -1872,6 +2039,10 @@ export function getRepositoryDisplayTargetUsersLabel(
   ) {
     if (lightAnalysisTargetUsers && !hasUnclearUserLabel(lightAnalysisTargetUsers)) {
       return lightAnalysisTargetUsers;
+    }
+
+    if (extractedIdeaTargetUsers && !hasUnclearUserLabel(extractedIdeaTargetUsers)) {
+      return extractedIdeaTargetUsers;
     }
 
     return shouldDegradeHomepageHeadline(repository, summary)
@@ -1889,13 +2060,34 @@ export function getRepositoryHomepageDecisionReason(
   const signals = repository.analysis?.moneyPriority?.signals;
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const snapshot = repository.analysis?.ideaSnapshotJson;
-  const fallbackReason = pickLocalizedText(
+  const specificReason = pickSpecificHomepageReason(
+    repository.finalDecision?.decisionSummary?.reasonZh,
+    repository.finalDecision?.reasonZh,
+    repository.finalDecision?.moneyDecision?.reasonZh,
     repository.analysisState?.lightAnalysis?.whyItMatters,
-    repository.analysisState?.lightAnalysis?.nextStep,
-    cleanDecisionText(snapshot?.reason),
+    repository.analysis?.insightJson?.verdictReason,
     summary.moneyPriority.reason,
     summary.verdictReason,
+    cleanDecisionText(snapshot?.reason),
+    pickConservativeLocalizedText(
+      repository.analysis?.ideaFitJson?.coreJudgement,
+      repository.analysis?.completenessJson?.summary,
+    ),
   );
+  const fallbackReason =
+    specificReason ||
+    pickLocalizedText(
+      repository.analysisState?.lightAnalysis?.whyItMatters,
+      pickConservativeLocalizedText(
+        repository.analysis?.ideaFitJson?.coreJudgement,
+        repository.analysis?.completenessJson?.summary,
+      ),
+      repository.analysis?.extractedIdeaJson?.ideaSummary,
+      repository.analysisState?.lightAnalysis?.nextStep,
+      cleanDecisionText(snapshot?.reason),
+      summary.moneyPriority.reason,
+      summary.verdictReason,
+    );
   const lowerReason = summary.moneyPriority.reason.toLowerCase();
   const hasDirectMonetization =
     Boolean(signals?.isDirectlyMonetizable) ||
@@ -1922,6 +2114,10 @@ export function getRepositoryHomepageDecisionReason(
     hasWeakUseCaseSignal
   ) {
     return fallbackReason || '先确认真实用户、场景和投入价值，再决定要不要继续推进。';
+  }
+
+  if (specificReason) {
+    return specificReason;
   }
 
   if (

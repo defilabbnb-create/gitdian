@@ -19,6 +19,28 @@ export type RepositoryDecisionDisplaySummary = {
   sourceLabelZh: string;
 };
 
+export function shouldUseClaudeReviewForFinalDecision(input: {
+  claudeReview?: {
+    generatedBy?: unknown;
+    needsClaudeReview?: unknown;
+  } | null;
+  insight?: Record<string, unknown> | null;
+}) {
+  if (!input.claudeReview) {
+    return false;
+  }
+
+  const generatedBy = cleanText(input.claudeReview.generatedBy, 40);
+  const needsClaudeReview = input.claudeReview.needsClaudeReview === true;
+  const hasInsight = Boolean(input.insight);
+
+  if (hasInsight && (generatedBy === 'local_fallback' || needsClaudeReview)) {
+    return false;
+  }
+
+  return true;
+}
+
 export function resolveFinalDecisionSource(input: {
   manualOverride?: {
     verdict?: unknown;
@@ -38,14 +60,19 @@ export function resolveFinalDecisionSource(input: {
     return 'manual';
   }
 
-  if (input.claudeReview) {
-    return cleanText(input.claudeReview.generatedBy, 40) === 'local_fallback'
+  if (shouldUseClaudeReviewForFinalDecision(input)) {
+    const generatedBy = cleanText(input.claudeReview?.generatedBy, 40);
+    return generatedBy === 'local_fallback'
       ? 'fallback'
       : 'claude';
   }
 
   if (input.insight) {
     return 'local';
+  }
+
+  if (input.claudeReview) {
+    return 'fallback';
   }
 
   return 'fallback';

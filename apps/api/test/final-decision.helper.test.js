@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildRepositoryDecisionDisplaySummary,
   resolveFinalDecisionSource,
+  shouldUseClaudeReviewForFinalDecision,
 } = require('../dist/modules/analysis/helpers/repository-final-decision.helper');
 
 test('manual override keeps highest source priority', () => {
@@ -20,10 +21,30 @@ test('local fallback review is identified as fallback source', () => {
   const source = resolveFinalDecisionSource({
     manualOverride: null,
     claudeReview: { generatedBy: 'local_fallback' },
-    insight: { verdict: 'GOOD' },
+    insight: null,
   });
 
   assert.equal(source, 'fallback');
+});
+
+test('local insight outranks local fallback review for final decision source', () => {
+  const source = resolveFinalDecisionSource({
+    manualOverride: null,
+    claudeReview: { generatedBy: 'local_fallback', needsClaudeReview: true },
+    insight: { verdict: 'GOOD' },
+  });
+
+  assert.equal(source, 'local');
+});
+
+test('final decision helper ignores local fallback review when local insight exists', () => {
+  assert.equal(
+    shouldUseClaudeReviewForFinalDecision({
+      claudeReview: { generatedBy: 'local_fallback', needsClaudeReview: true },
+      insight: { verdict: 'GOOD' },
+    }),
+    false,
+  );
 });
 
 test('display summary stays in human Chinese decision language', () => {

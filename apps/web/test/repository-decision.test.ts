@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   getRepositoryDecisionHeadline,
   getRepositoryDecisionSummary,
+  getRepositoryActionBehaviorContext,
   getRepositoryDisplayMonetizationLabel,
   getRepositoryDisplayTargetUsersLabel,
   getRepositoryFallbackIdeaAnalysis,
@@ -66,6 +67,50 @@ test('force-degraded technical headline reuses specific risk reason instead of g
   assert.match(headline, /产品边界和付费逻辑还不够清楚/);
 });
 
+test('force-degraded headline prefers concrete snapshot subject and localizes conflict dimensions', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      ideaSnapshotJson: {
+        oneLinerZh: '一款本地优先的代码片段管理 CLI 工具',
+      },
+      insightJson: {
+        oneLinerZh: '一个帮开发者记录 token 与成本明细的 CLI 工具',
+        verdictReason: '冲突集中在 market',
+      },
+    },
+    analysisState: {
+      lightAnalysis: {
+        targetUsers: '开发者',
+        monetization: '适合先按专业版订阅收费。',
+        whyItMatters: '冲突集中在 market',
+        nextStep: '先补市场证据。',
+        source: 'snapshot',
+      },
+      unsafe: true,
+      displayStatus: 'UNSAFE',
+      incompleteReason: 'NO_CLAUDE_REVIEW',
+      incompleteReasons: ['NO_CLAUDE_REVIEW'],
+    },
+    finalDecision: {
+      action: 'IGNORE',
+      moneyPriority: 'P3',
+      decisionSummary: {
+        headlineZh: '一个帮开发者记录 token 与成本明细的 CLI 工具',
+      },
+    },
+  });
+
+  const summary = getRepositoryDecisionSummary(repository);
+  const headline = getRepositoryDecisionHeadline(repository, summary, {
+    forceDegrade: true,
+  });
+
+  assert.match(headline, /代码片段管理 CLI 工具/);
+  assert.match(headline, /市场/);
+  assert.doesNotMatch(headline, /market/);
+  assert.doesNotMatch(headline, /token 与成本明细/);
+});
+
 test('fallback idea analysis drops English-heavy light-analysis fields and falls back to Chinese-safe copy', () => {
   const repository = createRepositoryFixture({
     analysisState: {
@@ -119,6 +164,63 @@ test('thin fallback summary reuses light analysis when final decision is missing
   assert.equal(summary.targetUsersLabel, '跨境卖家和客服团队');
   assert.equal(summary.monetizationLabel, '适合先按席位订阅和自动化处理量收费。');
   assert.match(summary.verdictReason, /减少重复客服处理成本|自动化工单流程/);
+});
+
+test('fallback idea analysis reuses extracted idea and deep modules when light analysis is missing', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      ideaFitJson: {
+        coreJudgement: '客服协作场景已经明确，但还缺最后一轮付费验证。',
+      },
+      extractedIdeaJson: {
+        ideaSummary: '把客服工单、自动回复和知识库集中到一个工作台里。',
+        targetUsers: ['客服主管'],
+        monetization: '可以先按团队席位订阅收费。',
+      },
+      completenessJson: {
+        summary: 'README 已经说明核心流程，当前主要缺真实团队的落地反馈。',
+      },
+    },
+    analysisState: {
+      lightAnalysis: null,
+    },
+    finalDecision: null,
+  });
+
+  const fallback = getRepositoryFallbackIdeaAnalysis(repository);
+
+  assert.equal(fallback.targetUsers, '客服主管');
+  assert.equal(fallback.monetization, '可以先按团队席位订阅收费。');
+  assert.match(fallback.useCase, /客服协作场景已经明确|工作台/);
+  assert.match(fallback.whyItMatters, /客服协作场景已经明确|README 已经说明核心流程/);
+});
+
+test('trusted display helpers fall back to extracted idea users and monetization when final decision copy is weak', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      extractedIdeaJson: {
+        targetUsers: ['独立开发者'],
+        monetization: '可以先按专业版订阅收费。',
+      },
+    },
+    finalDecision: {
+      moneyDecision: {
+        targetUsersZh: '',
+        monetizationSummaryZh: '',
+      },
+      decisionSummary: {
+        targetUsersZh: '',
+        monetizationSummaryZh: '',
+      },
+    },
+  });
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(getRepositoryDisplayTargetUsersLabel(repository, summary), '独立开发者');
+  assert.equal(
+    getRepositoryDisplayMonetizationLabel(repository, summary),
+    '可以先按专业版订阅收费。',
+  );
 });
 
 test('final-decision summary falls back to light-analysis text and inferred category labels', () => {
@@ -178,8 +280,71 @@ test('final-decision summary falls back to light-analysis text and inferred cate
   );
   assert.match(
     getRepositoryHomepageDecisionReason(repository, summary),
-    /可以收费|收费验证/,
+    /付费路径|收费验证|可以收费/,
   );
+});
+
+test('homepage decision reason prefers concrete trusted reason over generic revenue slogan', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      insightJson: {
+        verdictReason:
+          '客服团队每天都在重复分发和回复工单，适合先做一个最小可收费版本验证。',
+      },
+      moneyPriority: {
+        reasonZh:
+          '客服团队每天都在重复分发和回复工单，适合先做一个最小可收费版本验证。',
+      },
+    },
+    finalDecision: {
+      reasonZh:
+        '客服团队每天都在重复分发和回复工单，适合先做一个最小可收费版本验证。',
+      decisionSummary: {
+        reasonZh:
+          '客服团队每天都在重复分发和回复工单，适合先做一个最小可收费版本验证。',
+      },
+    },
+  });
+
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(
+    getRepositoryHomepageDecisionReason(repository, summary),
+    '客服团队每天都在重复分发和回复工单，适合先做一个最小可收费版本验证。',
+  );
+});
+
+test('summary and behavior context prefer localized category display labels', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      insightJson: {
+        category: {
+          main: 'other',
+          sub: 'other',
+        },
+        categoryDisplay: {
+          main: '工具类',
+          sub: '自动化工具',
+          label: '工具类 / 自动化工具',
+        },
+      },
+    },
+    finalDecision: {
+      categoryLabelZh: '',
+      categoryMain: null,
+      categorySub: null,
+      decisionSummary: {
+        categoryLabelZh: '',
+      },
+    },
+  });
+
+  const summary = getRepositoryDecisionSummary(repository);
+  const behaviorContext = getRepositoryActionBehaviorContext(repository, summary);
+
+  assert.equal(summary.categoryLabel, '工具类 / 自动化工具');
+  assert.equal(summary.category.label, '工具类 / 自动化工具');
+  assert.equal(behaviorContext.categoryLabel, '工具类 / 自动化工具');
 });
 
 test('thin fallback summary reuses light-analysis copy when final decision is missing', () => {

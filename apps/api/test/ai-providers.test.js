@@ -148,6 +148,49 @@ test('openai provider rotates across configured ananapi models on retryable fail
   global.fetch = originalFetch;
 });
 
+test('openai provider boots from candidate list when OPENAI_MODEL is unset', async () => {
+  const originalFetch = global.fetch;
+  const requestedModels = [];
+
+  await withEnv(
+    {
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_MODEL: null,
+      OPENAI_MODEL_CANDIDATES: 'gpt-5.4,gpt-5.2,gpt-5.1',
+      OPENAI_BASE_URL: 'https://www.ananapi.com/v1',
+      OPENAI_RETRY_MAX: '0',
+      OPENAI_MAX_CONCURRENCY: '2',
+    },
+    async () => {
+      global.fetch = async (_url, init) => {
+        const payload = JSON.parse(String(init?.body ?? '{}'));
+        requestedModels.push(payload.model);
+
+        return createJsonResponse({
+          choices: [
+            {
+              message: {
+                content: '{"ok":true}',
+              },
+            },
+          ],
+        });
+      };
+
+      const provider = new OpenAiProvider();
+      const result = await provider.generateJson({
+        taskType: 'basic_analysis',
+        prompt: 'Return {"ok":true}',
+      });
+
+      assert.deepEqual(requestedModels, ['gpt-5.4']);
+      assert.deepEqual(result.data, { ok: true });
+    },
+  );
+
+  global.fetch = originalFetch;
+});
+
 test('openai provider limits in-process request concurrency', async () => {
   const originalFetch = global.fetch;
   let concurrent = 0;

@@ -143,12 +143,13 @@ test('provisional detail page does not show competing primary CTAs', () => {
   assert.doesNotMatch(html, /开始验证/);
 });
 
-test('non-deep detail page suppresses strong monetization copy', () => {
+test('non-deep detail page keeps concrete monetization clue with caution copy', () => {
   const repository = createProvisionalRepository();
 
   const html = renderDetailPrimaryFlow(repository);
 
-  assert.doesNotMatch(html, /可以做团队订阅/);
+  assert.match(html, /可以做团队订阅/);
+  assert.match(html, /待验证线索/);
 });
 
 test('deep-complete degraded page does not fall back to analyze CTA', () => {

@@ -14,6 +14,7 @@ import {
   getRepositoryHomepageMonetizationAnswer,
   getRepositoryIdeaExtractStatus,
   isRepositoryDecisionLowConfidence,
+  localizeAnalysisTerms,
   type RepositoryDecisionSummary,
 } from '@/lib/repository-decision';
 import {
@@ -369,7 +370,13 @@ function buildDisplayConfidence(
 }
 
 function normalizeFallbackDisplayValue(value: string | null | undefined) {
-  const normalized = value?.trim();
+  const normalized = value ? localizeAnalysisTerms(value).trim() : '';
+  const latinCharCount = (normalized.match(/[A-Za-z]/g) ?? []).length;
+  const chineseCharCount = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
+
+  if (latinCharCount >= 8 && chineseCharCount * 4 < latinCharCount) {
+    return null;
+  }
 
   return normalized ? normalized : null;
 }
@@ -709,26 +716,36 @@ function getHeldBackModuleSummary(args: {
   return '当前先按保守口径展示，不把这一层结果直接升级成行动结论。';
 }
 
-function hasChineseText(value: string | null | undefined) {
-  if (!value) {
-    return false;
-  }
-
-  return /[\u3400-\u9fff]/.test(value);
+function normalizeOriginalAnalysis(value: string | null | undefined) {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
 }
 
-function normalizeOriginalAnalysis(value: string | null | undefined) {
-  if (!value) {
-    return null;
+function buildHeldBackSummary(
+  rawBase: string | null,
+  args: {
+    displayState: RepositoryDecisionDisplayState;
+    fallback: boolean;
+    conflict: boolean;
+    missingKeyAnalysis: boolean;
+  },
+) {
+  const base =
+    rawBase &&
+    /(立即做|可以继续投入|值得优先验证|值得继续推进|验证通过（可做）|开始验证)/.test(
+      rawBase,
+    )
+      ? null
+      : rawBase;
+  const heldBackSummary =
+    getHeldBackModuleSummary(args) ??
+    '当前先按保守口径展示，不把这一层结果直接升级成行动结论。';
+
+  if (!base) {
+    return heldBackSummary;
   }
 
-  const normalized = value.trim();
-
-  if (!normalized || hasChineseText(normalized)) {
-    return null;
-  }
-
-  return normalized;
+  return appendConservativeSuffix(base, heldBackSummary);
 }
 
 function buildIdeaFitDetailSummary(args: {
@@ -744,9 +761,12 @@ function buildIdeaFitDetailSummary(args: {
   missingKeyAnalysis: boolean;
 }): string {
   if (args.displayState !== 'trusted') {
-    return (
-      getHeldBackModuleSummary(args) ??
-      '当前先按保守口径展示，不把这一层结果直接升级成行动结论。'
+    return buildHeldBackSummary(
+      normalizeFallbackDisplayValue(args.ideaFit?.coreJudgement) ??
+        (args.ideaFit?.opportunityLevel
+          ? `当前机会层级 ${args.ideaFit.opportunityLevel}`
+          : null),
+      args,
     );
   }
 
@@ -774,6 +794,7 @@ function buildIdeaExtractDetailSummary(args: {
     ideaSummary?: string | null;
     extractMode?: string | null;
     targetUsers?: string[] | null;
+    monetization?: string | null;
   } | null;
   displayState: RepositoryDecisionDisplayState;
   fallback: boolean;
@@ -782,10 +803,21 @@ function buildIdeaExtractDetailSummary(args: {
   helperText: string;
 }): string {
   if (args.displayState !== 'trusted') {
-    return (
-      getHeldBackModuleSummary(args) ??
-      '当前先按保守口径展示，不把这一层结果直接升级成行动结论。'
+    const targetUser = normalizeFallbackDisplayValue(
+      args.extractedIdea?.targetUsers?.find(Boolean),
     );
+    const monetization = normalizeFallbackDisplayValue(
+      args.extractedIdea?.monetization,
+    );
+    const summary = [
+      normalizeFallbackDisplayValue(args.extractedIdea?.ideaSummary),
+      targetUser ? `目标用户：${targetUser}` : null,
+      monetization ? `收费路径：${monetization}` : null,
+    ]
+      .filter(Boolean)
+      .join('；');
+
+    return buildHeldBackSummary(summary || null, args);
   }
 
   if (!args.extractedIdea) {
@@ -793,10 +825,19 @@ function buildIdeaExtractDetailSummary(args: {
   }
 
   const targetUser = args.extractedIdea.targetUsers?.find(Boolean);
+  const monetization = normalizeFallbackDisplayValue(args.extractedIdea.monetization);
   const extractMode = args.extractedIdea.extractMode ?? '待补齐';
+
+  if (targetUser && monetization) {
+    return `这一层已经补齐一句话点子、目标用户和收费路径，当前聚焦的用户是“${targetUser}”，收费路径是“${monetization}”。`;
+  }
 
   if (targetUser) {
     return `这一层已经补齐一句话点子和目标用户，当前聚焦的用户是“${targetUser}”。`;
+  }
+
+  if (monetization) {
+    return `这一层已经补齐点子提取结果和收费路径，当前收费判断是“${monetization}”。`;
   }
 
   return `这一层已经补齐点子提取结果，当前提取模式为 ${extractMode}。`;
@@ -815,9 +856,12 @@ function buildCompletenessDetailSummary(args: {
   missingKeyAnalysis: boolean;
 }): string {
   if (args.displayState !== 'trusted') {
-    return (
-      getHeldBackModuleSummary(args) ??
-      '当前先按保守口径展示，不把这一层结果直接升级成行动结论。'
+    return buildHeldBackSummary(
+      normalizeFallbackDisplayValue(args.completeness?.summary) ??
+        ((args.completeness?.completenessLevel ?? args.repositoryLevel)
+          ? `当前完整性等级 ${args.completeness?.completenessLevel ?? args.repositoryLevel ?? '待补齐'}`
+          : null),
+      args,
     );
   }
 
@@ -880,6 +924,13 @@ function buildIdeaFitModule(args: {
       {
         label: '机会层级',
         value: ideaFit?.opportunityLevel ?? '待补齐',
+      },
+      {
+        label: '核心判断',
+        value:
+          args.displayState === 'trusted'
+            ? normalizeFallbackDisplayValue(ideaFit?.coreJudgement) ?? statusLabel
+            : '当前按保守口径展示',
       },
       {
         label: '证据状态',
@@ -953,8 +1004,15 @@ function buildIdeaExtractModule(args: {
         value: extractedIdea?.extractMode ?? ideaExtractStatus.mode ?? '待补齐',
       },
       {
-        label: '证据状态',
-        value: statusLabel,
+        label: '目标用户',
+        value:
+          normalizeFallbackDisplayValue(extractedIdea?.targetUsers?.find(Boolean)) ??
+          statusLabel,
+      },
+      {
+        label: '收费路径',
+        value:
+          normalizeFallbackDisplayValue(extractedIdea?.monetization) ?? statusLabel,
       },
     ],
     runner: {
@@ -1018,6 +1076,10 @@ function buildCompletenessModule(args: {
           completeness?.completenessLevel ??
           args.repository.completenessLevel ??
           '待补齐',
+      },
+      {
+        label: '落地成本',
+        value: normalizeFallbackDisplayValue(completeness?.runability) ?? statusLabel,
       },
       {
         label: '证据状态',

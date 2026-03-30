@@ -15,6 +15,20 @@ export function RepositoryDetailHeader({
   repository,
   decisionViewModel,
 }: RepositoryDetailHeaderProps) {
+  const categorySummary =
+    decisionViewModel.behaviorContext.categoryLabel ??
+    repository.analysis?.insightJson?.categoryDisplay?.label ??
+    repository.finalDecision?.decisionSummary?.categoryLabelZh ??
+    repository.finalDecision?.categoryLabelZh ??
+    '待分类';
+  const monetizationSummary =
+    decisionViewModel.displayState === 'trusted'
+      ? decisionViewModel.display.monetizationLabel
+      : softenHeldBackNarrative(
+          decisionViewModel.display.monetizationLabel,
+          '收费路径还在校准，先补关键分析后再判断是否真的能收钱。',
+        );
+
   return (
     <section className="overflow-hidden rounded-[36px] border border-slate-200 bg-[linear-gradient(140deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.97)_55%,_rgba(30,64,175,0.86)_100%)] px-8 py-8 text-white shadow-xl shadow-slate-900/10">
       <div className="space-y-6">
@@ -25,8 +39,11 @@ export function RepositoryDetailHeader({
           <h1 className="text-4xl font-semibold tracking-tight text-white">
             {repository.name}
           </h1>
+          <p className="max-w-4xl text-lg leading-8 text-slate-100">
+            {decisionViewModel.display.headline}
+          </p>
           <p className="text-sm text-slate-300">
-            详情页只保留一个主判断、一个主动作，其他证据按需展开。
+            优先把谁会用、为什么值得看、怎么收费和下一步动作放到台面上，避免详情页只剩一堆保守提示。
           </p>
         </div>
 
@@ -58,6 +75,25 @@ export function RepositoryDetailHeader({
             }
           />
         </div>
+
+        <div className="grid gap-3 xl:grid-cols-4">
+          <HeroNarrative
+            label="谁会用"
+            value={decisionViewModel.display.targetUsersLabel}
+          />
+          <HeroNarrative
+            label="属于什么"
+            value={categorySummary}
+          />
+          <HeroNarrative
+            label="怎么收费"
+            value={monetizationSummary}
+          />
+          <HeroNarrative
+            label="下一步"
+            value={decisionViewModel.detail.primaryActionDescription}
+          />
+        </div>
       </div>
     </section>
   );
@@ -80,4 +116,39 @@ function HeroMetric({
       <p className="mt-3 text-lg font-semibold tracking-tight">{value}</p>
     </div>
   );
+}
+
+function HeroNarrative({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-[24px] border border-white/10 bg-white/8 px-5 py-4">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+        {label}
+      </p>
+      <p className="mt-3 text-sm leading-7 text-slate-100">{value}</p>
+    </div>
+  );
+}
+
+function softenHeldBackNarrative(value: string, fallback: string) {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (
+    /收费路径还在校准|收费路径先按未确认处理|补关键分析后再判断|待验证线索/.test(
+      normalized,
+    )
+  ) {
+    return normalized;
+  }
+
+  return `${normalized} 当前先按待验证线索看，不直接当作已验证收入。`;
 }

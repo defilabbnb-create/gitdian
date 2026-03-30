@@ -307,6 +307,7 @@ export class SettingsService {
 
   private applyRuntimeAiDefaults(settings: SettingsPayload): SettingsPayload {
     const normalized = structuredClone(settings);
+    const envOpenAiModel = this.readEnvString('OPENAI_MODEL');
     const omlxDeepModel =
       normalized.ai.models.omlxDeep ??
       process.env.OMLX_DEEP_MODEL ??
@@ -320,7 +321,10 @@ export class SettingsService {
       omlxModel ??
       null;
     const openAiModel =
-      normalized.ai.models.openai ?? process.env.OPENAI_MODEL ?? null;
+      normalized.ai.models.openai ??
+      envOpenAiModel ??
+      this.readFirstCsvEnvValue('OPENAI_MODEL_CANDIDATES') ??
+      null;
     const hasOpenAiConfigured = Boolean(process.env.OPENAI_API_KEY && openAiModel);
 
     normalized.ai.models.omlx = omlxModel;
@@ -509,9 +513,26 @@ export class SettingsService {
         process.env.OMLX_SNAPSHOT_MODEL || process.env.OMLX_LIGHT_MODEL || null,
       'ai.models.omlxDeep':
         process.env.OMLX_DEEP_MODEL || process.env.OMLX_MODEL || null,
-      'ai.models.openai': process.env.OPENAI_MODEL || null,
+      'ai.models.openai':
+        this.readEnvString('OPENAI_MODEL') ??
+        this.readFirstCsvEnvValue('OPENAI_MODEL_CANDIDATES') ??
+        null,
       'ai.timeoutMs': 30000,
     };
+  }
+
+  private readEnvString(envName: string) {
+    const value = process.env[envName]?.trim();
+    return value ? value : null;
+  }
+
+  private readFirstCsvEnvValue(envName: string) {
+    const values = (process.env[envName] ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    return values[0] ?? null;
   }
 
   private toGitHubSort(value: unknown, fallback: GitHubSearchSort) {

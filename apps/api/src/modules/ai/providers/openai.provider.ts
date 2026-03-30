@@ -30,7 +30,7 @@ export class OpenAiProvider implements AiProvider {
 
   private readonly logger = new Logger(OpenAiProvider.name);
   private readonly apiKey = process.env.OPENAI_API_KEY || '';
-  private readonly defaultModel = process.env.OPENAI_MODEL || null;
+  private readonly defaultModel = this.resolveConfiguredDefaultModel();
   private readonly baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
   private inFlight = 0;
   private readonly waiters: Array<() => void> = [];
@@ -42,7 +42,7 @@ export class OpenAiProvider implements AiProvider {
 
     if (!this.apiKey || !requestedModel) {
       throw new ServiceUnavailableException(
-        'OpenAI provider is not configured. Please set OPENAI_API_KEY and OPENAI_MODEL.',
+        'OpenAI provider is not configured. Please set OPENAI_API_KEY and OPENAI_MODEL (or OPENAI_MODEL_CANDIDATES).',
       );
     }
 
@@ -93,7 +93,8 @@ export class OpenAiProvider implements AiProvider {
         ok: false,
         model: this.defaultModel,
         latencyMs: null,
-        error: 'OPENAI_API_KEY or OPENAI_MODEL is not configured.',
+        error:
+          'OPENAI_API_KEY or an OpenAI model (OPENAI_MODEL / OPENAI_MODEL_CANDIDATES) is not configured.',
       };
     }
 
@@ -277,6 +278,15 @@ export class OpenAiProvider implements AiProvider {
 
   private resolveConfiguredMaxConcurrency() {
     return Math.max(1, this.readInt('OPENAI_MAX_CONCURRENCY', 2));
+  }
+
+  private resolveConfiguredDefaultModel() {
+    const configuredDefault = process.env.OPENAI_MODEL?.trim();
+    if (configuredDefault) {
+      return configuredDefault;
+    }
+
+    return this.readCsv('OPENAI_MODEL_CANDIDATES')[0] ?? null;
   }
 
   private resolveModelCandidates(requestedModel: string) {

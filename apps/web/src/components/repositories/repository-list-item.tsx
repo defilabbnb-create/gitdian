@@ -22,6 +22,7 @@ export function RepositoryListItemCard({
   const decisionView = buildRepositoryDecisionViewModel(repository);
   const categoryLabel =
     decisionView.behaviorContext.categoryLabel ??
+    repository.analysis?.insightJson?.categoryDisplay?.label ??
     repository.finalDecision?.decisionSummary?.categoryLabelZh ??
     repository.finalDecision?.categoryLabelZh ??
     '待分类';

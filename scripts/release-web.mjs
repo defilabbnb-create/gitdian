@@ -9,11 +9,22 @@ import {
   waitForRemoteBuildInfoMatch,
 } from './production-build-info.mjs';
 
-function runCommand(label, command, args) {
+function getPreferredBuildPath() {
+  const pathParts = [
+    '/opt/homebrew/opt/node@22/bin',
+    '/Users/v188/.local/bin',
+    process.env.PATH ?? '',
+  ].filter(Boolean);
+
+  return pathParts.join(':');
+}
+
+function runCommand(label, command, args, options = {}) {
   console.log(`\n==> ${label}`);
   const result = spawnSync(command, args, {
     stdio: 'inherit',
     shell: false,
+    ...options,
   });
 
   if (result.status !== 0) {
@@ -27,9 +38,21 @@ async function main() {
   let remoteBuildInfo = null;
   let verifyResult = 'not-run';
   let success = false;
+  const buildEnv = {
+    ...process.env,
+    PATH: getPreferredBuildPath(),
+  };
 
   try {
-    runCommand('Building web', 'pnpm', ['--filter', 'web', 'build']);
+    runCommand('Building shared', 'pnpm', ['--filter', 'shared', 'build'], {
+      env: buildEnv,
+    });
+    runCommand('Syncing web shared vendor', process.execPath, ['scripts/sync-web-shared-vendor.mjs'], {
+      env: buildEnv,
+    });
+    runCommand('Building web', 'pnpm', ['--filter', 'web', 'build'], {
+      env: buildEnv,
+    });
     runCommand(
       'Restarting production web service',
       'launchctl',
@@ -59,7 +82,9 @@ async function main() {
       remoteBuildInfo,
     }));
 
-    runCommand('Running production acceptance checks', 'pnpm', ['verify:production']);
+    runCommand('Running production acceptance checks', 'pnpm', ['verify:production'], {
+      env: buildEnv,
+    });
     verifyResult = 'passed';
     success = true;
   } catch (error) {

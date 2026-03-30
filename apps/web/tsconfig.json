@@ -20,6 +20,12 @@
       }
     ],
     "paths": {
+      "shared": [
+        "vendor/shared/dist/index"
+      ],
+      "shared/*": [
+        "vendor/shared/dist/*"
+      ],
       "@/*": [
         "src/*"
       ]
@@ -29,8 +35,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    "next-env.d.ts",
-    ".next-dev/types/**/*.ts"
+    "next-env.d.ts"
   ],
   "exclude": [
     "node_modules"

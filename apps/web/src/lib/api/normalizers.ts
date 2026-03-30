@@ -11,6 +11,42 @@ import {
   RepositoryListItem,
   RepositoryTrainingAssetRecord,
 } from '@/lib/types/repository';
+import { localizeAnalysisTerms } from '@/lib/repository-decision';
+
+const MAIN_CATEGORY_LABELS: Record<string, string> = {
+  tools: '工具类',
+  platform: '平台类',
+  ai: 'AI 应用',
+  data: '数据类',
+  infra: '基础设施',
+  content: '内容类',
+  game: '游戏类',
+  other: '其他',
+};
+
+const SUB_CATEGORY_LABELS: Record<string, string> = {
+  devtools: '开发工具',
+  automation: '自动化工具',
+  'browser-extension': '浏览器扩展',
+  productivity: '效率工具',
+  workflow: '工作流工具',
+  deployment: '部署工具',
+  observability: '可观测性',
+  security: '安全工具',
+  analytics: '数据分析',
+  'api-platform': 'API 平台',
+  'content-creation': '内容创作',
+  other: '其他',
+};
+
+const GENERIC_COPY_PATTERNS = [
+  /^这个项目还缺少清晰的一句话说明[。！]?$/,
+  /^当前缺少足够信息[，。].*$/,
+  /^当前缺少完整理由[，。].*$/,
+  /^用户描述还不够清楚$/,
+  /^收费路径还不够清楚$/,
+  /^待分类$/,
+];
 
 function cleanText(...values: Array<unknown>) {
   for (const value of values) {
@@ -23,6 +59,110 @@ function cleanText(...values: Array<unknown>) {
   }
 
   return '';
+}
+
+function normalizePreferredText(value: unknown) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const localized = localizeAnalysisTerms(value).replace(/\s+/g, ' ').trim();
+
+  if (!localized) {
+    return null;
+  }
+
+  const latinCharCount = (localized.match(/[A-Za-z]/g) ?? []).length;
+  const chineseCharCount = (localized.match(/[\u3400-\u9fff]/g) ?? []).length;
+
+  if (latinCharCount >= 8 && chineseCharCount * 4 < latinCharCount) {
+    return null;
+  }
+
+  if (GENERIC_COPY_PATTERNS.some((pattern) => pattern.test(localized))) {
+    return null;
+  }
+
+  return localized;
+}
+
+function pickPreferredText(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = normalizePreferredText(value);
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function formatSnapshotCategoryLabel(
+  item: Pick<RepositoryListItem, 'analysis' | 'finalDecision'>,
+) {
+  const snapshotCategory = item.analysis?.ideaSnapshotJson?.category;
+
+  if (!snapshotCategory) {
+    return null;
+  }
+
+  const mainLabel =
+    MAIN_CATEGORY_LABELS[snapshotCategory.main] ?? snapshotCategory.main;
+  const subLabel =
+    SUB_CATEGORY_LABELS[snapshotCategory.sub] ?? snapshotCategory.sub;
+
+  if (mainLabel && subLabel && subLabel !== 'other') {
+    return `${mainLabel} / ${subLabel}`;
+  }
+
+  return mainLabel || null;
+}
+
+function resolveLocalizedDecisionCopy(
+  item: Pick<RepositoryListItem, 'analysis' | 'analysisState' | 'finalDecision'>,
+) {
+  const analysis = item.analysis;
+  const finalDecision = item.finalDecision;
+  const lightAnalysis = item.analysisState?.lightAnalysis;
+
+  return {
+    headline: pickPreferredText(
+      analysis?.ideaSnapshotJson?.oneLinerZh,
+      analysis?.extractedIdeaJson?.ideaSummary,
+      analysis?.insightJson?.oneLinerZh,
+      finalDecision?.oneLinerZh,
+      finalDecision?.decisionSummary?.headlineZh,
+    ),
+    categoryLabel: pickPreferredText(
+      analysis?.insightJson?.categoryDisplay?.label,
+      formatSnapshotCategoryLabel(item),
+      finalDecision?.decisionSummary?.categoryLabelZh,
+      finalDecision?.categoryLabelZh,
+    ),
+    targetUsers: pickPreferredText(
+      lightAnalysis?.targetUsers,
+      analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+      analysis?.moneyPriority?.targetUsersZh,
+      finalDecision?.moneyDecision?.targetUsersZh,
+      finalDecision?.decisionSummary?.targetUsersZh,
+    ),
+    monetization: pickPreferredText(
+      lightAnalysis?.monetization,
+      analysis?.extractedIdeaJson?.monetization,
+      analysis?.moneyPriority?.monetizationSummaryZh,
+      finalDecision?.moneyDecision?.monetizationSummaryZh,
+      finalDecision?.decisionSummary?.monetizationSummaryZh,
+    ),
+    reason: pickPreferredText(
+      lightAnalysis?.whyItMatters,
+      analysis?.insightJson?.verdictReason,
+      analysis?.moneyPriority?.reasonZh,
+      finalDecision?.reasonZh,
+      finalDecision?.moneyDecision?.reasonZh,
+      finalDecision?.decisionSummary?.reasonZh,
+    ),
+  };
 }
 
 function inferMoneyDecision(
@@ -343,9 +483,86 @@ export function normalizeFinalDecision(
 }
 
 export function normalizeRepositoryItem<T extends RepositoryListItem>(item: T): T {
+  const normalizedFinalDecision = normalizeFinalDecision(item.finalDecision);
+  const localizedCopy = resolveLocalizedDecisionCopy({
+    analysis: item.analysis,
+    analysisState: item.analysisState,
+    finalDecision: normalizedFinalDecision,
+  });
+
   return {
     ...item,
-    finalDecision: normalizeFinalDecision(item.finalDecision),
+    finalDecision: normalizedFinalDecision
+      ? {
+          ...normalizedFinalDecision,
+          oneLinerZh: cleanText(
+            localizedCopy.headline,
+            normalizedFinalDecision.oneLinerZh,
+            normalizedFinalDecision.decisionSummary.headlineZh,
+          ),
+          categoryLabelZh: cleanText(
+            localizedCopy.categoryLabel,
+            normalizedFinalDecision.categoryLabelZh,
+            normalizedFinalDecision.decisionSummary.categoryLabelZh,
+            '待分类',
+          ),
+          reasonZh: cleanText(
+            localizedCopy.reason,
+            normalizedFinalDecision.reasonZh,
+            normalizedFinalDecision.moneyDecision?.reasonZh,
+            normalizedFinalDecision.decisionSummary.reasonZh,
+          ),
+          moneyDecision: {
+            ...normalizedFinalDecision.moneyDecision,
+            targetUsersZh: cleanText(
+              localizedCopy.targetUsers,
+              normalizedFinalDecision.moneyDecision?.targetUsersZh,
+              normalizedFinalDecision.decisionSummary.targetUsersZh,
+            ),
+            monetizationSummaryZh: cleanText(
+              localizedCopy.monetization,
+              normalizedFinalDecision.moneyDecision?.monetizationSummaryZh,
+              normalizedFinalDecision.decisionSummary.monetizationSummaryZh,
+            ),
+            reasonZh: cleanText(
+              localizedCopy.reason,
+              normalizedFinalDecision.moneyDecision?.reasonZh,
+              normalizedFinalDecision.reasonZh,
+              normalizedFinalDecision.decisionSummary.reasonZh,
+            ),
+          },
+          decisionSummary: {
+            ...normalizedFinalDecision.decisionSummary,
+            headlineZh: cleanText(
+              localizedCopy.headline,
+              normalizedFinalDecision.decisionSummary.headlineZh,
+              normalizedFinalDecision.oneLinerZh,
+            ),
+            categoryLabelZh: cleanText(
+              localizedCopy.categoryLabel,
+              normalizedFinalDecision.decisionSummary.categoryLabelZh,
+              normalizedFinalDecision.categoryLabelZh,
+              '待分类',
+            ),
+            targetUsersZh: cleanText(
+              localizedCopy.targetUsers,
+              normalizedFinalDecision.decisionSummary.targetUsersZh,
+              normalizedFinalDecision.moneyDecision?.targetUsersZh,
+            ),
+            monetizationSummaryZh: cleanText(
+              localizedCopy.monetization,
+              normalizedFinalDecision.decisionSummary.monetizationSummaryZh,
+              normalizedFinalDecision.moneyDecision?.monetizationSummaryZh,
+            ),
+            reasonZh: cleanText(
+              localizedCopy.reason,
+              normalizedFinalDecision.decisionSummary.reasonZh,
+              normalizedFinalDecision.reasonZh,
+              normalizedFinalDecision.moneyDecision?.reasonZh,
+            ),
+          },
+        }
+      : normalizedFinalDecision,
     trainingAsset: normalizeTrainingAsset(item.trainingAsset),
   };
 }

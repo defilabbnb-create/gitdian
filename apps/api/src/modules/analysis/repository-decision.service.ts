@@ -9,6 +9,7 @@ import {
   buildRepositoryDecisionDisplaySummary,
   RepositoryDecisionDisplaySummary,
   resolveFinalDecisionSource,
+  shouldUseClaudeReviewForFinalDecision,
 } from './helpers/repository-final-decision.helper';
 import {
   deriveRepositoryAnalysisState,
@@ -315,11 +316,17 @@ export class RepositoryDecisionService {
     const snapshot = this.readObject(analysis?.ideaSnapshotJson);
     const extractedIdea = this.readObject(analysis?.extractedIdeaJson);
     const claudeReviewWrapper = this.readObject(analysis?.claudeReview);
-    const claudeReview =
+    const rawClaudeReview =
       this.readObject(claudeReviewWrapper?.review) ??
       (this.cleanText(analysis?.claudeReviewStatus, 20) === 'SUCCESS'
         ? this.readObject(analysis?.claudeReviewJson)
         : null);
+    const claudeReview = shouldUseClaudeReviewForFinalDecision({
+      claudeReview: rawClaudeReview,
+      insight,
+    })
+      ? rawClaudeReview
+      : null;
     const manualOverride =
       this.readObject(analysis?.manualOverride) ??
       this.normalizeManualOverride(analysis);
@@ -348,7 +355,7 @@ export class RepositoryDecisionService {
       } satisfies MoneyPriorityInput);
     const source = resolveFinalDecisionSource({
       manualOverride,
-      claudeReview,
+      claudeReview: rawClaudeReview,
       insight,
     });
     const localVerdict =
@@ -369,17 +376,22 @@ export class RepositoryDecisionService {
       this.cleanText(repository.description, 180) ||
       this.cleanText(repository.fullName, 180) ||
       null;
-    const claudeVerdict = this.normalizeVerdict(claudeReview?.verdict);
-    const claudeAction = this.normalizeAction(claudeReview?.action);
-    const claudeOneLiner = this.cleanText(claudeReview?.oneLinerZh, 180) || null;
+    const claudeVerdict = this.normalizeVerdict(rawClaudeReview?.verdict);
+    const claudeAction = this.normalizeAction(rawClaudeReview?.action);
+    const claudeOneLiner =
+      this.cleanText(rawClaudeReview?.oneLinerZh, 180) || null;
+    const effectiveClaudeVerdict = this.normalizeVerdict(claudeReview?.verdict);
+    const effectiveClaudeAction = this.normalizeAction(claudeReview?.action);
+    const effectiveClaudeOneLiner =
+      this.cleanText(claudeReview?.oneLinerZh, 180) || null;
     const verdict =
       this.normalizeVerdict(manualOverride?.verdict) ??
-      claudeVerdict ??
+      effectiveClaudeVerdict ??
       localVerdict ??
       'BAD';
     const action =
       this.normalizeAction(manualOverride?.action) ??
-      claudeAction ??
+      effectiveClaudeAction ??
       localAction ??
       (verdict === 'GOOD' ? 'BUILD' : verdict === 'OK' ? 'CLONE' : 'IGNORE');
     const projectType =
@@ -387,9 +399,9 @@ export class RepositoryDecisionService {
       this.readProjectTypeFromInsight(insight, snapshot) ??
       null;
     const category = this.resolveCategory(repository, insight, snapshot, moneyPriority, projectType);
-    const reviewDiff = this.readObject(claudeReview?.reviewDiff);
-    const trainingHints = this.readObject(claudeReview?.trainingHints);
-    const fallbackDiff = this.readObject(claudeReview?.fallbackDiff);
+    const reviewDiff = this.readObject(rawClaudeReview?.reviewDiff);
+    const trainingHints = this.readObject(rawClaudeReview?.trainingHints);
+    const fallbackDiff = this.readObject(rawClaudeReview?.fallbackDiff);
     const diffTypes = this.normalizeStringArray(reviewDiff?.diffTypes);
     const mistakeTypes = this.normalizeStringArray(trainingHints?.localModelMistakes);
     const suggestionPool = this.takeUnique(
@@ -408,19 +420,21 @@ export class RepositoryDecisionService {
     );
     const needsRecheck = Boolean(
       hasConflict ||
-        Boolean(claudeReview?.needsClaudeReview) ||
+        Boolean(rawClaudeReview?.needsClaudeReview) ||
         this.cleanText(analysis?.claudeReviewStatus, 20) === 'FAILED' ||
         auditMatches.needsRecompute ||
         auditMatches.repositoriesNeedingReview,
     );
     const founderPriority = this.resolveFounderPriority(moneyPriority, projectType, action);
     const finalOneLiner =
-      claudeOneLiner || localOneLiner || this.cleanText(repository.fullName, 180);
+      effectiveClaudeOneLiner ||
+      localOneLiner ||
+      this.cleanText(repository.fullName, 180);
     const localOneLinerRiskFlags = this.normalizeStringArray(
       this.readObject(insight?.oneLinerMeta)?.riskFlags,
     );
     const claudeOneLinerRiskFlags = this.normalizeStringArray(
-      this.readObject(claudeReview?.oneLinerMeta)?.riskFlags,
+      this.readObject(rawClaudeReview?.oneLinerMeta)?.riskFlags,
     );
     const oneLinerStrength = evaluateOneLinerStrength({
       oneLinerZh: finalOneLiner,
@@ -678,7 +692,10 @@ export class RepositoryDecisionService {
 
     const analysisAssets = this.buildAnalysisAssets(analysis);
     const trainingAsset =
-      claudeReview || mistakeTypes.length || auditMatches.problemTypes.length || diffTypes.length
+      rawClaudeReview ||
+      mistakeTypes.length ||
+      auditMatches.problemTypes.length ||
+      diffTypes.length
         ? {
             repoId: coreAsset.repoId,
             localVerdict,

@@ -34,12 +34,12 @@ export function RepositoryDetailAnalysisCard({
             <ModuleMetric label="核心差口" value={module.coreGapLabel} />
             <ModuleMetric label="补什么证据" value={module.evidenceNeededLabel} />
           </div>
+
+          <p className="text-sm leading-7 text-slate-600">{module.detailSummary}</p>
         </div>
       </summary>
 
       <div className="mt-4 space-y-4 border-t border-slate-200 pt-4">
-        <p className="text-sm leading-7 text-slate-600">{module.detailSummary}</p>
-
         <div className="grid gap-3 md:grid-cols-2">
           {module.detailMetrics.map((metric) => (
             <ModuleMetric
