@@ -80,14 +80,17 @@ export function detectRepositoryConflicts(
     summary.source === 'fallback' ||
     repository.analysis?.fallbackUsed === true;
   const weakStrength = getRepositoryOneLinerStrength(repository) === 'WEAK';
-  const incompleteAnalysis =
-    analysisState?.fullyAnalyzed === false ||
-    !repository.analysis?.insightJson ||
-    !repository.finalDecision ||
+  const missingDeepAnalysis =
+    analysisState?.deepReady === false ||
     deepStatus.status === 'NOT_STARTED' ||
     deepStatus.status === 'PENDING' ||
     deepStatus.status === 'RUNNING' ||
     deepStatus.status === 'FAILED';
+  const incompleteAnalysis =
+    analysisState?.fullyAnalyzed === false ||
+    !repository.analysis?.insightJson ||
+    !repository.finalDecision ||
+    missingDeepAnalysis;
   const snapshotConflict =
     validation.riskFlags.includes('snapshot_conflict') ||
     (snapshot?.isPromising === false &&
@@ -159,14 +162,14 @@ export function detectRepositoryConflicts(
     degradeDisplay &&
     (fallback ||
       incompleteAnalysis ||
-      analysisState?.deepReady === false ||
+      missingDeepAnalysis ||
       audit.headlineMonetizationConflict ||
       audit.unclearUser ||
       snapshotConflict);
   const hideWhy =
     fallback ||
     incompleteAnalysis ||
-    analysisState?.deepReady === false ||
+    missingDeepAnalysis ||
     snapshotConflict ||
     audit.headlineActionConflict;
   const hideFromHomepage =

@@ -1,14 +1,12 @@
-import type { ReactNode } from 'react';
 import type { RepositoryDecisionAnalysisModuleViewModel } from '@/lib/repository-decision-view-model';
+import { RepositoryOriginalAnalysisDisclosure } from '@/components/repositories/repository-original-analysis-disclosure';
 
 type RepositoryDetailAnalysisCardProps = {
   module: RepositoryDecisionAnalysisModuleViewModel;
-  runner?: ReactNode;
 };
 
 export function RepositoryDetailAnalysisCard({
   module,
-  runner,
 }: RepositoryDetailAnalysisCardProps) {
   return (
     <details
@@ -52,10 +50,8 @@ export function RepositoryDetailAnalysisCard({
           ))}
         </div>
 
-        {runner ? (
-          <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
-            {runner}
-          </div>
+        {module.originalAnalysis ? (
+          <RepositoryOriginalAnalysisDisclosure content={module.originalAnalysis} />
         ) : null}
       </div>
     </details>

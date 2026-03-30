@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import type { DailyHealthReport } from '../../scripts/health/health-reporter';
 import { BehaviorMemoryService } from '../behavior-memory/behavior-memory.service';
 import type { HistoricalRecoveryAssessment } from '../analysis/helpers/historical-data-recovery.helper';
 import { explainAdaptiveSchedulerDecision } from './adaptive-scheduler.explainer';
@@ -32,6 +34,7 @@ export class AdaptiveSchedulerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly behaviorMemoryService: BehaviorMemoryService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   async getState(): Promise<AdaptiveSchedulerState | null> {
@@ -195,6 +198,208 @@ export class AdaptiveSchedulerService {
 
     const context = await this.loadRepositoryContext(repositoryId);
     return buildAdaptiveSchedulerPriorityAdjustment({ state, context });
+  }
+
+  async triggerRecoveryFromHealth(report: DailyHealthReport) {
+    const decision = await this.evaluate({
+      apply: true,
+      healthInput: this.buildHealthInputFromReport(report),
+    });
+    const { HistoricalDataRecoveryService } = await import(
+      '../analysis/historical-data-recovery.service'
+    );
+    const recoveryService = this.moduleRef.get(HistoricalDataRecoveryService, {
+      strict: false,
+    });
+
+    if (!recoveryService) {
+      return {
+        ...decision,
+        triggered: false,
+        actions: [],
+        execution: {
+          downgradeOnly: 0,
+          refreshOnly: 0,
+          evidenceRepair: 0,
+          deepRepair: 0,
+          decisionRecalc: 0,
+          archive: 0,
+        },
+      };
+    }
+
+    const historicalSummary = report.summary.historicalRepairSummary;
+    if (
+      historicalSummary &&
+      typeof recoveryService.runHistoricalRepairLoop === 'function'
+    ) {
+      const actions: Array<{
+        rule: string;
+        lane: string;
+        selectedCount: number;
+        minPriorityScore: number;
+        execution: {
+          downgradeOnly: number;
+          refreshOnly: number;
+          evidenceRepair: number;
+          deepRepair: number;
+          decisionRecalc: number;
+          archive: number;
+        };
+        queueSummary: unknown;
+        routerExecutionSummary: unknown;
+      }> = [];
+      const execution = {
+        downgradeOnly: 0,
+        refreshOnly: 0,
+        evidenceRepair: 0,
+        deepRepair: 0,
+        decisionRecalc: 0,
+        archive: 0,
+      };
+      const queueBackpressure =
+        report.summary.queueSummary.pendingCount +
+        report.summary.queueSummary.runningCount;
+      const visibleBrokenLimit = Math.min(
+        160,
+        Math.max(0, historicalSummary.visibleBrokenCount),
+      );
+      const highValueWeakLimit = Math.min(
+        queueBackpressure > 400 ? 180 : 320,
+        Math.max(0, historicalSummary.highValueWeakCount),
+      );
+
+      if (visibleBrokenLimit > 0) {
+        const result = await recoveryService.runHistoricalRepairLoop({
+          dryRun: false,
+          buckets: ['visible_broken'],
+          limit: visibleBrokenLimit,
+          minPriorityScore: 110,
+        });
+        this.mergeHistoricalRepairResult(actions, execution, {
+          rule: 'historical_visible_broken',
+          lane: 'historical.visible_broken',
+          minPriorityScore: 110,
+          selectedCount: result.selectedCount,
+          execution: result.execution,
+          queueSummary: result.queueSummary,
+          routerExecutionSummary: result.routerExecutionSummary,
+        });
+      }
+
+      if (highValueWeakLimit > 0) {
+        const result = await recoveryService.runHistoricalRepairLoop({
+          dryRun: false,
+          buckets: ['high_value_weak'],
+          limit: highValueWeakLimit,
+          minPriorityScore: 85,
+        });
+        this.mergeHistoricalRepairResult(actions, execution, {
+          rule: 'historical_high_value_weak',
+          lane: 'historical.high_value_weak',
+          minPriorityScore: 85,
+          selectedCount: result.selectedCount,
+          execution: result.execution,
+          queueSummary: result.queueSummary,
+          routerExecutionSummary: result.routerExecutionSummary,
+        });
+      }
+
+      return {
+        ...decision,
+        triggered: actions.length > 0,
+        schedulerLane: 'historical_repair',
+        lanePolicy: {
+          sharedQueues: ['analysis.single', 'analysis.snapshot'],
+          competitionRule:
+            'visible_broken > high_value_weak > stale_watch > archive_or_noise',
+          cleanupRule:
+            'cleanupState=active only enters historical repair lane; freeze/archive/purge_ready bypass queue competition',
+          routerRule:
+            'router capability and fallback metadata travel with repair jobs; deterministic/frozen work stays out of high-cost competition',
+          limits: {
+            visibleBrokenLimit,
+            highValueWeakLimit,
+          },
+        },
+        actions,
+        execution,
+      };
+    }
+
+    const actions: Array<{
+      rule: string;
+      selectedCount: number;
+      execution: {
+        rerunLightAnalysis: number;
+        rerunDeepAnalysis: number;
+        claudeQueued: number;
+      };
+    }> = [];
+    const execution = {
+      rerunLightAnalysis: 0,
+      rerunDeepAnalysis: 0,
+      claudeQueued: 0,
+    };
+    const incompleteRate =
+      report.globalSnapshot.incomplete / Math.max(1, report.globalSnapshot.totalRepos);
+    const homepageUnsafeRate =
+      report.summary.homepageSummary.homepageUnsafe /
+      Math.max(1, report.summary.homepageSummary.homepageTotal);
+
+    if (incompleteRate > 0.8) {
+      const result = await recoveryService.runRecovery({
+        dryRun: false,
+        limit: 120,
+        priority: 'P0',
+        onlyIncomplete: true,
+        onlyHighValue: true,
+        mode: 'rerun_full_deep',
+      });
+      this.mergeTriggeredRecoveryResult(actions, execution, {
+        rule: 'high_incomplete_rate',
+        selectedCount: result.selectedCount,
+        execution: result.execution,
+      });
+    }
+
+    if (report.globalSnapshot.finalDecisionButNoDeep > 10_000) {
+      const result = await recoveryService.runRecovery({
+        dryRun: false,
+        limit: 180,
+        priority: 'P0',
+        onlyIncomplete: true,
+        onlyMissingDeep: true,
+        mode: 'rerun_full_deep',
+      });
+      this.mergeTriggeredRecoveryResult(actions, execution, {
+        rule: 'final_decision_without_deep',
+        selectedCount: result.selectedCount,
+        execution: result.execution,
+      });
+    }
+
+    if (homepageUnsafeRate > 0.3) {
+      const result = await recoveryService.runRecovery({
+        dryRun: false,
+        limit: 60,
+        priority: 'P0',
+        onlyFeatured: true,
+        mode: 'rerun_full_deep',
+      });
+      this.mergeTriggeredRecoveryResult(actions, execution, {
+        rule: 'homepage_unsafe',
+        selectedCount: result.selectedCount,
+        execution: result.execution,
+      });
+    }
+
+    return {
+      ...decision,
+      triggered: actions.length > 0,
+      actions,
+      execution,
+    };
   }
 
   async prioritizeRecoveryAssessments<T extends HistoricalRecoveryAssessment>(
@@ -390,6 +595,127 @@ export class AdaptiveSchedulerService {
     }
 
     return score;
+  }
+
+  private buildHealthInputFromReport(
+    report: DailyHealthReport,
+  ): AdaptiveSchedulerHealthInput {
+    const summary = report.summary;
+    return {
+      generatedAt: report.generatedAt,
+      totalRepos: report.globalSnapshot.totalRepos,
+      deepDoneRepos: summary.repoSummary.deepDoneRepos,
+      fullyAnalyzedRepos: report.globalSnapshot.fullyAnalyzed,
+      incompleteRepos: report.globalSnapshot.incomplete,
+      fallbackRepos: summary.repoSummary.fallbackRepos,
+      severeConflictRepos: summary.repoSummary.severeConflictRepos,
+      finalDecisionButNoDeepCount: report.globalSnapshot.finalDecisionButNoDeep,
+      deepQueuedButNotDoneCount: summary.analysisGapSummary.deepQueuedButNotDoneCount,
+      claudeEligibleButNotReviewedCount:
+        summary.analysisGapSummary.claudeEligibleButNotReviewedCount,
+      fallbackButStillVisibleCount:
+        summary.analysisGapSummary.fallbackButStillVisibleCount,
+      homepageTotal: summary.homepageSummary.homepageTotal,
+      homepageUnsafe: summary.homepageSummary.homepageUnsafe,
+      homepageIncomplete: summary.homepageSummary.homepageIncomplete,
+      homepageFallback: summary.homepageSummary.homepageFallback,
+      homepageConflict: summary.homepageSummary.homepageConflict,
+      homepageNoDeepButStrong: summary.homepageSummary.homepageNoDeepButStrong,
+      moneyPriorityHighButIncomplete:
+        summary.exposureSummary.moneyPriorityHighButIncomplete,
+      badTemplateCount: summary.qualitySummary.badTemplateCount,
+      deepQueueSize: summary.queueSummary.deepQueueSize,
+      snapshotQueueSize: summary.queueSummary.snapshotQueueSize,
+      claudeQueueSize: summary.queueSummary.claudeQueueSize,
+      pendingCount: summary.queueSummary.pendingCount,
+      runningCount: summary.queueSummary.runningCount,
+      failedCount: summary.queueSummary.failedCount,
+      stalledCount: summary.queueSummary.stalledCount,
+      mostCommonIncompleteReason:
+        summary.analysisGapSummary.mostCommonIncompleteReason,
+    };
+  }
+
+  private mergeTriggeredRecoveryResult(
+    actions: Array<{
+      rule: string;
+      selectedCount: number;
+      execution: {
+        rerunLightAnalysis: number;
+        rerunDeepAnalysis: number;
+        claudeQueued: number;
+      };
+    }>,
+    totals: {
+      rerunLightAnalysis: number;
+      rerunDeepAnalysis: number;
+      claudeQueued: number;
+    },
+    result: {
+      rule: string;
+      selectedCount: number;
+      execution: {
+        rerunLightAnalysis: number;
+        rerunDeepAnalysis: number;
+        claudeQueued: number;
+      };
+    },
+  ) {
+    actions.push(result);
+    totals.rerunLightAnalysis += result.execution.rerunLightAnalysis;
+    totals.rerunDeepAnalysis += result.execution.rerunDeepAnalysis;
+    totals.claudeQueued += result.execution.claudeQueued;
+  }
+
+  private mergeHistoricalRepairResult(
+    actions: Array<{
+      rule: string;
+      lane: string;
+      selectedCount: number;
+      minPriorityScore: number;
+      execution: {
+        downgradeOnly: number;
+        refreshOnly: number;
+        evidenceRepair: number;
+        deepRepair: number;
+        decisionRecalc: number;
+        archive: number;
+      };
+      queueSummary: unknown;
+      routerExecutionSummary: unknown;
+    }>,
+    totals: {
+      downgradeOnly: number;
+      refreshOnly: number;
+      evidenceRepair: number;
+      deepRepair: number;
+      decisionRecalc: number;
+      archive: number;
+    },
+    result: {
+      rule: string;
+      lane: string;
+      selectedCount: number;
+      minPriorityScore: number;
+      execution: {
+        downgradeOnly: number;
+        refreshOnly: number;
+        evidenceRepair: number;
+        deepRepair: number;
+        decisionRecalc: number;
+        archive: number;
+      };
+      queueSummary: unknown;
+      routerExecutionSummary: unknown;
+    },
+  ) {
+    actions.push(result);
+    totals.downgradeOnly += result.execution.downgradeOnly;
+    totals.refreshOnly += result.execution.refreshOnly;
+    totals.evidenceRepair += result.execution.evidenceRepair;
+    totals.deepRepair += result.execution.deepRepair;
+    totals.decisionRecalc += result.execution.decisionRecalc;
+    totals.archive += result.execution.archive;
   }
 
   private async persistState(state: AdaptiveSchedulerState) {

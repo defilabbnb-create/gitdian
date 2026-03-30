@@ -69,7 +69,7 @@ export function SettingsHealthPanel({
             只有当你要排查为什么没跑起来时，再看这一层。
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            这里主要用来确认数据抓取、本地判断和可选增强是不是正常。默认先看系统行为，不需要一上来就盯工程健康。
+            这里主要用来确认数据抓取、API 主判断和本地待命链路是不是正常。默认先看系统行为，不需要一上来就盯工程健康。
           </p>
         </div>
 
@@ -111,18 +111,18 @@ export function SettingsHealthPanel({
             error={health.github.error}
           />
           <SettingsHealthItem
-            label="本地判断"
-            ok={health.ai.omlx.ok}
-            latencyMs={health.ai.omlx.latencyMs}
-            meta={`Model：${health.ai.omlx.model ?? '--'}`}
-            error={health.ai.omlx.error}
-          />
-          <SettingsHealthItem
-            label="可选增强"
+            label="API 主判断"
             ok={health.ai.openai.ok}
             latencyMs={health.ai.openai.latencyMs}
             meta={`Model：${health.ai.openai.model ?? '--'}`}
             error={health.ai.openai.error}
+          />
+          <SettingsHealthItem
+            label="本地待命"
+            ok={health.ai.omlx.ok}
+            latencyMs={health.ai.omlx.latencyMs}
+            meta={`Model：${health.ai.omlx.model ?? '--'}`}
+            error={health.ai.omlx.error}
             tone="optional"
           />
         </div>

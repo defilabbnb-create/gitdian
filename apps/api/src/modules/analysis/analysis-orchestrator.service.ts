@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Prisma, RepositoryRoughLevel } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { QueueService } from '../queue/queue.service';
 import { FastFilterService } from '../fast-filter/fast-filter.service';
 import { JobLogService } from '../job-log/job-log.service';
 import { BatchRunAnalysisDto } from './dto/batch-run-analysis.dto';
@@ -9,6 +11,7 @@ import { CompletenessService } from './completeness.service';
 import { IdeaExtractService } from './idea-extract.service';
 import { IdeaFitService } from './idea-fit.service';
 import { IdeaSnapshotService } from './idea-snapshot.service';
+import { RepositoryDecisionService } from './repository-decision.service';
 import { RepositoryInsightService } from './repository-insight.service';
 import { AnalysisTrainingKnowledgeService } from './analysis-training-knowledge.service';
 import {
@@ -18,6 +21,7 @@ import {
   IdeaExtractGateReason,
 } from './helpers/idea-extract-gate.helper';
 import { resolveEffectiveOneLinerStrength } from './helpers/one-liner-strength.helper';
+import { runWithConcurrency } from './helpers/run-with-concurrency.helper';
 import { SelfTuningService } from './self-tuning.service';
 
 type RepositoryWithAnalysisState = Prisma.RepositoryGetPayload<{
@@ -88,6 +92,15 @@ type DeepRuntimeStatsState = {
   updatedAt: string | null;
 };
 
+type InsightRefreshBehaviorContext = {
+  userSuccessPatterns?: string[];
+  userFailurePatterns?: string[];
+  preferredCategories?: string[];
+  avoidedCategories?: string[];
+  recentValidatedWins?: string[];
+  recentDroppedReasons?: string[];
+};
+
 const DEEP_RUNTIME_STATS_CONFIG_KEY = 'analysis.deep.runtime_stats';
 
 @Injectable()
@@ -103,8 +116,10 @@ export class AnalysisOrchestratorService {
     private readonly ideaExtractService: IdeaExtractService,
     private readonly ideaSnapshotService: IdeaSnapshotService,
     private readonly repositoryInsightService: RepositoryInsightService,
+    private readonly repositoryDecisionService: RepositoryDecisionService,
     private readonly analysisTrainingKnowledgeService: AnalysisTrainingKnowledgeService,
     private readonly selfTuningService: SelfTuningService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   async runRepositoryAnalysis(
@@ -174,6 +189,7 @@ export class AnalysisOrchestratorService {
       where: { id: repositoryId },
       include: {
         analysis: true,
+        content: true,
       },
     });
 
@@ -200,6 +216,8 @@ export class AnalysisOrchestratorService {
       },
     };
 
+    const insightBehaviorContext = this.buildInsightBehaviorContext(dto);
+
     if (dto.runFastFilter) {
       steps.fastFilter = await this.executeFastFilter(repository.id);
     }
@@ -216,7 +234,9 @@ export class AnalysisOrchestratorService {
             completenessLevel: repository.completenessLevel,
             message: 'Completeness analysis already exists.',
           }
-        : await this.executeCompleteness(repository.id, fastFilterDidNotPass);
+        : await this.executeCompleteness(repository.id, fastFilterDidNotPass, {
+            refreshInsight: false,
+          });
     }
 
     const shouldSkipIdeaFit = !dto.forceRerun && this.hasIdeaFitResult(repository);
@@ -228,7 +248,9 @@ export class AnalysisOrchestratorService {
             opportunityLevel: this.readIdeaFitOpportunityLevel(repository.analysis?.ideaFitJson),
             message: 'Idea fit analysis already exists.',
           }
-        : await this.executeIdeaFit(repository.id, fastFilterDidNotPass);
+        : await this.executeIdeaFit(repository.id, fastFilterDidNotPass, {
+            refreshInsight: false,
+          });
     }
 
     const shouldSkipIdeaExtract =
@@ -246,12 +268,23 @@ export class AnalysisOrchestratorService {
           message: 'Idea extraction already exists.',
         };
       } else {
+        const deepInsightInputsUpdated =
+          steps.completeness.status === 'executed' ||
+          steps.ideaFit.status === 'executed';
+
+        if (deepInsightInputsUpdated) {
+          await this.repositoryInsightService.refreshInsight(repository.id);
+        }
+
         const extractGate = await this.shouldRunIdeaExtract(repository.id);
         steps.ideaExtract = extractGate.shouldRun
           ? await this.executeIdeaExtract(
               repository.id,
               fastFilterDidNotPass,
               extractGate.mode,
+              {
+                refreshInsight: false,
+              },
             )
           : {
               status: 'skipped',
@@ -272,14 +305,10 @@ export class AnalysisOrchestratorService {
       }
     }
 
-    await this.repositoryInsightService.refreshInsight(repository.id, {
-      userSuccessPatterns: dto.userSuccessPatterns ?? [],
-      userFailurePatterns: dto.userFailurePatterns ?? [],
-      preferredCategories: dto.preferredCategories ?? [],
-      avoidedCategories: dto.avoidedCategories ?? [],
-      recentValidatedWins: dto.recentValidatedWins ?? [],
-      recentDroppedReasons: dto.recentDroppedReasons ?? [],
-    });
+    await this.repositoryInsightService.refreshInsight(
+      repository.id,
+      insightBehaviorContext,
+    );
     await this.recordDeepRuntimeStats({
       deepEnteredCount:
         dto.runCompleteness || dto.runIdeaFit || dto.runIdeaExtract ? 1 : 0,
@@ -307,6 +336,7 @@ export class AnalysisOrchestratorService {
       ideaExtractMaxInflight:
         this.ideaExtractService.getIdeaExtractLimiterState().maxInflight,
     });
+    await this.ensureMissingDeepAnalysisQueued(repository.id);
 
     return {
       repositoryId: repository.id,
@@ -364,6 +394,7 @@ export class AnalysisOrchestratorService {
 
   private async executeBatchAnalysis(dto: BatchRunAnalysisDto) {
     const repositories = await this.selectBatchRepositories(dto);
+    const concurrency = this.resolveBatchAnalysisConcurrency();
 
     let succeeded = 0;
     let failed = 0;
@@ -375,34 +406,46 @@ export class AnalysisOrchestratorService {
       message: string;
     }> = [];
 
-    for (const repository of repositories) {
-      try {
-        const result = await this.executeRepositoryAnalysis(repository.id, dto);
-        const action = this.resolveOverallAction(result.steps);
+    const batchItems = await runWithConcurrency(
+      repositories,
+      concurrency,
+      async (repository) => {
+        try {
+          const result = await this.executeRepositoryAnalysis(repository.id, dto);
+          const action = this.resolveOverallAction(result.steps);
 
-        if (action === 'failed') {
-          failed += 1;
-        } else {
-          succeeded += 1;
+          return {
+            repositoryId: repository.id,
+            action,
+            steps: result.steps,
+            message: this.buildOverallMessage(result.steps),
+          };
+        } catch (error) {
+          return {
+            repositoryId: repository.id,
+            action: 'failed' as const,
+            steps: this.buildFailedSteps(
+              error instanceof Error
+                ? error.message
+                : 'Unknown analysis orchestration error.',
+            ),
+            message:
+              error instanceof Error
+                ? error.message
+                : 'Unknown analysis orchestration error.',
+          };
         }
+      },
+    );
 
-        items.push({
-          repositoryId: repository.id,
-          action,
-          steps: result.steps,
-          message: this.buildOverallMessage(result.steps),
-        });
-      } catch (error) {
+    for (const item of batchItems) {
+      if (item.action === 'failed') {
         failed += 1;
-        items.push({
-          repositoryId: repository.id,
-          action: 'failed',
-          steps: this.buildFailedSteps(
-            error instanceof Error ? error.message : 'Unknown analysis orchestration error.',
-          ),
-          message: error instanceof Error ? error.message : 'Unknown analysis orchestration error.',
-        });
+      } else {
+        succeeded += 1;
       }
+
+      items.push(item);
     }
 
     return {
@@ -435,12 +478,97 @@ export class AnalysisOrchestratorService {
     }
   }
 
+  private async ensureMissingDeepAnalysisQueued(repositoryId: string) {
+    try {
+      const repository = await this.prisma.repository.findUnique({
+        where: { id: repositoryId },
+        include: {
+          analysis: true,
+          content: true,
+        },
+      });
+
+      if (!repository) {
+        return;
+      }
+
+      const derived =
+        (await this.repositoryDecisionService.attachDerivedAssets(
+          repository as unknown as Record<string, unknown>,
+        )) as Record<string, unknown>;
+      const finalDecision = this.readJsonObject(derived.finalDecision);
+      const analysisState = this.readJsonObject(derived.analysisState);
+
+      if (!finalDecision || !analysisState) {
+        return;
+      }
+
+      const deepReady = this.readBoolean(analysisState.deepReady);
+      const analysisStatus = this.readString(analysisState.analysisStatus);
+      if (
+        deepReady ||
+        analysisStatus === 'DEEP_PENDING' ||
+        analysisStatus === 'DEEP_DONE' ||
+        analysisStatus === 'REVIEW_PENDING' ||
+        analysisStatus === 'REVIEW_DONE' ||
+        analysisStatus === 'SKIPPED_BY_GATE' ||
+        analysisStatus === 'FAILED'
+      ) {
+        return;
+      }
+
+      const runCompleteness = !repository.analysis?.completenessJson;
+      const runIdeaFit = !repository.analysis?.ideaFitJson;
+      const runIdeaExtract = !repository.analysis?.extractedIdeaJson;
+      if (!runCompleteness && !runIdeaFit && !runIdeaExtract) {
+        return;
+      }
+
+      const queueService = this.moduleRef.get(QueueService, {
+        strict: false,
+      });
+      if (!queueService) {
+        return;
+      }
+
+      await queueService.enqueueSingleAnalysis(
+        repositoryId,
+        {
+          runFastFilter: false,
+          runCompleteness,
+          runIdeaFit,
+          runIdeaExtract,
+          forceRerun: false,
+        },
+        'analysis_backstop',
+        {
+          metadata: {
+            missingDeepAfterFinalDecision: true,
+            recoveryMode: 'forced_missing_deep',
+          },
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `failed to enqueue missing deep backstop repositoryId=${repositoryId} error=${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
   private async executeCompleteness(
     repositoryId: string,
     fastFilterDidNotPass: boolean,
+    options: {
+      refreshInsight?: boolean;
+    } = {},
   ): Promise<CompletenessStepResult> {
     try {
-      const result = await this.completenessService.analyzeRepository(repositoryId);
+      const result = await this.completenessService.analyzeRepository(
+        repositoryId,
+        options,
+      );
 
       return {
         status: 'executed',
@@ -461,9 +589,15 @@ export class AnalysisOrchestratorService {
   private async executeIdeaFit(
     repositoryId: string,
     fastFilterDidNotPass: boolean,
+    options: {
+      refreshInsight?: boolean;
+    } = {},
   ): Promise<IdeaFitStepResult> {
     try {
-      const result = await this.ideaFitService.analyzeRepository(repositoryId);
+      const result = await this.ideaFitService.analyzeRepository(
+        repositoryId,
+        options,
+      );
 
       return {
         status: 'executed',
@@ -485,11 +619,15 @@ export class AnalysisOrchestratorService {
     repositoryId: string,
     fastFilterDidNotPass: boolean,
     mode: IdeaExtractExecutionMode,
+    options: {
+      refreshInsight?: boolean;
+    } = {},
   ): Promise<IdeaExtractStepResult> {
     try {
       const result = await this.ideaExtractService.analyzeRepository(repositoryId, {
         deferIfBusy: true,
         mode: mode === 'skip' ? 'light' : mode,
+        refreshInsight: options.refreshInsight,
       });
 
       if ('deferred' in result && result.deferred) {
@@ -716,6 +854,32 @@ export class AnalysisOrchestratorService {
     return candidates
       .filter((repository) => this.isMissingAnyRequestedAnalysis(repository, dto))
       .slice(0, dto.limit);
+  }
+
+  private resolveBatchAnalysisConcurrency() {
+    const requested = this.readPositiveInt(
+      process.env.BATCH_ANALYSIS_CONCURRENCY,
+      2,
+    );
+    const maxAllowed = this.readPositiveInt(
+      process.env.DEEP_ANALYSIS_CONCURRENCY,
+      6,
+    );
+
+    return Math.max(1, Math.min(requested, maxAllowed));
+  }
+
+  private buildInsightBehaviorContext(
+    dto: RunAnalysisDto,
+  ): InsightRefreshBehaviorContext {
+    return {
+      userSuccessPatterns: dto.userSuccessPatterns ?? [],
+      userFailurePatterns: dto.userFailurePatterns ?? [],
+      preferredCategories: dto.preferredCategories ?? [],
+      avoidedCategories: dto.avoidedCategories ?? [],
+      recentValidatedWins: dto.recentValidatedWins ?? [],
+      recentDroppedReasons: dto.recentDroppedReasons ?? [],
+    };
   }
 
   private isMissingAnyRequestedAnalysis(
@@ -1052,6 +1216,15 @@ export class AnalysisOrchestratorService {
   private isTimeoutMessage(message: string) {
     const normalized = message.toLowerCase();
     return normalized.includes('timed out') || normalized.includes('timeout');
+  }
+
+  private readPositiveInt(value: string | undefined, fallback: number) {
+    const parsed = Number.parseInt(value ?? '', 10);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      return fallback;
+    }
+
+    return parsed;
   }
 
   private toDateKey(date: Date) {

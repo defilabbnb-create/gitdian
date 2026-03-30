@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { JobStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -35,6 +36,12 @@ type AttachQueueJobInput = {
   queueName?: string;
   queueJobId: string;
   attempts?: number;
+};
+
+type CancelJobsBulkInput = {
+  jobIds: string[];
+  errorMessage?: string;
+  result?: unknown;
 };
 
 type MarkJobRunningInput = {
@@ -106,6 +113,38 @@ export class JobLogService {
     return job;
   }
 
+  async startJobsBulk(inputs: StartJobInput[]) {
+    if (!inputs.length) {
+      return [];
+    }
+
+    const rows = inputs.map((input) => ({
+      id: randomUUID(),
+      jobName: input.jobName,
+      jobStatus: input.jobStatus ?? JobStatus.RUNNING,
+      queueName: input.queueName ?? undefined,
+      queueJobId: input.queueJobId ?? undefined,
+      triggeredBy: input.triggeredBy ?? undefined,
+      attempts: input.attempts ?? 0,
+      retryCount: input.retryCount ?? 0,
+      progress: this.clampProgress(input.progress ?? 0),
+      parentJobId: input.parentJobId ?? undefined,
+      payload: this.toJsonValue(input.payload),
+      startedAt:
+        typeof input.startedAt !== 'undefined'
+          ? input.startedAt
+          : (input.jobStatus ?? JobStatus.RUNNING) === JobStatus.RUNNING
+            ? new Date()
+            : null,
+    }));
+
+    await this.prisma.jobLog.createMany({
+      data: rows,
+    });
+
+    return rows.map((row) => ({ id: row.id }));
+  }
+
   async attachQueueJob({
     jobId,
     queueName,
@@ -120,6 +159,26 @@ export class JobLogService {
         attempts: typeof attempts === 'number' ? attempts : undefined,
       },
     });
+  }
+
+  async attachQueueJobsBulk(inputs: AttachQueueJobInput[]) {
+    if (!inputs.length) {
+      return [];
+    }
+
+    return this.prisma.$transaction(
+      inputs.map((input) =>
+        this.prisma.jobLog.update({
+          where: { id: input.jobId },
+          data: {
+            queueName: input.queueName ?? undefined,
+            queueJobId: input.queueJobId,
+            attempts:
+              typeof input.attempts === 'number' ? input.attempts : undefined,
+          },
+        }),
+      ),
+    );
   }
 
   async markJobRunning({
@@ -226,6 +285,34 @@ export class JobLogService {
         }),
         finishedAt,
         durationMs: this.calculateDurationMs(existing.startedAt, finishedAt),
+      },
+    });
+  }
+
+  async cancelJobsBulk({
+    jobIds,
+    errorMessage = 'Task cancelled.',
+    result,
+  }: CancelJobsBulkInput) {
+    if (!jobIds.length) {
+      return { count: 0 };
+    }
+
+    return this.prisma.jobLog.updateMany({
+      where: {
+        id: {
+          in: jobIds,
+        },
+      },
+      data: {
+        jobStatus: JobStatus.FAILED,
+        errorMessage,
+        result: this.toJsonValue({
+          cancelled: true,
+          ...(this.isRecord(result) ? result : {}),
+        }),
+        finishedAt: new Date(),
+        durationMs: null,
       },
     });
   }

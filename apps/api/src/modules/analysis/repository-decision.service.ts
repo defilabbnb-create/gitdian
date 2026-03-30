@@ -15,11 +15,23 @@ import {
   type RepositoryDerivedAnalysisState,
 } from './helpers/repository-analysis-status.helper';
 import {
+  buildRepositoryEvidenceMap,
+  type EvidenceMapDimension,
+} from './helpers/evidence-map.helper';
+import {
+  buildEvidenceDrivenDecisionSummary,
+  summarizeEvidenceMap,
+  type EvidenceDrivenDecisionSummary,
+  type EvidenceMapInsightSummary,
+} from './helpers/evidence-map-insight.helper';
+import {
   evaluateOneLinerStrength,
   OneLinerStrength,
 } from './helpers/one-liner-strength.helper';
 
 const CLAUDE_AUDIT_LATEST_CONFIG_KEY = 'claude.audit.latest';
+const HISTORICAL_REPAIR_FRONTEND_GUARD_CONFIG_KEY =
+  'analysis.historical_repair.frontend_guard.latest';
 
 type JsonObject = Record<string, unknown>;
 type InsightVerdict = 'GOOD' | 'OK' | 'BAD';
@@ -68,6 +80,7 @@ export type RepositoryFinalDecision = {
     reasonZh: string;
   };
   decisionSummary: RepositoryDecisionDisplaySummary;
+  evidenceDecision: EvidenceDrivenDecisionSummary;
 };
 
 export type RepositoryCoreAsset = {
@@ -111,6 +124,10 @@ export type RepositoryTrainingAsset = {
   fallbackReplayDiff: string[];
 };
 
+export type RepositoryEvidenceSummaryAsset = EvidenceMapInsightSummary & {
+  weakestDimensions: EvidenceMapDimension[];
+};
+
 export type RepositoryReadinessAsset = RepositoryDerivedAnalysisState;
 
 type AuditProblemMatch = {
@@ -126,6 +143,21 @@ type AuditSnapshot = {
   recommendedActions: string[];
   problemMatchesByRepositoryId: Map<string, AuditProblemMatch[]>;
   problemMatchesByFullName: Map<string, AuditProblemMatch[]>;
+};
+
+type HistoricalRepairGuardEntry = {
+  repoId: string;
+  bucket: string;
+  action: string;
+  cleanupState: string;
+  reason: string;
+  priorityScore: number;
+  frontendDecisionState: 'trusted' | 'provisional' | 'degraded';
+};
+
+type HistoricalRepairGuardSnapshot = {
+  updatedAt: string | null;
+  itemsByRepoId: Map<string, HistoricalRepairGuardEntry>;
 };
 
 const MAIN_CATEGORY_LABELS: Record<string, string> = {
@@ -202,8 +234,8 @@ const FOUNDER_PRIORITY_LABELS: Record<FounderPriorityTier, string> = {
 
 const SOURCE_LABELS: Record<FinalDecisionSource, string> = {
   manual: '人工判断',
-  claude: 'Claude 复核',
-  local: '本地模型',
+  claude: '历史复核',
+  local: '主分析',
   fallback: '本地 fallback',
 };
 
@@ -211,6 +243,9 @@ const SOURCE_LABELS: Record<FinalDecisionSource, string> = {
 export class RepositoryDecisionService {
   private auditSnapshotCache: AuditSnapshot | null = null;
   private auditSnapshotLoadedAt = 0;
+  private historicalRepairGuardSnapshotCache: HistoricalRepairGuardSnapshot | null =
+    null;
+  private historicalRepairGuardLoadedAt = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -218,14 +253,29 @@ export class RepositoryDecisionService {
   ) {}
 
   async attachDerivedAssets<T>(value: T): Promise<T> {
-    const auditSnapshot = await this.getLatestAuditSnapshot();
-    return this.attachDerivedAssetsWithAudit(value, auditSnapshot);
+    const [auditSnapshot, historicalRepairGuardSnapshot] = await Promise.all([
+      this.getLatestAuditSnapshot(),
+      this.getLatestHistoricalRepairGuardSnapshot(),
+    ]);
+    return this.attachDerivedAssetsWithAudit(
+      value,
+      auditSnapshot,
+      historicalRepairGuardSnapshot,
+    );
   }
 
-  attachDerivedAssetsWithAudit<T>(value: T, auditSnapshot: AuditSnapshot | null): T {
+  attachDerivedAssetsWithAudit<T>(
+    value: T,
+    auditSnapshot: AuditSnapshot | null,
+    historicalRepairGuardSnapshot: HistoricalRepairGuardSnapshot | null = null,
+  ): T {
     if (Array.isArray(value)) {
       return value.map((item) =>
-        this.attachDerivedAssetsWithAudit(item, auditSnapshot),
+        this.attachDerivedAssetsWithAudit(
+          item,
+          auditSnapshot,
+          historicalRepairGuardSnapshot,
+        ),
       ) as T;
     }
 
@@ -235,12 +285,20 @@ export class RepositoryDecisionService {
 
     const record = value as Record<string, unknown>;
     if (this.looksLikeRepositoryRecord(record)) {
-      return this.buildRepositoryAssets(record, auditSnapshot) as unknown as T;
+      return this.buildRepositoryAssets(
+        record,
+        auditSnapshot,
+        historicalRepairGuardSnapshot,
+      ) as unknown as T;
     }
 
     for (const [key, currentValue] of Object.entries(record)) {
       if (currentValue && typeof currentValue === 'object') {
-        record[key] = this.attachDerivedAssetsWithAudit(currentValue, auditSnapshot);
+        record[key] = this.attachDerivedAssetsWithAudit(
+          currentValue,
+          auditSnapshot,
+          historicalRepairGuardSnapshot,
+        );
       }
     }
 
@@ -250,6 +308,7 @@ export class RepositoryDecisionService {
   buildRepositoryAssets(
     repository: Record<string, unknown>,
     auditSnapshot: AuditSnapshot | null,
+    historicalRepairGuardSnapshot: HistoricalRepairGuardSnapshot | null,
   ): Record<string, unknown> {
     const analysis = this.readObject(repository.analysis);
     const insight = this.readObject(analysis?.insightJson);
@@ -409,7 +468,15 @@ export class RepositoryDecisionService {
       monetizationSummaryZh: moneyPriority.monetizationSummaryZh,
       reasonZh: moneyPriority.reasonZh,
     };
-    const finalDecision: RepositoryFinalDecision = {
+    const repositoryReadmeSummary =
+      this.cleanText(
+        this.readObject(repository.content)?.readmeSummary,
+        320,
+      ) ||
+      this.cleanText(this.readObject(repository.content)?.readmeText, 320) ||
+      this.cleanText(repository.description, 320) ||
+      null;
+    const finalDecisionBase = {
       repoId: this.cleanText(repository.id, 80),
       oneLinerZh: finalOneLiner,
       oneLinerStrength,
@@ -456,7 +523,7 @@ export class RepositoryDecisionService {
         moneyDecision,
       }),
     };
-    const derivedReadiness = deriveRepositoryAnalysisState({
+    const baseAnalysisStateInput = {
       source,
       verdict,
       action,
@@ -491,15 +558,30 @@ export class RepositoryDecisionService {
       targetUsersLabel: moneyPriority.targetUsersZh,
       monetizationLabel: moneyPriority.monetizationSummaryZh,
       reasonZh: finalReason,
+      evidenceSummaryZh: null,
       snapshotReason: this.cleanText(snapshot?.reason, 320) || null,
-      readmeSummary:
-        this.cleanText(
-          this.readObject(repository.content)?.readmeSummary,
-          320,
-        ) ||
-        this.cleanText(this.readObject(repository.content)?.readmeText, 320) ||
-        this.cleanText(repository.description, 320) ||
-        null,
+      readmeSummary: repositoryReadmeSummary,
+      evidenceCoverageRate: null,
+      evidenceWeakCount: 0,
+      evidenceConflictCount: 0,
+      keyEvidenceMissingCount: 0,
+      keyEvidenceWeakCount: 0,
+      keyEvidenceConflictCount: 0,
+      evidenceMissingDimensions: [],
+      evidenceWeakDimensions: [],
+      evidenceConflictDimensions: [],
+      supportingEvidenceDimensions: [],
+      deepRepairDimensions: [],
+      decisionConflictDimensions: [],
+      keyEvidenceGaps: [],
+      keyEvidenceGapSeverity: 'NONE',
+      conflictDrivenGaps: [],
+      missingDrivenGaps: [],
+      weakDrivenGaps: [],
+      decisionRecalcGaps: [],
+      deepRepairGaps: [],
+      evidenceRepairGaps: [],
+      trustedBlockingGaps: [],
       snapshotPromising: this.toBoolean(snapshot?.isPromising) ?? null,
       snapshotNextAction: this.cleanText(snapshot?.nextAction, 40) || null,
       deepAnalysisStatus:
@@ -514,7 +596,67 @@ export class RepositoryDecisionService {
           | null,
       deepAnalysisStatusReason:
         this.cleanText(analysis?.deepAnalysisStatusReason, 120) || null,
+    } as Parameters<typeof deriveRepositoryAnalysisState>[0];
+    const preliminaryReadiness = deriveRepositoryAnalysisState(
+      baseAnalysisStateInput,
+    );
+    const historicalRepairGuardEntry =
+      historicalRepairGuardSnapshot?.itemsByRepoId.get(
+        this.cleanText(repository.id, 80),
+      ) ?? null;
+    const evidenceMap = buildRepositoryEvidenceMap({
+      repository: {
+        ...repository,
+        finalDecision: finalDecisionBase,
+        analysisState: preliminaryReadiness,
+      },
     });
+    const evidenceSummary: RepositoryEvidenceSummaryAsset = {
+      ...summarizeEvidenceMap(evidenceMap),
+      weakestDimensions: evidenceMap.summary.weakestDimensions,
+    };
+    let derivedReadiness = deriveRepositoryAnalysisState({
+      ...baseAnalysisStateInput,
+      evidenceSummaryZh: evidenceSummary.summaryZh,
+      evidenceCoverageRate: evidenceSummary.coverageRate,
+      evidenceWeakCount: evidenceSummary.weakCount,
+      evidenceConflictCount: evidenceSummary.conflictCount,
+      keyEvidenceMissingCount: evidenceSummary.keyMissingDimensions.length,
+      keyEvidenceWeakCount: evidenceSummary.keyWeakDimensions.length,
+      keyEvidenceConflictCount: evidenceSummary.keyConflictDimensions.length,
+      evidenceMissingDimensions: evidenceSummary.missingDimensions,
+      evidenceWeakDimensions: evidenceSummary.weakDimensions,
+      evidenceConflictDimensions: evidenceSummary.conflictDimensions,
+      supportingEvidenceDimensions: evidenceSummary.supportingDimensions,
+      deepRepairDimensions: evidenceSummary.deepRepairDimensions,
+      decisionConflictDimensions: evidenceSummary.decisionConflictDimensions,
+      keyEvidenceGaps: evidenceSummary.keyEvidenceGaps,
+      keyEvidenceGapSeverity: evidenceSummary.keyEvidenceGapSeverity,
+      conflictDrivenGaps: evidenceSummary.conflictDrivenGaps,
+      missingDrivenGaps: evidenceSummary.missingDrivenGaps,
+      weakDrivenGaps: evidenceSummary.weakDrivenGaps,
+      decisionRecalcGaps: evidenceSummary.decisionRecalcGaps,
+      deepRepairGaps: evidenceSummary.deepRepairGaps,
+      evidenceRepairGaps: evidenceSummary.evidenceRepairGaps,
+      trustedBlockingGaps: evidenceSummary.trustedBlockingGaps,
+    });
+    if (historicalRepairGuardEntry) {
+      derivedReadiness = this.applyHistoricalRepairGuard(
+        derivedReadiness,
+        historicalRepairGuardEntry,
+      );
+    }
+    const evidenceDecision = buildEvidenceDrivenDecisionSummary({
+      evidenceMap,
+      evidence: evidenceSummary,
+      currentAction: action,
+      frontendDecisionState: derivedReadiness.frontendDecisionState,
+      hasDeep: derivedReadiness.deepReady,
+    });
+    const finalDecision: RepositoryFinalDecision = {
+      ...finalDecisionBase,
+      evidenceDecision,
+    };
 
     const coreAsset: RepositoryCoreAsset = {
       repoId: this.cleanText(repository.id, 80),
@@ -564,6 +706,7 @@ export class RepositoryDecisionService {
       ...repository,
       finalDecision,
       analysisState: derivedReadiness,
+      evidenceMapSummary: evidenceSummary,
       coreAsset,
       analysisAssets,
       trainingAsset,
@@ -587,6 +730,32 @@ export class RepositoryDecisionService {
     const snapshot = this.normalizeAuditSnapshot(row?.configValue);
     this.auditSnapshotCache = snapshot;
     this.auditSnapshotLoadedAt = Date.now();
+    return snapshot;
+  }
+
+  async getLatestHistoricalRepairGuardSnapshot(
+    forceRefresh = false,
+  ): Promise<HistoricalRepairGuardSnapshot | null> {
+    if (
+      !forceRefresh &&
+      this.historicalRepairGuardSnapshotCache &&
+      Date.now() - this.historicalRepairGuardLoadedAt < 60_000
+    ) {
+      return this.historicalRepairGuardSnapshotCache;
+    }
+
+    const row = await this.prisma.systemConfig.findUnique({
+      where: {
+        configKey: HISTORICAL_REPAIR_FRONTEND_GUARD_CONFIG_KEY,
+      },
+      select: {
+        configValue: true,
+      },
+    });
+
+    const snapshot = this.normalizeHistoricalRepairGuardSnapshot(row?.configValue);
+    this.historicalRepairGuardSnapshotCache = snapshot;
+    this.historicalRepairGuardLoadedAt = Date.now();
     return snapshot;
   }
 
@@ -793,6 +962,93 @@ export class RepositoryDecisionService {
     };
   }
 
+  private normalizeHistoricalRepairGuardSnapshot(
+    value: unknown,
+  ): HistoricalRepairGuardSnapshot | null {
+    const record = this.readObject(value);
+    if (!record) {
+      return null;
+    }
+
+    const itemsByRepoId = new Map<string, HistoricalRepairGuardEntry>();
+    const items = this.readArray(record.items);
+
+    for (const item of items) {
+      const current = this.readObject(item);
+      if (!current) {
+        continue;
+      }
+      const repoId = this.cleanText(current.repoId, 80);
+      if (!repoId) {
+        continue;
+      }
+
+      const frontendDecisionState = this.cleanText(
+        current.frontendDecisionState,
+        20,
+      ) as HistoricalRepairGuardEntry['frontendDecisionState'] | '';
+
+      itemsByRepoId.set(repoId, {
+        repoId,
+        bucket: this.cleanText(current.bucket, 40),
+        action: this.cleanText(current.action, 40),
+        cleanupState: this.cleanText(current.cleanupState, 24),
+        reason: this.cleanText(current.reason, 240),
+        priorityScore: this.toNumber(current.priorityScore) ?? 0,
+        frontendDecisionState:
+          frontendDecisionState === 'trusted' ||
+          frontendDecisionState === 'provisional' ||
+          frontendDecisionState === 'degraded'
+            ? frontendDecisionState
+            : 'degraded',
+      });
+    }
+
+    return {
+      updatedAt: this.cleanText(record.updatedAt, 40) || null,
+      itemsByRepoId,
+    };
+  }
+
+  private applyHistoricalRepairGuard(
+    state: RepositoryDerivedAnalysisState,
+    guard: HistoricalRepairGuardEntry,
+  ): RepositoryDerivedAnalysisState {
+    const nextState: RepositoryDerivedAnalysisState = {
+      ...state,
+      frontendDecisionState: guard.frontendDecisionState,
+      historicalRepairGuard: {
+        bucket: guard.bucket,
+        action: guard.action,
+        cleanupState: guard.cleanupState,
+        reason: guard.reason,
+        priorityScore: guard.priorityScore,
+        frontendDecisionState: guard.frontendDecisionState,
+      },
+    };
+
+    if (guard.frontendDecisionState === 'degraded') {
+      nextState.displayStatus = 'UNSAFE';
+      nextState.displayStatusReason = `historical_repair_guard:${guard.action}`;
+      nextState.trustedDisplayReady = false;
+      nextState.highConfidenceReady = false;
+      nextState.fullyAnalyzed = false;
+      nextState.unsafe = true;
+      return nextState;
+    }
+
+    if (guard.frontendDecisionState === 'provisional') {
+      nextState.displayStatus = 'BASIC_READY';
+      nextState.displayStatusReason = `historical_repair_guard:${guard.action}`;
+      nextState.trustedDisplayReady = false;
+      nextState.highConfidenceReady = false;
+      nextState.fullyAnalyzed = false;
+      return nextState;
+    }
+
+    return nextState;
+  }
+
   private matchAudit(repository: Record<string, unknown>, auditSnapshot: AuditSnapshot | null) {
     if (!auditSnapshot) {
       return {
@@ -913,6 +1169,10 @@ export class RepositoryDecisionService {
     }
 
     return value as JsonObject;
+  }
+
+  private readArray(value: unknown) {
+    return Array.isArray(value) ? value : [];
   }
 
   private normalizeStringArray(value: unknown) {

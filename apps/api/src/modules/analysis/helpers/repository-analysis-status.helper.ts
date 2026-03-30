@@ -1,3 +1,12 @@
+import {
+  buildEvidenceGapTaxonomy,
+  formatEvidenceGapLabels,
+  normalizeEvidenceGapSeverity,
+  normalizeEvidenceGapTaxonomy,
+  type KeyEvidenceGapSeverity,
+  type KeyEvidenceGapTaxonomy,
+} from './evidence-gap-taxonomy.helper';
+
 export type RepositoryDerivedAnalysisStatus =
   | 'NOT_READY'
   | 'SNAPSHOT_ONLY'
@@ -41,9 +50,19 @@ export type RepositoryLightAnalysis = {
   source: 'snapshot' | 'insight' | 'readme' | 'decision_fallback';
 };
 
+type EvidenceDimension =
+  | 'problem'
+  | 'user'
+  | 'distribution'
+  | 'monetization'
+  | 'execution'
+  | 'market'
+  | 'technical_maturity';
+
 export type RepositoryDerivedAnalysisState = {
   analysisStatus: RepositoryDerivedAnalysisStatus;
   displayStatus: RepositoryDisplayStatus;
+  frontendDecisionState: 'trusted' | 'provisional' | 'degraded';
   analysisStatusReason: string | null;
   displayStatusReason: string | null;
   incompleteReason: RepositoryIncompleteReason | null;
@@ -59,6 +78,14 @@ export type RepositoryDerivedAnalysisState = {
   fullyAnalyzed: boolean;
   fallbackVisible: boolean;
   unsafe: boolean;
+  historicalRepairGuard?: {
+    bucket: string;
+    action: string;
+    cleanupState?: string;
+    reason: string;
+    priorityScore: number;
+    frontendDecisionState: 'trusted' | 'provisional' | 'degraded';
+  } | null;
   lightAnalysis: RepositoryLightAnalysis | null;
 };
 
@@ -85,8 +112,30 @@ type AnalysisStatusInput = {
   targetUsersLabel?: string | null;
   monetizationLabel?: string | null;
   reasonZh?: string | null;
+  evidenceSummaryZh?: string | null;
   snapshotReason?: string | null;
   readmeSummary?: string | null;
+  evidenceCoverageRate?: number | null;
+  evidenceWeakCount?: number | null;
+  evidenceConflictCount?: number | null;
+  keyEvidenceMissingCount?: number | null;
+  keyEvidenceWeakCount?: number | null;
+  keyEvidenceConflictCount?: number | null;
+  evidenceMissingDimensions?: EvidenceDimension[] | null;
+  evidenceWeakDimensions?: EvidenceDimension[] | null;
+  evidenceConflictDimensions?: EvidenceDimension[] | null;
+  supportingEvidenceDimensions?: EvidenceDimension[] | null;
+  deepRepairDimensions?: EvidenceDimension[] | null;
+  decisionConflictDimensions?: EvidenceDimension[] | null;
+  keyEvidenceGaps?: KeyEvidenceGapTaxonomy[] | null;
+  keyEvidenceGapSeverity?: KeyEvidenceGapSeverity | null;
+  conflictDrivenGaps?: KeyEvidenceGapTaxonomy[] | null;
+  missingDrivenGaps?: KeyEvidenceGapTaxonomy[] | null;
+  weakDrivenGaps?: KeyEvidenceGapTaxonomy[] | null;
+  decisionRecalcGaps?: KeyEvidenceGapTaxonomy[] | null;
+  deepRepairGaps?: KeyEvidenceGapTaxonomy[] | null;
+  evidenceRepairGaps?: KeyEvidenceGapTaxonomy[] | null;
+  trustedBlockingGaps?: KeyEvidenceGapTaxonomy[] | null;
   snapshotPromising?: boolean | null;
   snapshotNextAction?: string | null;
   deepAnalysisStatus?:
@@ -123,6 +172,80 @@ export function deriveRepositoryAnalysisState(
     input.source === 'fallback' || input.fallbackUsed === true;
   const fullDeepReady = hasIdeaFit && hasIdeaExtract && hasCompleteness;
   const lightDeepReady = hasInsight || hasSnapshot || hasFinalDecision;
+  const evidenceCoverageRate = normalizeEvidenceCoverageRate(
+    input.evidenceCoverageRate,
+  );
+  const keyEvidenceMissingCount = normalizeEvidenceCount(
+    input.keyEvidenceMissingCount,
+  );
+  const keyEvidenceWeakCount = normalizeEvidenceCount(input.keyEvidenceWeakCount);
+  const keyEvidenceConflictCount = normalizeEvidenceCount(
+    input.keyEvidenceConflictCount,
+  );
+  const evidenceWeakCount = normalizeEvidenceCount(input.evidenceWeakCount);
+  const evidenceConflictCount = normalizeEvidenceCount(
+    input.evidenceConflictCount,
+  );
+  const evidenceMissingDimensions = normalizeEvidenceDimensions(
+    input.evidenceMissingDimensions,
+  );
+  const evidenceWeakDimensions = normalizeEvidenceDimensions(
+    input.evidenceWeakDimensions,
+  );
+  const evidenceConflictDimensions = normalizeEvidenceDimensions(
+    input.evidenceConflictDimensions,
+  );
+  const supportingEvidenceDimensions = normalizeEvidenceDimensions(
+    input.supportingEvidenceDimensions,
+  );
+  const gapTaxonomy = buildEvidenceGapTaxonomy({
+    missingDimensions: evidenceMissingDimensions,
+    weakDimensions: evidenceWeakDimensions,
+    conflictDimensions: evidenceConflictDimensions,
+  });
+  const keyEvidenceGaps = normalizeEvidenceGapTaxonomy(input.keyEvidenceGaps);
+  const conflictDrivenGaps = normalizeEvidenceGapTaxonomy(
+    input.conflictDrivenGaps,
+  );
+  const missingDrivenGaps = normalizeEvidenceGapTaxonomy(
+    input.missingDrivenGaps,
+  );
+  const weakDrivenGaps = normalizeEvidenceGapTaxonomy(input.weakDrivenGaps);
+  const decisionRecalcGaps = normalizeEvidenceGapTaxonomy(
+    input.decisionRecalcGaps,
+  );
+  const deepRepairGaps = normalizeEvidenceGapTaxonomy(input.deepRepairGaps);
+  const evidenceRepairGaps = normalizeEvidenceGapTaxonomy(
+    input.evidenceRepairGaps,
+  );
+  const trustedBlockingGaps = normalizeEvidenceGapTaxonomy(
+    input.trustedBlockingGaps,
+  );
+  const resolvedConflictDrivenGaps = conflictDrivenGaps.length
+    ? conflictDrivenGaps
+    : gapTaxonomy.conflictDrivenGaps;
+  const resolvedMissingDrivenGaps = missingDrivenGaps.length
+    ? missingDrivenGaps
+    : gapTaxonomy.missingDrivenGaps;
+  const resolvedWeakDrivenGaps = weakDrivenGaps.length
+    ? weakDrivenGaps
+    : gapTaxonomy.weakDrivenGaps;
+  const resolvedDecisionRecalcGaps = decisionRecalcGaps.length
+    ? decisionRecalcGaps
+    : gapTaxonomy.decisionRecalcGaps;
+  const resolvedDeepRepairGaps = deepRepairGaps.length
+    ? deepRepairGaps
+    : gapTaxonomy.deepRepairGaps;
+  const resolvedEvidenceRepairGaps = evidenceRepairGaps.length
+    ? evidenceRepairGaps
+    : gapTaxonomy.evidenceRepairGaps;
+  const resolvedTrustedBlockingGaps = trustedBlockingGaps.length
+    ? trustedBlockingGaps
+    : gapTaxonomy.trustedBlockingGaps;
+  const keyEvidenceGapSeverity =
+    normalizeEvidenceGapSeverity(input.keyEvidenceGapSeverity) !== 'NONE'
+      ? normalizeEvidenceGapSeverity(input.keyEvidenceGapSeverity)
+      : gapTaxonomy.keyEvidenceGapSeverity;
   const reviewEligible = Boolean(
     hasConflict ||
       needsRecheck ||
@@ -138,10 +261,27 @@ export function deriveRepositoryAnalysisState(
       (input.action === 'BUILD' && input.hasClearUseCase === false) ||
       (input.action === 'BUILD' && input.snapshotPromising === false),
   );
+  const evidenceDecisionConflict = Boolean(
+    keyEvidenceConflictCount > 0 ||
+      evidenceConflictCount > 0 ||
+      resolvedDecisionRecalcGaps.length > 0 ||
+      resolvedConflictDrivenGaps.length > 0,
+  );
+  const keyEvidenceMissing = Boolean(
+    keyEvidenceMissingCount > 0 || resolvedMissingDrivenGaps.length > 0,
+  );
+  const keyEvidenceWeak = Boolean(
+    keyEvidenceWeakCount > 0 ||
+      evidenceWeakCount > 0 ||
+      resolvedWeakDrivenGaps.length > 0,
+  );
+  const evidenceCoverageWeak =
+    typeof evidenceCoverageRate === 'number' && evidenceCoverageRate < 0.45;
   const unsafe =
     fallbackVisible ||
     hasConflict ||
     needsRecheck ||
+    evidenceDecisionConflict ||
     severeSignalMismatch ||
     input.deepAnalysisStatus === 'SKIPPED_BY_GATE' ||
     input.deepAnalysisStatus === 'SKIPPED_BY_STRENGTH';
@@ -151,10 +291,14 @@ export function deriveRepositoryAnalysisState(
     hasSnapshot &&
     hasInsight &&
     hasFinalDecision &&
+    fullDeepReady &&
     !unsafe &&
-    !isWeakHeadline(input.oneLinerStrength);
+    !evidenceCoverageWeak &&
+    resolvedTrustedBlockingGaps.length === 0 &&
+    keyEvidenceGapSeverity !== 'HIGH' &&
+    keyEvidenceGapSeverity !== 'CRITICAL';
   const highConfidenceReady =
-    trustedDisplayReady && fullDeepReady && reviewReady;
+    trustedDisplayReady && reviewReady && !keyEvidenceWeak;
   const fullyAnalyzed = highConfidenceReady;
 
   const incompleteReasons = deriveIncompleteReasons({
@@ -192,6 +336,7 @@ export function deriveRepositoryAnalysisState(
   return {
     analysisStatus,
     displayStatus,
+    frontendDecisionState: resolveFrontendDecisionState(displayStatus),
     analysisStatusReason: resolveAnalysisStatusReason(input, incompleteReason),
     displayStatusReason: resolveDisplayStatusReason(displayStatus, incompleteReason),
     incompleteReason,
@@ -207,15 +352,41 @@ export function deriveRepositoryAnalysisState(
     fullyAnalyzed,
     fallbackVisible,
     unsafe,
+    historicalRepairGuard: null,
     lightAnalysis: displayReady
       ? buildRepositoryLightAnalysis(input, {
           displayStatus,
           trustedDisplayReady,
           fullDeepReady,
           fallbackVisible,
+          evidenceCoverageWeak,
+          keyEvidenceMissing,
+          keyEvidenceWeak,
+          evidenceDecisionConflict,
+          deepRepairGaps: resolvedDeepRepairGaps,
+          decisionRecalcGaps: resolvedDecisionRecalcGaps,
+          evidenceRepairGaps: resolvedEvidenceRepairGaps,
+          evidenceMissingDimensions,
+          supportingEvidenceDimensions,
         })
       : null,
   };
+}
+
+function resolveFrontendDecisionState(
+  displayStatus: RepositoryDisplayStatus,
+): 'trusted' | 'provisional' | 'degraded' {
+  switch (displayStatus) {
+    case 'HIGH_CONFIDENCE_READY':
+    case 'TRUSTED_READY':
+      return 'trusted';
+    case 'BASIC_READY':
+      return 'provisional';
+    case 'UNSAFE':
+    case 'HIDDEN':
+    default:
+      return 'degraded';
+  }
 }
 
 function resolveAnalysisStatus(
@@ -369,6 +540,7 @@ function resolveAnalysisStatusReason(
 ) {
   return (
     cleanText(input.deepAnalysisStatusReason) ??
+    cleanText(input.evidenceSummaryZh) ??
     cleanText(input.snapshotReason) ??
     (incompleteReason === 'NO_DEEP_ANALYSIS'
       ? 'deep_not_started'
@@ -406,6 +578,15 @@ function buildRepositoryLightAnalysis(
     trustedDisplayReady: boolean;
     fullDeepReady: boolean;
     fallbackVisible: boolean;
+    evidenceCoverageWeak: boolean;
+    keyEvidenceMissing: boolean;
+    keyEvidenceWeak: boolean;
+    evidenceDecisionConflict: boolean;
+    deepRepairGaps: KeyEvidenceGapTaxonomy[];
+    decisionRecalcGaps: KeyEvidenceGapTaxonomy[];
+    evidenceRepairGaps: KeyEvidenceGapTaxonomy[];
+    evidenceMissingDimensions: EvidenceDimension[];
+    supportingEvidenceDimensions: EvidenceDimension[];
   },
 ): RepositoryLightAnalysis {
   const targetUsers = resolveLightTargetUsers(input);
@@ -481,8 +662,26 @@ function resolveLightWhy(
     trustedDisplayReady: boolean;
     fullDeepReady: boolean;
     fallbackVisible: boolean;
+    evidenceCoverageWeak: boolean;
+    keyEvidenceMissing: boolean;
+    keyEvidenceWeak: boolean;
+    evidenceDecisionConflict: boolean;
+    deepRepairGaps: KeyEvidenceGapTaxonomy[];
+    decisionRecalcGaps: KeyEvidenceGapTaxonomy[];
+    evidenceRepairGaps: KeyEvidenceGapTaxonomy[];
+    evidenceMissingDimensions: EvidenceDimension[];
+    supportingEvidenceDimensions: EvidenceDimension[];
   },
 ) {
+  if (context.evidenceDecisionConflict) {
+    return (
+      cleanText(input.evidenceSummaryZh) ??
+      `当前关键判断被 ${formatEvidenceGapLabels(
+        context.decisionRecalcGaps,
+      )} 卡住，先不要把它当成稳定结论。`
+    );
+  }
+
   if (
     input.snapshotPromising === false ||
     input.snapshotNextAction === 'SKIP' ||
@@ -497,20 +696,32 @@ function resolveLightWhy(
 
   if (context.displayStatus === 'UNSAFE' || context.fallbackVisible) {
     return (
+      cleanText(input.evidenceSummaryZh) ??
       cleanText(input.snapshotReason) ??
       cleanText(input.reasonZh) ??
       '当前判断还带着明显不确定性，先不要把它当成已经验证过的产品机会。'
     );
   }
 
+  if (context.deepRepairGaps.length > 0) {
+    return (
+      cleanText(input.evidenceSummaryZh) ??
+      `当前主要缺少 ${formatEvidenceGapLabels(
+        context.deepRepairGaps,
+      )} 这类关键证据，先补齐再推进更稳。`
+    );
+  }
+
   if (context.fullDeepReady) {
     return (
+      cleanText(input.evidenceSummaryZh) ??
       cleanText(input.reasonZh) ??
       '深分析已经补齐，可以按当前结论继续推进。'
     );
   }
 
   return (
+    cleanText(input.evidenceSummaryZh) ??
     cleanText(input.reasonZh) ??
     cleanText(input.snapshotReason) ??
     '基础判断已经完成，但深分析还没补齐，先按保守结论做下一步判断。'
@@ -524,6 +735,15 @@ function resolveLightNextStep(
     trustedDisplayReady: boolean;
     fullDeepReady: boolean;
     fallbackVisible: boolean;
+    evidenceCoverageWeak: boolean;
+    keyEvidenceMissing: boolean;
+    keyEvidenceWeak: boolean;
+    evidenceDecisionConflict: boolean;
+    deepRepairGaps: KeyEvidenceGapTaxonomy[];
+    decisionRecalcGaps: KeyEvidenceGapTaxonomy[];
+    evidenceRepairGaps: KeyEvidenceGapTaxonomy[];
+    evidenceMissingDimensions: EvidenceDimension[];
+    supportingEvidenceDimensions: EvidenceDimension[];
   },
 ) {
   if (
@@ -533,6 +753,28 @@ function resolveLightNextStep(
     input.moneyPriority === 'P3'
   ) {
     return '暂不投入，先放进观察池；只有当后面出现更明确用户、价值或收费路径时再继续。';
+  }
+
+  if (context.evidenceDecisionConflict) {
+    return `先重新核对 ${formatEvidenceGapLabels(
+      context.decisionRecalcGaps,
+    )}，再决定要不要继续投入。`;
+  }
+
+  if (context.deepRepairGaps.length > 0) {
+    return `先补 ${formatEvidenceGapLabels(
+      context.deepRepairGaps,
+    )}，再决定是否继续推进。`;
+  }
+
+  if (context.keyEvidenceMissing || context.evidenceCoverageWeak) {
+    return `先补 ${formatDimensions(
+      context.evidenceMissingDimensions,
+    )} 关键证据，再判断是否继续投入。`;
+  }
+
+  if (context.keyEvidenceWeak || context.evidenceRepairGaps.length > 0) {
+    return '先补弱证据并刷新判断，再决定是否继续推进。';
   }
 
   if (!context.fullDeepReady) {
@@ -565,10 +807,31 @@ function resolveLightCaution(
     trustedDisplayReady: boolean;
     fullDeepReady: boolean;
     fallbackVisible: boolean;
+    evidenceCoverageWeak: boolean;
+    keyEvidenceMissing: boolean;
+    keyEvidenceWeak: boolean;
+    evidenceDecisionConflict: boolean;
+    deepRepairGaps: KeyEvidenceGapTaxonomy[];
+    decisionRecalcGaps: KeyEvidenceGapTaxonomy[];
+    evidenceRepairGaps: KeyEvidenceGapTaxonomy[];
+    evidenceMissingDimensions: EvidenceDimension[];
+    supportingEvidenceDimensions: EvidenceDimension[];
   },
 ) {
+  if (context.evidenceDecisionConflict) {
+    return `当前存在 ${formatEvidenceGapLabels(
+      context.decisionRecalcGaps,
+    )}，继续推进前应先重算判断。`;
+  }
+
   if (context.fallbackVisible) {
     return '当前仍是 fallback 或兜底判断，不适合直接当成高置信结论。';
+  }
+
+  if (context.keyEvidenceMissing || context.evidenceCoverageWeak) {
+    return `当前仍缺少 ${formatDimensions(
+      context.evidenceMissingDimensions,
+    )} 关键证据，不适合继续维持强结论。`;
   }
 
   if (!context.fullDeepReady) {
@@ -584,6 +847,61 @@ function resolveLightCaution(
 
 function isWeakHeadline(value: AnalysisStatusInput['oneLinerStrength']) {
   return value === 'WEAK';
+}
+
+function normalizeEvidenceCoverageRate(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeEvidenceCount(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(value));
+}
+
+function normalizeEvidenceDimensions(
+  value: EvidenceDimension[] | null | undefined,
+) {
+  if (!Array.isArray(value)) {
+    return [] as EvidenceDimension[];
+  }
+
+  return takeUnique(
+    value.filter((item): item is EvidenceDimension =>
+      item === 'problem' ||
+      item === 'user' ||
+      item === 'distribution' ||
+      item === 'monetization' ||
+      item === 'execution' ||
+      item === 'market' ||
+      item === 'technical_maturity',
+    ),
+  );
+}
+
+function formatDimensions(dimensions: EvidenceDimension[]) {
+  const normalized = normalizeEvidenceDimensions(dimensions);
+  if (!normalized.length) {
+    return '关键';
+  }
+
+  const labelMap: Record<EvidenceDimension, string> = {
+    problem: 'problem',
+    user: 'user',
+    distribution: 'distribution',
+    monetization: 'monetization',
+    execution: 'execution',
+    market: 'market',
+    technical_maturity: 'technical_maturity',
+  };
+
+  return normalized.map((item) => labelMap[item]).join(' / ');
 }
 
 function cleanText(value: unknown) {

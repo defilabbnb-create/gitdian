@@ -196,7 +196,7 @@ test('expanded full task flow still renders raw task details after drill-in', ()
 
   assert.match(html, /data-jobs-expanded-flow="expanded"/);
   assert.match(html, /data-testid="jobs-expanded-flow"/);
-  assert.match(html, /analysis.run_single/);
+  assert.match(html, /单仓分析执行/);
   assert.match(html, /执行输入/);
   assert.match(html, /repositoryId/);
 });

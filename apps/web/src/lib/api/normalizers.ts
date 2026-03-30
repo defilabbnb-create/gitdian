@@ -139,9 +139,9 @@ function sourceLabel(source?: RepositoryDecisionSource | null) {
     case 'manual':
       return '人工判断';
     case 'claude':
-      return 'Claude 复核';
+      return '历史复核';
     case 'local':
-      return '本地模型';
+      return '主分析';
     case 'fallback':
     default:
       return '兜底判断';
@@ -406,7 +406,7 @@ function defaultItemDecisionSummary(
     sourceLabelZh: item.hasManualOverride
       ? '人工判断'
       : item.hasClaudeReview
-        ? 'Claude 复核'
+        ? '历史复核'
         : '系统判断',
   };
 }

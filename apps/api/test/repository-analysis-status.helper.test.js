@@ -21,6 +21,10 @@ test('marks fully analyzed repo as high confidence ready', () => {
     hasClearUseCase: true,
     isDirectlyMonetizable: true,
     oneLinerStrength: 'STRONG',
+    evidenceCoverageRate: 0.86,
+    keyEvidenceMissingCount: 0,
+    keyEvidenceWeakCount: 0,
+    keyEvidenceConflictCount: 0,
   });
 
   assert.equal(state.analysisStatus, 'REVIEW_DONE');
@@ -45,13 +49,18 @@ test('keeps final decision without deep at display ready', () => {
     isDirectlyMonetizable: false,
     oneLinerStrength: 'MEDIUM',
     reasonZh: '基础判断已经完成，但还没补齐更深一层分析。',
+    evidenceCoverageRate: 0.42,
+    keyEvidenceMissingCount: 2,
+    keyEvidenceWeakCount: 1,
+    evidenceMissingDimensions: ['execution', 'market'],
+    deepRepairDimensions: ['execution', 'market'],
   });
 
   assert.equal(state.analysisStatus, 'DISPLAY_READY');
-  assert.equal(state.displayStatus, 'TRUSTED_READY');
+  assert.equal(state.displayStatus, 'BASIC_READY');
   assert.equal(state.fullyAnalyzed, false);
   assert.equal(state.incompleteReason, 'NO_DEEP_ANALYSIS');
-  assert.match(state.lightAnalysis.nextStep, /先做一个最小可验证版本|先快速验证|先保守观察/);
+  assert.match(state.lightAnalysis.nextStep, /先补 execution \/ market|先补 execution|先补/);
 });
 
 test('marks fallback repo as unsafe', () => {
@@ -67,6 +76,9 @@ test('marks fallback repo as unsafe', () => {
     hasIdeaExtract: false,
     hasCompleteness: false,
     oneLinerStrength: 'MEDIUM',
+    evidenceCoverageRate: 0.25,
+    keyEvidenceMissingCount: 1,
+    evidenceMissingDimensions: ['problem'],
   });
 
   assert.equal(state.displayStatus, 'UNSAFE');
@@ -88,6 +100,9 @@ test('maps strength skip to skipped by gate family and conservative display', ()
     deepAnalysisStatus: 'SKIPPED_BY_STRENGTH',
     deepAnalysisStatusReason: 'strength_weak',
     oneLinerStrength: 'WEAK',
+    evidenceCoverageRate: 0.28,
+    keyEvidenceMissingCount: 2,
+    evidenceMissingDimensions: ['user', 'monetization'],
   });
 
   assert.equal(state.analysisStatus, 'SKIPPED_BY_GATE');
@@ -108,8 +123,92 @@ test('marks queued deep as pending', () => {
     hasCompleteness: false,
     deepAnalysisStatus: 'PENDING',
     oneLinerStrength: 'MEDIUM',
+    evidenceCoverageRate: 0.36,
+    keyEvidenceMissingCount: 2,
+    evidenceMissingDimensions: ['execution', 'technical_maturity'],
+    deepRepairDimensions: ['execution', 'technical_maturity'],
   });
 
   assert.equal(state.analysisStatus, 'DEEP_PENDING');
   assert.equal(state.incompleteReason, 'QUEUED_NOT_FINISHED');
+});
+
+test('does not trust strong summary when key evidence is missing', () => {
+  const state = deriveRepositoryAnalysisState({
+    source: 'claude',
+    action: 'BUILD',
+    moneyPriority: 'P0',
+    hasSnapshot: true,
+    hasInsight: true,
+    hasFinalDecision: true,
+    hasIdeaFit: true,
+    hasIdeaExtract: true,
+    hasCompleteness: true,
+    hasClaudeReview: true,
+    hasRealUser: true,
+    hasClearUseCase: true,
+    isDirectlyMonetizable: true,
+    oneLinerStrength: 'STRONG',
+    evidenceCoverageRate: 0.41,
+    keyEvidenceMissingCount: 1,
+    evidenceMissingDimensions: ['problem'],
+  });
+
+  assert.equal(state.displayStatus, 'BASIC_READY');
+  assert.equal(state.frontendDecisionState, 'provisional');
+});
+
+test('evidence conflict degrades current action even when summary looks complete', () => {
+  const state = deriveRepositoryAnalysisState({
+    source: 'claude',
+    action: 'BUILD',
+    moneyPriority: 'P0',
+    hasSnapshot: true,
+    hasInsight: true,
+    hasFinalDecision: true,
+    hasIdeaFit: true,
+    hasIdeaExtract: true,
+    hasCompleteness: true,
+    hasClaudeReview: true,
+    hasRealUser: true,
+    hasClearUseCase: true,
+    isDirectlyMonetizable: true,
+    oneLinerStrength: 'STRONG',
+    evidenceCoverageRate: 0.78,
+    keyEvidenceConflictCount: 2,
+    evidenceConflictDimensions: ['user', 'monetization'],
+    decisionConflictDimensions: ['user', 'monetization'],
+  });
+
+  assert.equal(state.displayStatus, 'UNSAFE');
+  assert.equal(state.frontendDecisionState, 'degraded');
+  assert.match(state.lightAnalysis.caution, /user冲突 \/ monetization冲突/);
+});
+
+test('weak taxonomy gaps block trusted output even when deep is complete', () => {
+  const state = deriveRepositoryAnalysisState({
+    source: 'claude',
+    action: 'BUILD',
+    moneyPriority: 'P1',
+    hasSnapshot: true,
+    hasInsight: true,
+    hasFinalDecision: true,
+    hasIdeaFit: true,
+    hasIdeaExtract: true,
+    hasCompleteness: true,
+    hasClaudeReview: true,
+    hasRealUser: true,
+    hasClearUseCase: true,
+    isDirectlyMonetizable: true,
+    evidenceCoverageRate: 0.74,
+    evidenceWeakCount: 2,
+    keyEvidenceWeakCount: 2,
+    evidenceWeakDimensions: ['distribution', 'market'],
+    weakDrivenGaps: ['distribution_weak', 'market_weak'],
+    trustedBlockingGaps: ['distribution_weak', 'market_weak'],
+    keyEvidenceGapSeverity: 'MEDIUM',
+  });
+
+  assert.equal(state.displayStatus, 'BASIC_READY');
+  assert.equal(state.frontendDecisionState, 'provisional');
 });

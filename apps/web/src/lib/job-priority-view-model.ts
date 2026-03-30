@@ -397,7 +397,7 @@ function getJobTypeLabel(jobName: string) {
   }
 
   if (normalized.includes('claude')) {
-    return 'Claude 复核';
+    return '历史复核任务';
   }
 
   return jobName;

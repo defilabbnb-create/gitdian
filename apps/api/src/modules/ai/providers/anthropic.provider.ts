@@ -102,12 +102,16 @@ export class AnthropicProvider {
 
   private readonly logger = new Logger(AnthropicProvider.name);
 
+  isRetired() {
+    return this.readBoolean('CLAUDE_RUNTIME_RETIRED', true);
+  }
+
   isEnabled() {
-    return this.readBoolean('CLAUDE_ENABLED', false);
+    return !this.isRetired() && this.readBoolean('CLAUDE_ENABLED', false);
   }
 
   isConfigured() {
-    return Boolean(this.resolveApiKey() && this.resolveModel());
+    return !this.isRetired() && Boolean(this.resolveApiKey() && this.resolveModel());
   }
 
   async generateJson<T>(
@@ -115,6 +119,12 @@ export class AnthropicProvider {
   ): Promise<AnthropicProviderResult<T>> {
     const apiKey = this.resolveApiKey();
     const primaryModel = input.modelOverride ?? this.resolveModel();
+
+    if (this.isRetired()) {
+      throw new ServiceUnavailableException(
+        'Claude runtime is retired. Use the primary API analysis pipeline instead.',
+      );
+    }
 
     if (!this.isEnabled() || !apiKey || !primaryModel) {
       throw new ServiceUnavailableException(
@@ -297,6 +307,15 @@ export class AnthropicProvider {
   }
 
   async healthCheck(): Promise<AnthropicHealthCheckResult> {
+    if (this.isRetired()) {
+      return {
+        ok: false,
+        model: this.resolveModel(),
+        latencyMs: null,
+        error: 'CLAUDE runtime retired. Historical compatibility stays read-only.',
+      };
+    }
+
     if (!this.isEnabled() || !this.isConfigured()) {
       return {
         ok: false,

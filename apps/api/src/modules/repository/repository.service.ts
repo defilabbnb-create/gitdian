@@ -11,7 +11,6 @@ import {
 } from '@prisma/client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { ClaudeReviewService } from '../analysis/claude-review.service';
 import {
   MoneyPriorityInput,
   MoneyPriorityResult,
@@ -19,7 +18,17 @@ import {
 } from '../analysis/money-priority.service';
 import { RepositoryCachedRankingService } from '../analysis/repository-cached-ranking.service';
 import { RepositoryDecisionService } from '../analysis/repository-decision.service';
+import {
+  ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+  FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+} from '../analysis/helpers/frozen-analysis-pool.types';
+import {
+  evaluateAnalysisPoolIntakeGate,
+  readAnalysisPoolFreezeState,
+  readFrozenAnalysisPoolBatchSnapshot,
+} from '../analysis/helpers/frozen-analysis-pool.helper';
 import { resolveEffectiveOneLinerStrength } from '../analysis/helpers/one-liner-strength.helper';
+import { QueueService } from '../queue/queue.service';
 import {
   QueryRepositoriesDto,
   RepositoryRecommendedAction,
@@ -116,10 +125,10 @@ type RepositorySummary = {
 export class RepositoryService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly claudeReviewService: ClaudeReviewService,
     private readonly moneyPriorityService: MoneyPriorityService,
     private readonly repositoryCachedRankingService: RepositoryCachedRankingService,
     private readonly repositoryDecisionService: RepositoryDecisionService,
+    private readonly queueService: QueueService,
   ) {}
 
   private maybeScheduleHomepageClaudeReview(
@@ -130,28 +139,10 @@ export class RepositoryService {
       order: SortOrder;
     },
   ) {
-    if (
-      context.page !== 1 ||
-      context.sortBy !== RepositorySortBy.MONEY_PRIORITY ||
-      context.order !== SortOrder.DESC
-    ) {
-      return;
-    }
-
-    const candidateIds = items.slice(0, 5).map((item) => item.id);
-    if (!candidateIds.length) {
-      return;
-    }
-
-    void this.claudeReviewService
-      .reviewRepositoryIds(candidateIds, {
-        source: 'homepage_money_first',
-        topCandidate: true,
-        maxPerRun: candidateIds.length,
-      })
-      .catch(() => {
-        // Keep list queries read-only from the caller perspective.
-      });
+    void items;
+    void context;
+    // Homepage list reads stay read-only. Claude runtime was retired in favor of the
+    // primary API analysis pipeline, so list pages no longer enqueue background review.
   }
 
   private toOptionalBoolean(value: unknown): boolean | undefined {
@@ -174,6 +165,7 @@ export class RepositoryService {
   }
 
   async create(createRepositoryDto: CreateRepositoryDto) {
+    await this.assertAnalysisPoolRepositoryCreateAllowed();
     await this.ensureRepositoryDoesNotExist(createRepositoryDto);
 
     try {
@@ -956,16 +948,41 @@ export class RepositoryService {
   ) {
     await this.ensureRepositoryExists(id);
 
-    return this.claudeReviewService.reviewRepository(id, {
-      force: true,
-      source: 'manual',
-      userSuccessPatterns: options?.userSuccessPatterns ?? [],
-      userFailurePatterns: options?.userFailurePatterns ?? [],
-      preferredCategories: options?.preferredCategories ?? [],
-      avoidedCategories: options?.avoidedCategories ?? [],
-      recentValidatedWins: options?.recentValidatedWins ?? [],
-      recentDroppedReasons: options?.recentDroppedReasons ?? [],
-    });
+    const job = await this.queueService.enqueueSingleAnalysis(
+      id,
+      {
+        runFastFilter: true,
+        runCompleteness: true,
+        runIdeaFit: true,
+        runIdeaExtract: true,
+        forceRerun: true,
+        userSuccessPatterns: options?.userSuccessPatterns ?? [],
+        userFailurePatterns: options?.userFailurePatterns ?? [],
+        preferredCategories: options?.preferredCategories ?? [],
+        avoidedCategories: options?.avoidedCategories ?? [],
+        recentValidatedWins: options?.recentValidatedWins ?? [],
+        recentDroppedReasons: options?.recentDroppedReasons ?? [],
+      },
+      'legacy_claude_review_redirect',
+      {
+        metadata: {
+          redirectedFrom: 'repositories/:id/claude-review',
+          legacyClaudeEntry: true,
+          routerTaskIntent: 'review',
+          routerReasonSummary:
+            'Legacy Claude review endpoint now redirects into the primary API analysis pipeline.',
+        },
+      },
+    );
+
+    return {
+      status: 'redirected_to_primary_analysis' as const,
+      repositoryId: id,
+      runtime: 'api_primary_analysis' as const,
+      message:
+        'Claude review runtime has been retired. The repository was queued for a full primary-analysis rerun.',
+      job,
+    };
   }
 
   private async ensureRepositoryDoesNotExist(createRepositoryDto: CreateRepositoryDto) {
@@ -2292,5 +2309,32 @@ export class RepositoryService {
     }
 
     return null;
+  }
+
+  private async assertAnalysisPoolRepositoryCreateAllowed() {
+    if (typeof this.prisma.systemConfig?.findUnique !== 'function') {
+      return;
+    }
+    const [freezeRow, snapshotRow] = await Promise.all([
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+        },
+      }),
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+        },
+      }),
+    ]);
+    const gate = evaluateAnalysisPoolIntakeGate({
+      freezeState: readAnalysisPoolFreezeState(freezeRow?.configValue),
+      snapshot: readFrozenAnalysisPoolBatchSnapshot(snapshotRow?.configValue),
+      source: 'repository_create',
+    });
+
+    if (gate.decision === 'suppress_new_entry') {
+      throw new BadRequestException(gate.reason);
+    }
   }
 }

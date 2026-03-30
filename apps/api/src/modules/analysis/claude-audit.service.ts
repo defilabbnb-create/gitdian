@@ -176,19 +176,8 @@ export class ClaudeAuditService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    if (
-      process.env.ENABLE_QUEUE_WORKERS !== 'true' ||
-      !this.isEnabled() ||
-      !this.isConfigured()
-    ) {
-      return;
-    }
-
-    this.auditTimer = setInterval(() => {
-      void this.maybeRunScheduledAudit();
-    }, this.readInt('CLAUDE_AUDIT_INTERVAL_MS', 6 * 60 * 60 * 1_000));
-
-    void this.maybeRunScheduledAudit();
+    // Claude runtime has been retired. Historical audit snapshots remain readable,
+    // but new scheduled Claude audits are no longer started.
   }
 
   onModuleDestroy() {

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { JobStatus, Prisma, RepositorySourceType } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -14,6 +14,15 @@ import { JobLogService } from '../job-log/job-log.service';
 import { QUEUE_JOB_TYPES } from '../queue/queue.constants';
 import { QueueService } from '../queue/queue.service';
 import { SettingsService } from '../settings/settings.service';
+import {
+  ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+  FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+} from '../analysis/helpers/frozen-analysis-pool.types';
+import {
+  evaluateAnalysisPoolIntakeGate,
+  readAnalysisPoolFreezeState,
+  readFrozenAnalysisPoolBatchSnapshot,
+} from '../analysis/helpers/frozen-analysis-pool.helper';
 import { BackfillCreatedRepositoriesDto } from './dto/backfill-created-repositories.dto';
 import {
   FetchRepositoriesDto,
@@ -1217,6 +1226,8 @@ export class GitHubService {
       };
     }
 
+    await this.assertAnalysisPoolRepositoryCreateAllowed();
+
     const createdRepository = await this.prisma.repository.create({
       data: repositoryCreateData,
       select: {
@@ -2406,5 +2417,32 @@ export class GitHubService {
     }
 
     return content;
+  }
+
+  private async assertAnalysisPoolRepositoryCreateAllowed() {
+    if (typeof this.prisma.systemConfig?.findUnique !== 'function') {
+      return;
+    }
+    const [freezeRow, snapshotRow] = await Promise.all([
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+        },
+      }),
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+        },
+      }),
+    ]);
+    const gate = evaluateAnalysisPoolIntakeGate({
+      freezeState: readAnalysisPoolFreezeState(freezeRow?.configValue),
+      snapshot: readFrozenAnalysisPoolBatchSnapshot(snapshotRow?.configValue),
+      source: 'github_fetch',
+    });
+
+    if (gate.decision === 'suppress_new_entry') {
+      throw new BadRequestException(gate.reason);
+    }
   }
 }

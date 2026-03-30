@@ -25,7 +25,7 @@ export function RepositoryDetailContentSummary({
   return (
     <section className="rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-        Content Summary
+        README / 内容
       </p>
       <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
         README 与仓库内容摘要
@@ -47,14 +47,14 @@ export function RepositoryDetailContentSummary({
             emptyText="当前没有可展示的目录内容。"
           />
           <TagPanel
-            title="Root Files"
+            title="根目录文件"
             items={rootFiles}
-            emptyText="暂无 root files 摘要。"
+            emptyText="暂无根目录文件摘要。"
           />
           <TagPanel
-            title="Package Manifests"
+            title="依赖清单"
             items={packageManifests}
-            emptyText="暂无 package manifests 摘要。"
+            emptyText="暂无依赖清单摘要。"
           />
         </div>
 
@@ -71,8 +71,8 @@ export function RepositoryDetailContentSummary({
             ].filter(Boolean) as string[]}
             emptyText="当前没有明显工程化特征。"
           />
-          <ObjectList title="Recent Commits" items={recentCommits} emptyText="暂无 commit 摘要。" />
-          <ObjectList title="Recent Issues" items={recentIssues} emptyText="暂无 issue 摘要。" />
+          <ObjectList title="最近提交" items={recentCommits} emptyText="暂无提交摘要。" />
+          <ObjectList title="最近问题" items={recentIssues} emptyText="暂无问题摘要。" />
         </div>
       </div>
     </section>
@@ -179,13 +179,13 @@ function FileTreePanel({
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-slate-900">
-                  {item.type === 'dir' ? '[DIR] ' : '[FILE] '}
+                  {item.type === 'dir' ? '[目录] ' : '[文件] '}
                   {item.name}
                 </p>
                 <p className="mt-1 break-all text-xs leading-5 text-slate-500">{item.path}</p>
               </div>
               <div className="shrink-0 text-right text-xs text-slate-500">
-                <p>{item.type === 'dir' ? 'Folder' : 'File'}</p>
+                <p>{item.type === 'dir' ? '目录' : '文件'}</p>
                 {typeof item.size === 'number' ? <p className="mt-1">{formatSize(item.size)}</p> : null}
               </div>
             </div>

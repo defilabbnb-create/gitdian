@@ -33,7 +33,6 @@ function createService(overrides = {}) {
   return new RadarDailyReportService(
     summaryService,
     telegramNotifierService,
-    claudeReviewService,
   );
 }
 

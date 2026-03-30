@@ -33,12 +33,12 @@ export function SettingsHealthOverview({
           helper={summary.github.helper}
         />
         <HealthMiniCard
-          label="本地判断"
-          value={summary.omlx.value}
-          helper={summary.omlx.helper}
+          label="API 主链"
+          value={summary.openai.value}
+          helper={summary.openai.helper}
         />
         <HealthMiniCard
-          label="可选增强"
+          label="历史复核入口"
           value={summary.claude.value}
           helper={summary.claude.helper}
         />
@@ -80,7 +80,7 @@ function buildHealthSummary(
         value: '待确认',
         helper: '运行检查暂时不可用。',
       },
-      omlx: {
+      openai: {
         value: '待确认',
         helper: '先按已有配置运行。',
       },
@@ -99,22 +99,22 @@ function buildHealthSummary(
         value: '待检查',
         helper: '还没有最新的抓取状态。',
       },
-      omlx: {
+      openai: {
         value: '待检查',
-        helper: '还没有最新的本地判断状态。',
+        helper: '还没有最新的 API 主链状态。',
       },
       claude: {
         value: '待检查',
-        helper: '增强链路状态稍后再看。',
+        helper: '历史复核入口状态稍后再看。',
       },
     };
   }
 
   const githubOk = health.github.ok;
-  const omlxOk = health.ai.omlx.ok;
+  const openaiOk = health.ai.openai.ok;
   const claudeOk = aiHealth?.claude.ok ?? false;
   const databaseOk = health.database.ok;
-  const coreHealthy = githubOk && omlxOk && databaseOk;
+  const coreHealthy = openaiOk && databaseOk;
 
   return {
     title: coreHealthy ? '当前主链路可运行' : '当前主链路有待处理项',
@@ -127,17 +127,17 @@ function buildHealthSummary(
         ? 'GitHub token 已配置，先看是否限流或延迟。'
         : '当前缺少 token，抓取稳定性会受影响。',
     },
-    omlx: {
-      value: omlxOk ? '本地判断正常' : '本地判断待恢复',
-      helper: omlxOk
-        ? `当前模型：${health.ai.omlx.model ?? '--'}`
-        : health.ai.omlx.error ?? '需要展开工程细项排查。',
+    openai: {
+      value: openaiOk ? '主分析正常' : '主分析待恢复',
+      helper: openaiOk
+        ? `当前模型：${health.ai.openai.model ?? '--'}`
+        : health.ai.openai.error ?? '需要优先恢复 API 主链。',
     },
     claude: {
-      value: claudeOk ? '增强可用' : '增强未就绪',
+      value: claudeOk ? '检测到残留可用' : '已停用',
       helper: claudeOk
-        ? `当前模型：${aiHealth?.claude.model ?? '--'}`
-        : '不影响主链路，按需再看。',
+        ? `当前模型：${aiHealth?.claude.model ?? '--'}，但运行入口已不再使用。`
+        : '不影响主分析和前端结果展示。',
     },
   };
 }

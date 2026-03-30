@@ -10,7 +10,13 @@ import { AnalysisOrchestratorService } from './analysis-orchestrator.service';
 import { ClaudeReviewService } from './claude-review.service';
 import { ClaudeTrainingHintsService } from './claude-training-hints.service';
 import { CompletenessService } from './completeness.service';
+import { CalibrationSeedBatchService } from './calibration-seed-batch.service';
+import { FrozenAnalysisPoolService } from './frozen-analysis-pool.service';
 import { HistoricalDataRecoveryService } from './historical-data-recovery.service';
+import { HistoricalDataInventoryService } from './historical-data-inventory.service';
+import { HistoricalRepairBucketingService } from './historical-repair-bucketing.service';
+import { HistoricalRepairPriorityService } from './historical-repair-priority.service';
+import { EvidenceMapService } from './evidence-map.service';
 import { IdeaExtractController } from './idea-extract.controller';
 import { IdeaExtractService } from './idea-extract.service';
 import { IdeaFitController } from './idea-fit.controller';
@@ -29,6 +35,8 @@ import { TrainingKnowledgeExportService } from './training-knowledge-export.serv
   controllers: [AnalysisController, IdeaFitController, IdeaExtractController],
   providers: [
     CompletenessService,
+    CalibrationSeedBatchService,
+    FrozenAnalysisPoolService,
     IdeaFitService,
     IdeaExtractService,
     IdeaSnapshotService,
@@ -45,7 +53,12 @@ import { TrainingKnowledgeExportService } from './training-knowledge-export.serv
     ClaudeTrainingHintsService,
     ClaudeReviewService,
     TrainingKnowledgeExportService,
+    HistoricalDataInventoryService,
+    HistoricalRepairBucketingService,
+    HistoricalRepairPriorityService,
+    EvidenceMapService,
     HistoricalDataRecoveryService,
+    CalibrationSeedBatchService,
     AnalysisOrchestratorService,
   ],
   exports: [
@@ -64,7 +77,13 @@ import { TrainingKnowledgeExportService } from './training-knowledge-export.serv
     ClaudeTrainingHintsService,
     ClaudeReviewService,
     TrainingKnowledgeExportService,
+    HistoricalDataInventoryService,
+    HistoricalRepairBucketingService,
+    HistoricalRepairPriorityService,
+    EvidenceMapService,
     HistoricalDataRecoveryService,
+    CalibrationSeedBatchService,
+    FrozenAnalysisPoolService,
   ],
 })
 export class AnalysisModule {}

@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { ClaudeAuditService } from '../analysis/claude-audit.service';
-import { ClaudeReviewService } from '../analysis/claude-review.service';
 import { QueueService } from '../queue/queue.service';
 import { BackfillCreatedRepositoriesDto } from './dto/backfill-created-repositories.dto';
 import { FetchRepositoriesDto } from './dto/fetch-repositories.dto';
@@ -10,6 +9,8 @@ import { RadarDailyReportService } from './radar-daily-report.service';
 import { RadarDailySummaryService } from './radar-daily-summary.service';
 import { GitHubService } from './github.service';
 
+type EnqueuedAnalysisJob = Awaited<ReturnType<QueueService['enqueueSingleAnalysis']>>;
+
 @Controller('github')
 export class GitHubController {
   constructor(
@@ -18,7 +19,6 @@ export class GitHubController {
     private readonly radarDailySummaryService: RadarDailySummaryService,
     private readonly radarDailyReportService: RadarDailyReportService,
     private readonly gitHubRadarService: GitHubRadarService,
-    private readonly claudeReviewService: ClaudeReviewService,
     private readonly claudeAuditService: ClaudeAuditService,
   ) {}
 
@@ -148,46 +148,111 @@ export class GitHubController {
           ]),
         )
       : [];
-    const data = summary
-      ? await this.claudeReviewService.reviewRepositoryIds(repositoryIds, {
-          topCandidate: true,
-          source: 'manual',
-        })
-      : { processed: 0, results: [] };
 
-    if (summary && data.results.some((result) => result.status === 'reviewed')) {
+    if (!summary || !repositoryIds.length) {
+      return {
+        success: true,
+        data: {
+          status: 'skipped',
+          reason: 'no_summary_candidates',
+          redirectedTo: 'primary_analysis',
+          queuedCount: 0,
+          jobs: [],
+        },
+        message: 'No latest summary candidates were available for rerun.',
+      };
+    }
+
+    const jobs = await Promise.allSettled(
+      repositoryIds.map((repositoryId) =>
+        this.queueService.enqueueSingleAnalysis(
+          repositoryId,
+          {
+            runFastFilter: true,
+            runCompleteness: true,
+            runIdeaFit: true,
+            runIdeaExtract: true,
+            forceRerun: true,
+          },
+          'legacy_claude_review_redirect',
+          {
+            metadata: {
+              redirectedFrom: 'github/radar/claude-review/run-latest',
+              legacyClaudeEntry: true,
+              routerTaskIntent: 'review',
+              routerReasonSummary:
+                'Legacy radar Claude review endpoint now reruns the primary API analysis pipeline.',
+            },
+          },
+        ),
+      ),
+    );
+
+    const queuedJobs = jobs
+      .filter(
+        (result): result is PromiseFulfilledResult<EnqueuedAnalysisJob> =>
+          result.status === 'fulfilled',
+      )
+      .map((result) => result.value);
+    const failures = jobs
+      .filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      .map((result) =>
+        result.reason instanceof Error ? result.reason.message : 'Unknown error',
+      );
+
+    if (queuedJobs.length) {
       await this.radarDailySummaryService.markSummaryForRecompute(summary.date);
     }
+
+    const data = {
+      status: 'redirected_to_primary_analysis' as const,
+      runtime: 'api_primary_analysis' as const,
+      summaryDate: summary.date,
+      queuedCount: queuedJobs.length,
+      failureCount: failures.length,
+      repositoryIds,
+      jobs: queuedJobs,
+      failures,
+    };
 
     return {
       success: true,
       data,
-      message: 'Latest Claude review attempt completed.',
+      message:
+        'Legacy radar Claude review endpoint redirected to the primary analysis pipeline.',
     };
   }
 
   @Post('radar/claude-audit/run')
   async runClaudeAudit() {
-    const data = await this.claudeAuditService.runAudit({
-      source: 'manual',
-      force: true,
-    });
+    const data = {
+      status: 'disabled',
+      runtimeEnabled: false,
+      redirectedTo: 'primary_analysis',
+      reason:
+        'Claude runtime has been retired. Use the primary API analysis pipeline and frontend-derived decision assets instead.',
+    };
 
     return {
       success: true,
       data,
-      message: 'Claude quality audit completed.',
+      message: 'Claude audit runtime is disabled.',
     };
   }
 
   @Get('radar/claude-audit/latest')
   async getLatestClaudeAudit() {
-    const data = await this.claudeAuditService.getLatestAudit();
+    const data = {
+      runtimeEnabled: false,
+      latestAudit: await this.claudeAuditService.getLatestAudit(),
+    };
 
     return {
       success: true,
       data,
-      message: 'Latest Claude quality audit fetched.',
+      message: 'Latest historical Claude audit fetched.',
     };
   }
 }

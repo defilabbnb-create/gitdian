@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, startTransition } from 'react';
+import { type ReactNode, useEffect, useState, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { cancelJobLog, retryJobLog } from '@/lib/api/job-logs';
 import { JobLogItem } from '@/lib/types/repository';
@@ -84,6 +84,11 @@ export function JobListItem({
   const isChildJob = Boolean(job.parentJobId);
   const allowInlineActions = isPriority || !isChildJob;
   const displayName = getJobDisplayName(job.jobName);
+  const repositoryLabel = extractRepositoryName(job) ?? relatedRepositoryId ?? '批量或系统级任务';
+  const queueLabel = job.queueName ?? '未标记队列';
+  const payloadSummary = summarizeObject(job.payload);
+  const resultSummary = summarizeObject(job.result);
+  const latestStateLabel = job.queueState ?? job.jobStatus;
 
   useEffect(() => {
     if (isFocused) {
@@ -127,6 +132,17 @@ export function JobListItem({
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
             {executionSummary}
           </p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-700">
+              队列 · {queueLabel}
+            </span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-700">
+              仓库 · {repositoryLabel}
+            </span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-700">
+              最近状态 · {latestStateLabel}
+            </span>
+          </div>
           <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-slate-600">
             <span>开始于：{formatDateTime(job.startedAt)}</span>
             <span>结束于：{formatDateTime(job.finishedAt)}</span>
@@ -134,6 +150,20 @@ export function JobListItem({
         </div>
 
         <JobStatusBadge status={job.jobStatus} />
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <DetailMetric label="输入摘要" value={payloadSummary} subdued />
+        <DetailMetric label="输出摘要" value={resultSummary} subdued />
+        <DetailMetric
+          label="耗时 / 重试"
+          value={
+            typeof job.durationMs === 'number'
+              ? `${Math.round(job.durationMs)} ms · 重试 ${job.retryCount ?? 0}`
+              : `未记录耗时 · 重试 ${job.retryCount ?? 0}`
+          }
+          subdued
+        />
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -169,7 +199,7 @@ export function JobListItem({
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                 执行输入
               </p>
-              <pre className="overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+              <pre className="max-h-[26rem] overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
                 {JSON.stringify(job.payload ?? null, null, 2)}
               </pre>
             </div>
@@ -178,7 +208,7 @@ export function JobListItem({
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                 执行输出
               </p>
-              <pre className="overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+              <pre className="max-h-[26rem] overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">
                 {JSON.stringify(job.result ?? null, null, 2)}
               </pre>
             </div>
@@ -300,16 +330,24 @@ function JobItemActions({
 function DetailMetric({
   label,
   value,
+  subdued = false,
 }: {
   label: string;
-  value: string | number;
+  value: ReactNode;
+  subdued?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+    <div
+      className={`rounded-2xl border px-4 py-3 ${
+        subdued ? 'border-slate-200 bg-slate-50' : 'border-slate-200 bg-white'
+      }`}
+    >
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
         {label}
       </p>
-      <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
+      <div className="mt-2 text-sm font-semibold leading-6 text-slate-900">
+        {value}
+      </div>
     </div>
   );
 }
@@ -363,4 +401,31 @@ function extractRepositoryId(job: JobLogItem) {
       : null;
 
   return resultRepositoryId;
+}
+
+function extractRepositoryName(job: JobLogItem) {
+  const payloadRepositoryName =
+    job.payload && typeof job.payload.repositoryName === 'string'
+      ? job.payload.repositoryName
+      : null;
+
+  if (payloadRepositoryName) {
+    return payloadRepositoryName;
+  }
+
+  const payloadFullName =
+    job.payload && typeof job.payload.fullName === 'string'
+      ? job.payload.fullName
+      : null;
+
+  if (payloadFullName) {
+    return payloadFullName;
+  }
+
+  const resultRepositoryName =
+    job.result && typeof job.result.repositoryName === 'string'
+      ? job.result.repositoryName
+      : null;
+
+  return resultRepositoryName;
 }

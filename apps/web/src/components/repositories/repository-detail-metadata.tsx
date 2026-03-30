@@ -8,22 +8,22 @@ export function RepositoryDetailMetadata({
   repository,
 }: RepositoryDetailMetadataProps) {
   const metadataItems = [
-    ['Owner', repository.ownerLogin],
-    ['Full Name', repository.fullName],
-    ['Homepage', repository.homepage || '--'],
-    ['Language', repository.language || '--'],
+    ['仓库作者', repository.ownerLogin],
+    ['仓库全名', repository.fullName],
+    ['主页', repository.homepage || '--'],
+    ['语言', repository.language || '--'],
     ['License', repository.license || '--'],
-    ['Default Branch', repository.defaultBranch || '--'],
-    ['Created', formatDate(repository.createdAtGithub)],
-    ['Updated', formatDate(repository.updatedAtGithub)],
-    ['Pushed', formatDate(repository.pushedAtGithub)],
-    ['Source', repository.sourceType],
+    ['默认分支', repository.defaultBranch || '--'],
+    ['创建时间', formatDate(repository.createdAtGithub)],
+    ['最近更新', formatDate(repository.updatedAtGithub)],
+    ['最近推送', formatDate(repository.pushedAtGithub)],
+    ['来源', repository.sourceType],
   ];
 
   return (
     <section className="rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-        Repository Metadata
+        仓库元数据
       </p>
       <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
         基础仓库信息
@@ -47,15 +47,15 @@ export function RepositoryDetailMetadata({
         <TagCluster
           title="Topics"
           items={repository.topics}
-          emptyText="这个仓库还没有 topics。"
+          emptyText="这个仓库还没有 Topics。"
         />
         <TagCluster
           title="仓库状态"
           items={[
-            repository.archived ? 'Archived' : '未归档',
-            repository.disabled ? 'Disabled' : '可访问',
-            repository.hasWiki ? 'Has Wiki' : 'No Wiki',
-            repository.hasIssues ? 'Has Issues' : 'Issues Off',
+            repository.archived ? '已归档' : '未归档',
+            repository.disabled ? '已停用' : '可访问',
+            repository.hasWiki ? '有 Wiki' : '无 Wiki',
+            repository.hasIssues ? '有 Issues' : 'Issues 已关闭',
           ]}
           emptyText="暂无状态信息。"
         />
@@ -64,7 +64,7 @@ export function RepositoryDetailMetadata({
       {repository.snapshots.length ? (
         <div className="mt-6 rounded-[28px] border border-slate-200 bg-slate-50 p-5">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Recent Snapshots
+            最近快照
           </p>
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {repository.snapshots.slice(0, 3).map((snapshot) => (

@@ -897,6 +897,18 @@ export class RadarDailySummaryService {
           sourceLabelZh: '兜底判断',
           moneyDecision: fallbackMoneyDecision,
         }),
+        evidenceDecision: {
+          evidenceCoverageRate: 0,
+          supportingEvidence: [],
+          weakEvidence: [],
+          missingEvidence: [],
+          conflictingEvidence: [],
+          worthReviewing: true,
+          worthValidating: false,
+          worthBuilding: false,
+          currentAction: 'downgrade_only' as const,
+          summaryZh: '当前只是兜底判断，证据不足以支撑强结论。',
+        },
       };
 
     return {

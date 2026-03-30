@@ -27,6 +27,11 @@ export type RepoAnalysisStateInput = {
   headlineUserConflict: boolean;
   headlineCategoryConflict: boolean;
   monetizationOverclaim: boolean;
+  evidenceCoverageRate?: number | null;
+  keyEvidenceMissingCount?: number;
+  keyEvidenceWeakCount?: number;
+  keyEvidenceConflictCount?: number;
+  decisionConflictCount?: number;
   lowValue: boolean;
   appearedOnHomepage: boolean;
   appearedInDailySummary: boolean;
@@ -74,6 +79,50 @@ export type TopBottleneck = {
   evidence: string;
 };
 
+export type HistoricalRepairActionBacklogRow = {
+  action: string;
+  pendingJobs: number;
+  runningJobs: number;
+  repoCount: number;
+};
+
+export type ReportRepoPanelRow = {
+  repoId: string;
+  fullName: string;
+  htmlUrl: string;
+  priority: string | null;
+  action: string | null;
+  historicalRepairAction: string | null;
+  historicalRepairBucket: string | null;
+  historicalRepairPriorityScore: number | null;
+  cleanupState: string | null;
+  frontendDecisionState: string | null;
+  pendingAnalysisJobs: number;
+  runningAnalysisJobs: number;
+  pendingSnapshotJobs: number;
+  runningSnapshotJobs: number;
+  pendingDeepJobs: number;
+  runningDeepJobs: number;
+  latestSnapshotJobState: string | null;
+  latestDeepJobState: string | null;
+  inflightActions: string[];
+  inflightAction: string | null;
+  hasSnapshot: boolean;
+  hasInsight: boolean;
+  hasFinalDecision: boolean;
+  hasIdeaFit: boolean;
+  hasIdeaExtract: boolean;
+  hasCompleteness: boolean;
+  fullyAnalyzed: boolean;
+  incomplete: boolean;
+  trustedListReady: boolean;
+  primaryIncompleteReason: IncompleteReason | null;
+  appearedOnHomepage: boolean;
+  deepDone: boolean;
+  needsDeepRepair: boolean;
+  needsDecisionRecalc: boolean;
+};
+
 export function getTaskAnalysisDefinitions() {
   return {
     fullyAnalyzed:
@@ -96,12 +145,33 @@ export function evaluateRepoAnalysisState(
 ): RepoAnalysisState {
   const deepDone =
     input.hasIdeaFit && input.hasIdeaExtract && input.hasCompleteness;
+  const hasEvidenceSignals =
+    typeof input.evidenceCoverageRate === 'number' ||
+    typeof input.keyEvidenceMissingCount === 'number' ||
+    typeof input.keyEvidenceWeakCount === 'number' ||
+    typeof input.keyEvidenceConflictCount === 'number' ||
+    typeof input.decisionConflictCount === 'number';
+  const keyEvidenceMissingCount = normalizeCount(input.keyEvidenceMissingCount);
+  const keyEvidenceWeakCount = normalizeCount(input.keyEvidenceWeakCount);
+  const keyEvidenceConflictCount = normalizeCount(input.keyEvidenceConflictCount);
+  const decisionConflictCount = normalizeCount(input.decisionConflictCount);
+  const evidenceCoverageRate = normalizeRatio(input.evidenceCoverageRate);
+  const evidenceConflict =
+    keyEvidenceConflictCount > 0 || decisionConflictCount > 0;
+  const evidenceWeak = keyEvidenceWeakCount > 0;
+  const evidenceMissing = keyEvidenceMissingCount > 0;
+  const evidenceCoverageWeak =
+    evidenceCoverageRate !== null && evidenceCoverageRate < 0.45;
   const fullyAnalyzed =
     input.hasSnapshot &&
     input.hasInsight &&
     input.hasFinalDecision &&
     deepDone &&
-    !input.fallbackDirty;
+    !input.fallbackDirty &&
+    !evidenceConflict &&
+    !evidenceMissing &&
+    !evidenceWeak &&
+    !evidenceCoverageWeak;
   const incomplete = !fullyAnalyzed;
 
   const queueBlocked =
@@ -150,21 +220,28 @@ export function evaluateRepoAnalysisState(
     input.hasSnapshot &&
     input.hasInsight &&
     input.hasFinalDecision &&
+    deepDone &&
     !input.fallbackDirty &&
-    !input.badOneliner &&
     !input.severeConflict &&
-    !input.headlineUserConflict &&
-    !input.headlineCategoryConflict &&
-    !input.monetizationOverclaim;
+    !(
+      hasEvidenceSignals
+        ? evidenceConflict || evidenceMissing || evidenceWeak || evidenceCoverageWeak
+        : input.badOneliner ||
+            input.headlineUserConflict ||
+            input.headlineCategoryConflict ||
+            input.monetizationOverclaim
+    );
 
   const homepageUnsafe = Boolean(
     input.lowValue ||
       input.fallbackDirty ||
-      input.badOneliner ||
       input.severeConflict ||
-      input.headlineUserConflict ||
-      input.headlineCategoryConflict ||
-      input.monetizationOverclaim ||
+      (hasEvidenceSignals
+        ? evidenceConflict || evidenceMissing
+        : input.badOneliner ||
+            input.headlineUserConflict ||
+            input.headlineCategoryConflict ||
+            input.monetizationOverclaim) ||
       !trustedListReady ||
       (!deepDone &&
         (input.appearedOnHomepage ||
@@ -332,6 +409,27 @@ export function buildHumanSummary(report: {
   bottleneckSummary?: {
     top3Bottlenecks: TopBottleneck[];
   };
+  backlogPanel?: {
+    analysisJobs?: {
+      pendingJobs: number;
+      runningJobs: number;
+      queuedOrRunningRepos: number;
+    };
+  };
+  incompletePanel?: {
+    totalIncompleteRepos: number;
+    queuedOrRunningIncompleteRepos: number;
+    countsByPrimaryReason?: Record<string, number>;
+  };
+  readyToRankPanel?: {
+    strictReadyRepos: number;
+    strictReadyCoverage: number;
+    highPriorityReadySummary?: {
+      total: number;
+      ready: number;
+      coverage: number;
+    };
+  };
 }) {
   const lines = [`GitDian 任务与分析完成度报告`, `生成时间：${report.generatedAt}`];
 
@@ -381,6 +479,36 @@ export function buildHumanSummary(report: {
     );
   }
 
+  if (report.backlogPanel?.analysisJobs) {
+    lines.push(
+      '',
+      `当前分析 backlog：queued/running repo ${formatInteger(report.backlogPanel.analysisJobs.queuedOrRunningRepos)}，pending jobs ${formatInteger(report.backlogPanel.analysisJobs.pendingJobs)}，running jobs ${formatInteger(report.backlogPanel.analysisJobs.runningJobs)}`,
+    );
+  }
+
+  if (report.incompletePanel) {
+    const mostCommonIncompleteReason =
+      Object.entries(report.incompletePanel.countsByPrimaryReason ?? {}).sort(
+        (left, right) => right[1] - left[1],
+      )[0]?.[0] ?? 'UNKNOWN';
+    lines.push(
+      '',
+      `当前 incomplete backlog：${formatInteger(report.incompletePanel.totalIncompleteRepos)}，其中已在队列/运行中 ${formatInteger(report.incompletePanel.queuedOrRunningIncompleteRepos)}，最常见原因 ${mostCommonIncompleteReason}`,
+    );
+  }
+
+  if (report.readyToRankPanel) {
+    lines.push(
+      '',
+      `ready-to-rank：${formatInteger(report.readyToRankPanel.strictReadyRepos)} / ${formatInteger(report.repoSummary?.totalRepos ?? 0)}（coverage ${(report.readyToRankPanel.strictReadyCoverage * 100).toFixed(2)}%）`,
+    );
+    if (report.readyToRankPanel.highPriorityReadySummary) {
+      lines.push(
+        `高优先级 ready：${formatInteger(report.readyToRankPanel.highPriorityReadySummary.ready)} / ${formatInteger(report.readyToRankPanel.highPriorityReadySummary.total)}（coverage ${(report.readyToRankPanel.highPriorityReadySummary.coverage * 100).toFixed(2)}%）`,
+      );
+    }
+  }
+
   if (report.bottleneckSummary?.top3Bottlenecks?.length) {
     lines.push('', 'Top 3 瓶颈：');
     for (const item of report.bottleneckSummary.top3Bottlenecks) {
@@ -399,6 +527,333 @@ export function buildMarkdownReport(report: Record<string, unknown>) {
   )}\n\`\`\`\n`;
 }
 
+export function buildAnalysisBacklogPanel(args: {
+  snapshotQueue?: QueueHealthRow | null;
+  deepQueue?: QueueHealthRow | null;
+  actionBreakdown: HistoricalRepairActionBacklogRow[];
+  repos: ReportRepoPanelRow[];
+  limit: number;
+}) {
+  const inflightRepos = args.repos.filter(
+    (item) => item.pendingAnalysisJobs > 0 || item.runningAnalysisJobs > 0,
+  );
+  const pendingJobs = inflightRepos.reduce(
+    (sum, item) => sum + item.pendingAnalysisJobs,
+    0,
+  );
+  const runningJobs = inflightRepos.reduce(
+    (sum, item) => sum + item.runningAnalysisJobs,
+    0,
+  );
+  const pendingSnapshotJobs = inflightRepos.reduce(
+    (sum, item) => sum + item.pendingSnapshotJobs,
+    0,
+  );
+  const runningSnapshotJobs = inflightRepos.reduce(
+    (sum, item) => sum + item.runningSnapshotJobs,
+    0,
+  );
+  const pendingDeepJobs = inflightRepos.reduce(
+    (sum, item) => sum + item.pendingDeepJobs,
+    0,
+  );
+  const runningDeepJobs = inflightRepos.reduce(
+    (sum, item) => sum + item.runningDeepJobs,
+    0,
+  );
+
+  const topInflightRepos = inflightRepos
+    .slice()
+    .sort(comparePanelRows)
+    .slice(0, Math.max(1, args.limit))
+    .map((item) => ({
+      repoId: item.repoId,
+      fullName: item.fullName,
+      historicalRepairBucket: item.historicalRepairBucket,
+      historicalRepairPriorityScore: item.historicalRepairPriorityScore,
+      cleanupState: item.cleanupState,
+      frontendDecisionState: item.frontendDecisionState,
+      inflightAction: item.inflightAction,
+      inflightActions: item.inflightActions,
+      pendingAnalysisJobs: item.pendingAnalysisJobs,
+      runningAnalysisJobs: item.runningAnalysisJobs,
+      pendingSnapshotJobs: item.pendingSnapshotJobs,
+      runningSnapshotJobs: item.runningSnapshotJobs,
+      pendingDeepJobs: item.pendingDeepJobs,
+      runningDeepJobs: item.runningDeepJobs,
+      primaryIncompleteReason: item.primaryIncompleteReason,
+    }));
+
+  return {
+    analysisJobs: {
+      pendingJobs,
+      runningJobs,
+      queuedOrRunningRepos: inflightRepos.length,
+      snapshotJobs: {
+        pendingJobs: pendingSnapshotJobs,
+        runningJobs: runningSnapshotJobs,
+      },
+      deepJobs: {
+        pendingJobs: pendingDeepJobs,
+        runningJobs: runningDeepJobs,
+      },
+    },
+    runtimeQueues: {
+      snapshotQueue: args.snapshotQueue ?? null,
+      deepQueue: args.deepQueue ?? null,
+    },
+    historicalRepairActionBreakdown: args.actionBreakdown
+      .slice()
+      .sort(
+        (left, right) =>
+          right.pendingJobs +
+          right.runningJobs -
+          (left.pendingJobs + left.runningJobs),
+      ),
+    topInflightRepos,
+  };
+}
+
+export function buildIncompletePanel(args: {
+  repos: ReportRepoPanelRow[];
+  limit: number;
+}) {
+  const incompleteRepos = args.repos.filter((item) => item.incomplete);
+  const countsByPrimaryReason: Record<string, number> = {};
+
+  for (const item of incompleteRepos) {
+    const key = item.primaryIncompleteReason ?? 'UNKNOWN';
+    countsByPrimaryReason[key] = (countsByPrimaryReason[key] ?? 0) + 1;
+  }
+
+  const highPriorityIncomplete = incompleteRepos
+    .slice()
+    .sort(comparePanelRows)
+    .slice(0, Math.max(1, args.limit))
+    .map((item) => ({
+      repoId: item.repoId,
+      fullName: item.fullName,
+      historicalRepairBucket: item.historicalRepairBucket,
+      historicalRepairPriorityScore: item.historicalRepairPriorityScore,
+      cleanupState: item.cleanupState,
+      frontendDecisionState: item.frontendDecisionState,
+      priority: item.priority,
+      action: item.action,
+      historicalRepairAction: item.historicalRepairAction,
+      primaryIncompleteReason: item.primaryIncompleteReason,
+      isQueuedOrRunning:
+        item.pendingAnalysisJobs > 0 || item.runningAnalysisJobs > 0,
+      inflightAction: item.inflightAction,
+      hasSnapshot: item.hasSnapshot,
+      hasInsight: item.hasInsight,
+      hasFinalDecision: item.hasFinalDecision,
+      hasCompleteness: item.hasCompleteness,
+      hasIdeaFit: item.hasIdeaFit,
+      hasIdeaExtract: item.hasIdeaExtract,
+      needsDeepRepair: item.needsDeepRepair,
+      needsDecisionRecalc: item.needsDecisionRecalc,
+    }));
+
+  return {
+    totalIncompleteRepos: incompleteRepos.length,
+    queuedOrRunningIncompleteRepos: incompleteRepos.filter(
+      (item) => item.pendingAnalysisJobs > 0 || item.runningAnalysisJobs > 0,
+    ).length,
+    countsByPrimaryReason,
+    operationalBreakdown: {
+      noSnapshot: incompleteRepos.filter(
+        (item) => item.primaryIncompleteReason === 'NO_SNAPSHOT',
+      ).length,
+      noInsight: incompleteRepos.filter(
+        (item) => item.primaryIncompleteReason === 'NO_INSIGHT',
+      ).length,
+      noFinalDecision: incompleteRepos.filter(
+        (item) => item.primaryIncompleteReason === 'NO_FINAL_DECISION',
+      ).length,
+      noDeepAnalysis: incompleteRepos.filter(
+        (item) => item.primaryIncompleteReason === 'NO_DEEP_ANALYSIS',
+      ).length,
+      queuedNotFinished: incompleteRepos.filter(
+        (item) => item.primaryIncompleteReason === 'QUEUED_NOT_FINISHED',
+      ).length,
+      failedDuringAnalysis: incompleteRepos.filter(
+        (item) => item.primaryIncompleteReason === 'FAILED_DURING_ANALYSIS',
+      ).length,
+    },
+    highPriorityIncomplete,
+  };
+}
+
+export function buildReadyToRankPanel(args: {
+  repos: ReportRepoPanelRow[];
+  featuredRepoIds: string[];
+  limit: number;
+}) {
+  const featuredRepoIdSet = new Set(args.featuredRepoIds);
+  const strictReadyRepos = args.repos.filter((item) => isStrictReadyToRank(item));
+  const highPriorityRepos = args.repos.filter(
+    (item) => item.priority === 'P0' || item.priority === 'P1',
+  );
+  const highPriorityReady = highPriorityRepos.filter((item) =>
+    isStrictReadyToRank(item),
+  );
+  const featuredRepos = args.repos.filter((item) =>
+    featuredRepoIdSet.has(item.repoId),
+  );
+  const featuredReady = featuredRepos.filter((item) => isStrictReadyToRank(item));
+
+  return {
+    strictReadyRepos: strictReadyRepos.length,
+    strictReadyCoverage: ratio(strictReadyRepos.length, args.repos.length),
+    strictReadyCriteria: {
+      requiresSnapshot: true,
+      requiresInsight: true,
+      requiresFinalDecision: true,
+      requiresCompleteness: true,
+      requiresIdeaFit: true,
+      requiresIdeaExtract: true,
+      requiresFullyAnalyzed: true,
+      requiresTrustedListReady: true,
+      excludesArchiveAndPurgeReady: true,
+    },
+    highPriorityReadySummary: {
+      total: highPriorityRepos.length,
+      ready: highPriorityReady.length,
+      incomplete: highPriorityRepos.filter((item) => item.incomplete).length,
+      coverage: ratio(highPriorityReady.length, highPriorityRepos.length),
+    },
+    homepageTopReadySummary: {
+      total: featuredRepos.length,
+      ready: featuredReady.length,
+      incomplete: featuredRepos.filter((item) => item.incomplete).length,
+      coverage: ratio(featuredReady.length, featuredRepos.length),
+    },
+    topReadyToRank: strictReadyRepos
+      .slice()
+      .sort((left, right) => {
+        const featuredDelta =
+          Number(featuredRepoIdSet.has(right.repoId)) -
+          Number(featuredRepoIdSet.has(left.repoId));
+        if (featuredDelta !== 0) {
+          return featuredDelta;
+        }
+        return comparePanelRows(left, right);
+      })
+      .slice(0, Math.max(1, args.limit))
+      .map((item) => ({
+        repoId: item.repoId,
+        fullName: item.fullName,
+        historicalRepairBucket: item.historicalRepairBucket,
+        historicalRepairPriorityScore: item.historicalRepairPriorityScore,
+        priority: item.priority,
+        cleanupState: item.cleanupState,
+        frontendDecisionState: item.frontendDecisionState,
+        appearedOnHomepage: item.appearedOnHomepage,
+      })),
+  };
+}
+
 function takeUnique<T>(items: T[]) {
   return Array.from(new Set(items));
+}
+
+function normalizeCount(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(value));
+}
+
+function normalizeRatio(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function isStrictReadyToRank(item: ReportRepoPanelRow) {
+  const cleanupState = item.cleanupState ?? 'active';
+  return (
+    cleanupState !== 'archive' &&
+    cleanupState !== 'purge_ready' &&
+    item.hasSnapshot &&
+    item.hasInsight &&
+    item.hasFinalDecision &&
+    item.hasCompleteness &&
+    item.hasIdeaFit &&
+    item.hasIdeaExtract &&
+    item.fullyAnalyzed &&
+    item.trustedListReady
+  );
+}
+
+function comparePanelRows(left: ReportRepoPanelRow, right: ReportRepoPanelRow) {
+  const cleanupDelta =
+    cleanupPriority(right.cleanupState) - cleanupPriority(left.cleanupState);
+  if (cleanupDelta !== 0) {
+    return cleanupDelta;
+  }
+
+  const notInflightLeft =
+    left.pendingAnalysisJobs === 0 && left.runningAnalysisJobs === 0;
+  const notInflightRight =
+    right.pendingAnalysisJobs === 0 && right.runningAnalysisJobs === 0;
+  const inflightOrderDelta = Number(notInflightRight) - Number(notInflightLeft);
+  if (inflightOrderDelta !== 0) {
+    return inflightOrderDelta;
+  }
+
+  const scoreDelta =
+    (right.historicalRepairPriorityScore ?? Number.NEGATIVE_INFINITY) -
+    (left.historicalRepairPriorityScore ?? Number.NEGATIVE_INFINITY);
+  if (scoreDelta !== 0) {
+    return scoreDelta;
+  }
+
+  const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const homepageDelta =
+    Number(right.appearedOnHomepage) - Number(left.appearedOnHomepage);
+  if (homepageDelta !== 0) {
+    return homepageDelta;
+  }
+
+  return left.fullName.localeCompare(right.fullName, 'zh-CN');
+}
+
+function cleanupPriority(value: string | null) {
+  if (value === 'active' || value === null) {
+    return 3;
+  }
+  if (value === 'freeze') {
+    return 2;
+  }
+  if (value === 'archive') {
+    return 1;
+  }
+  if (value === 'purge_ready') {
+    return 0;
+  }
+  return 1;
+}
+
+function priorityRank(value: string | null) {
+  if (value === 'P0') {
+    return 4;
+  }
+  if (value === 'P1') {
+    return 3;
+  }
+  if (value === 'P2') {
+    return 2;
+  }
+  if (value === 'P3') {
+    return 1;
+  }
+  return 0;
 }

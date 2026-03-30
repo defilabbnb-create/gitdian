@@ -409,9 +409,9 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
               >
                 <option value="">全部</option>
                 <option value="manual">人工</option>
-                <option value="claude">Claude</option>
-                <option value="local">本地模型</option>
-                <option value="fallback">Fallback</option>
+                <option value="claude">历史复核</option>
+                <option value="local">主分析</option>
+                <option value="fallback">兜底</option>
               </select>
             </FilterField>
 

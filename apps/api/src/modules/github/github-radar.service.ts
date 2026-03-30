@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -6,11 +7,22 @@ import {
 } from '@nestjs/common';
 import { JobStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+  FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+} from '../analysis/helpers/frozen-analysis-pool.types';
+import {
+  evaluateAnalysisPoolIntakeGate,
+  readAnalysisPoolFreezeState,
+  readFrozenAnalysisPoolBatchSnapshot,
+} from '../analysis/helpers/frozen-analysis-pool.helper';
 import { JobLogService } from '../job-log/job-log.service';
 import {
   QueueDepthSummary,
   QueueJobRuntimeSnapshot,
   QueueService,
+  parseBooleanEnvFlag,
+  readGitHubNewRepositoryIntakeEnabledFromEnv,
 } from '../queue/queue.service';
 import { QUEUE_NAMES } from '../queue/queue.constants';
 import {
@@ -256,6 +268,21 @@ const DEFAULT_CONTINUOUS_TARGET_CATEGORIES: IdeaMainCategory[] = [
   'infra',
 ];
 
+export function isContinuousRadarConfigured(
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return parseBooleanEnvFlag(env.ENABLE_CONTINUOUS_RADAR, false);
+}
+
+export function isContinuousRadarSchedulingEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return (
+    isContinuousRadarConfigured(env) &&
+    readGitHubNewRepositoryIntakeEnabledFromEnv(env)
+  );
+}
+
 @Injectable()
 export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(GitHubRadarService.name);
@@ -278,7 +305,7 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (!this.isContinuousRadarEnabled()) {
+    if (!isContinuousRadarConfigured()) {
       return;
     }
 
@@ -294,6 +321,7 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
   }
 
   async start() {
+    this.assertContinuousRadarSchedulingEnabled('start');
     const state = await this.ensureState();
     const nextMode = this.resolveResumeMode(state);
     const updated = await this.saveState({
@@ -328,6 +356,7 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
   }
 
   async resume() {
+    this.assertContinuousRadarSchedulingEnabled('resume');
     const state = await this.ensureState();
     const nextMode = this.resolveResumeMode(state);
     const updated = await this.saveState({
@@ -431,9 +460,8 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
       ...state,
       bootstrapFastStartEnabled,
       schedulerEnabled:
-        state.isRunning ||
-        (process.env.ENABLE_QUEUE_WORKERS === 'true' &&
-          this.isContinuousRadarEnabled()),
+        process.env.ENABLE_QUEUE_WORKERS === 'true' &&
+        this.isContinuousRadarEnabled(),
       schedulerReason,
       snapshotQueueSize: snapshotQueue.total,
       deepQueueSize: deepQueue.total,
@@ -524,6 +552,11 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
 
       state = await this.reconcilePendingWindow(state);
 
+      if (!this.isContinuousRadarEnabled()) {
+        await this.updateSchedulerReason(state, 'github_intake_disabled');
+        return;
+      }
+
       const githubDiagnostics = this.gitHubClient.getDiagnostics();
       const [snapshotQueue, deepQueue] = await Promise.all([
         this.queueService.getQueueDepth(QUEUE_NAMES.ANALYSIS_SNAPSHOT),
@@ -611,6 +644,11 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
             : 'pending_backfill_running'
           : 'backfill_concurrency_saturated';
         await this.updateSchedulerReason(state, pendingReason);
+        return;
+      }
+
+      if (await this.isAnalysisPoolFrozenForNewEntries()) {
+        await this.updateSchedulerReason(state, 'analysis_pool_frozen');
         return;
       }
 
@@ -1327,7 +1365,19 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isContinuousRadarEnabled() {
-    return process.env.ENABLE_CONTINUOUS_RADAR?.toLowerCase() === 'true';
+    return isContinuousRadarSchedulingEnabled();
+  }
+
+  private assertContinuousRadarSchedulingEnabled(
+    action: 'start' | 'resume',
+  ) {
+    if (this.isContinuousRadarEnabled()) {
+      return;
+    }
+
+    throw new BadRequestException(
+      `Continuous radar ${action} is disabled while GitHub intake is closed. Current mode is frozen stock cleanup / historical repair only, so radar backfill cannot be resumed.`,
+    );
   }
 
   private isGitHubConservativeMode(
@@ -1887,5 +1937,30 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
     const day = String(date.getDate()).padStart(2, '0');
 
     return `${year}-${month}-${day}`;
+  }
+
+  private async isAnalysisPoolFrozenForNewEntries() {
+    if (typeof this.prisma.systemConfig?.findUnique !== 'function') {
+      return false;
+    }
+    const [freezeRow, snapshotRow] = await Promise.all([
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: ANALYSIS_POOL_FREEZE_STATE_CONFIG_KEY,
+        },
+      }),
+      this.prisma.systemConfig.findUnique({
+        where: {
+          configKey: FROZEN_ANALYSIS_POOL_BATCH_CONFIG_KEY,
+        },
+      }),
+    ]);
+    const gate = evaluateAnalysisPoolIntakeGate({
+      freezeState: readAnalysisPoolFreezeState(freezeRow?.configValue),
+      snapshot: readFrozenAnalysisPoolBatchSnapshot(snapshotRow?.configValue),
+      source: 'github_created_backfill',
+    });
+
+    return gate.decision === 'suppress_new_entry';
   }
 }

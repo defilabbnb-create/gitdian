@@ -168,7 +168,7 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
       <SettingsSection
         title="AI 路由与模型配置"
         summary="只在你要调整判断链路时再展开。它会影响主 provider、fallback 和各 taskType 路由。"
-        description="控制默认 provider、fallback 策略、各 taskType 路由以及 OMLX / OpenAI 的模型名和超时。当前推荐默认保持在纯本地 OMLX 模式，OpenAI 作为可选增强。"
+        description="控制默认 provider、fallback 策略、各 taskType 路由以及 OMLX / OpenAI 的模型名和超时。当前推荐默认保持在 API / OpenAI 主链，OMLX 作为本地待命或手工切换选项。"
       >
         <SelectField
           label="默认 Provider"

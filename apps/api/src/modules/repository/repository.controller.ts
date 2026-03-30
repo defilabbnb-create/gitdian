@@ -139,7 +139,7 @@ export class RepositoryController {
     return {
       success: true,
       data,
-      message: 'Repository Claude review attempted successfully.',
+      message: 'Legacy Claude review endpoint redirected to the primary analysis pipeline.',
     };
   }
 }

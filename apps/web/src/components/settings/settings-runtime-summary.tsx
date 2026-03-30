@@ -31,7 +31,7 @@ export function SettingsRuntimeSummary({
           </h1>
           <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 md:text-base">
             当前主判断链路由 {modelLabel} 驱动，数据抓取 {githubLabel}，{claudeLabel}，
-            {fallbackLabel}。这里先回答系统接下来会怎么行动，再决定要不要改配置。
+            {fallbackLabel}。这里先回答系统现在会不会继续消化存量分析任务，再决定要不要改配置。
           </p>
         </div>
       </div>
@@ -48,9 +48,9 @@ export function SettingsRuntimeSummary({
           helper="决定今天的仓库供给是否稳定。"
         />
         <RuntimeCard
-          label="高价值复核"
+          label="历史复核入口"
           value={claudeLabel}
-          helper="决定高价值项目会不会被二次复核。"
+          helper="Claude 运行入口已停用，旧复核结果只保留为历史参考。"
         />
         <RuntimeCard
           label="回退策略"
@@ -89,11 +89,11 @@ function RuntimeCard({
 
 function resolvePrimaryModel(settings: SettingsPayload | null) {
   if (!settings) {
-    return '本地 OMLX';
+    return 'API 主模型';
   }
 
   const providerLabel =
-    settings.ai.defaultProvider === 'omlx' ? '本地 OMLX' : 'OpenAI';
+    settings.ai.defaultProvider === 'omlx' ? '本地 OMLX' : 'API / OpenAI';
   const modelName =
     settings.ai.defaultProvider === 'omlx'
       ? settings.ai.models.omlx || settings.ai.models.omlxDeep || settings.ai.models.omlxLight
@@ -120,16 +120,18 @@ function resolveGithubLabel(health: SettingsHealthPayload | null) {
 
 function resolveClaudeLabel(aiHealth: AiHealthPayload | null) {
   if (!aiHealth) {
-    return '高价值项目的复核状态待确认';
+    return 'Claude 入口已停用';
   }
 
-  return aiHealth.claude.ok ? '高价值项目会被二次复核' : '当前先只跑本地判断';
+  return aiHealth.claude.ok
+    ? '检测到 Claude 可用，但运行入口已停用'
+    : 'Claude 入口已停用';
 }
 
 function resolveFallbackLabel(settings: SettingsPayload | null) {
   if (!settings?.ai.enableFallback) {
-    return '异常时不会自动兜底';
+    return '异常时不自动切回旧链路';
   }
 
-  return '低置信项目会自动降级';
+  return '异常时允许自动回退';
 }

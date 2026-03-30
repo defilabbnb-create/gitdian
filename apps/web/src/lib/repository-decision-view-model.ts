@@ -71,6 +71,7 @@ export type RepositoryDecisionAnalysisModuleViewModel = {
   coreGapLabel: string;
   evidenceNeededLabel: string;
   detailSummary: string;
+  originalAnalysis: string | null;
   detailMetrics: Array<{
     label: string;
     value: string;
@@ -663,6 +664,129 @@ function getHeldBackModuleSummary(args: {
   return '当前先按保守口径展示，不把这一层结果直接升级成行动结论。';
 }
 
+function hasChineseText(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  return /[\u3400-\u9fff]/.test(value);
+}
+
+function normalizeOriginalAnalysis(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+
+  if (!normalized || hasChineseText(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function buildIdeaFitDetailSummary(args: {
+  ideaFit?: {
+    opportunityLevel?: string | null;
+    negativeFlags?: string[] | null;
+    opportunityTags?: string[] | null;
+    coreJudgement?: string | null;
+  } | null;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+}): string {
+  if (args.displayState !== 'trusted') {
+    return (
+      getHeldBackModuleSummary(args) ??
+      '当前先按保守口径展示，不把这一层结果直接升级成行动结论。'
+    );
+  }
+
+  if (!args.ideaFit) {
+    return '这层分析还没开始，先补齐创业评分和机会层级。';
+  }
+
+  const level = args.ideaFit.opportunityLevel ?? '待补齐';
+  const firstTag = args.ideaFit.opportunityTags?.find(Boolean);
+  const riskCount = args.ideaFit.negativeFlags?.filter(Boolean).length ?? 0;
+
+  if (riskCount > 0) {
+    return `当前机会层级 ${level}，但还有 ${riskCount} 个待确认风险，先结合主结论谨慎推进。`;
+  }
+
+  if (firstTag) {
+    return `当前机会层级 ${level}，这层最关键的信号是“${firstTag}”。`;
+  }
+
+  return `当前机会层级 ${level}，创业价值这层证据已经补齐。`;
+}
+
+function buildIdeaExtractDetailSummary(args: {
+  extractedIdea?: {
+    ideaSummary?: string | null;
+    extractMode?: string | null;
+    targetUsers?: string[] | null;
+  } | null;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+  helperText: string;
+}): string {
+  if (args.displayState !== 'trusted') {
+    return (
+      getHeldBackModuleSummary(args) ??
+      '当前先按保守口径展示，不把这一层结果直接升级成行动结论。'
+    );
+  }
+
+  if (!args.extractedIdea) {
+    return args.helperText;
+  }
+
+  const targetUser = args.extractedIdea.targetUsers?.find(Boolean);
+  const extractMode = args.extractedIdea.extractMode ?? '待补齐';
+
+  if (targetUser) {
+    return `这一层已经补齐一句话点子和目标用户，当前聚焦的用户是“${targetUser}”。`;
+  }
+
+  return `这一层已经补齐点子提取结果，当前提取模式为 ${extractMode}。`;
+}
+
+function buildCompletenessDetailSummary(args: {
+  completeness?: {
+    completenessLevel?: string | null;
+    summary?: string | null;
+    runability?: string | null;
+  } | null;
+  repositoryLevel?: string | null;
+  displayState: RepositoryDecisionDisplayState;
+  fallback: boolean;
+  conflict: boolean;
+  missingKeyAnalysis: boolean;
+}): string {
+  if (args.displayState !== 'trusted') {
+    return (
+      getHeldBackModuleSummary(args) ??
+      '当前先按保守口径展示，不把这一层结果直接升级成行动结论。'
+    );
+  }
+
+  const level =
+    args.completeness?.completenessLevel ?? args.repositoryLevel ?? '待补齐';
+  const runability = args.completeness?.runability;
+
+  if (runability) {
+    return `当前完整性等级 ${level}，落地成本判断偏 ${runability}。`;
+  }
+
+  return `当前完整性等级 ${level}，已经可以用来判断工程成熟度和落地成本。`;
+}
+
 function buildIdeaFitModule(args: {
   repository: RepositoryDecisionViewModelTarget;
   displayState: RepositoryDecisionDisplayState;
@@ -699,11 +823,14 @@ function buildIdeaFitModule(args: {
         ? '这层关键证据已经补齐'
         : args.detail.missingEvidenceLabel
       : '补创业评分、机会层级和负向信号',
-    detailSummary:
-      (args.displayState === 'trusted'
-        ? ideaFit?.coreJudgement
-        : getHeldBackModuleSummary(args)) ??
-      '这层分析还没开始，先补齐创业评分和机会层级。',
+    detailSummary: buildIdeaFitDetailSummary({
+      ideaFit,
+      displayState: args.displayState,
+      fallback: args.fallback,
+      conflict: args.conflict,
+      missingKeyAnalysis: args.missingKeyAnalysis,
+    }),
+    originalAnalysis: normalizeOriginalAnalysis(ideaFit?.coreJudgement),
     detailMetrics: [
       {
         label: '机会层级',
@@ -766,11 +893,15 @@ function buildIdeaExtractModule(args: {
         ? '这层关键证据已经补齐'
         : args.detail.missingEvidenceLabel
       : '补一句话点子、用户场景和收费表述',
-    detailSummary:
-      (args.displayState === 'trusted'
-        ? extractedIdea?.ideaSummary
-        : getHeldBackModuleSummary(args)) ??
-      ideaExtractStatus.helperText,
+    detailSummary: buildIdeaExtractDetailSummary({
+      extractedIdea,
+      displayState: args.displayState,
+      fallback: args.fallback,
+      conflict: args.conflict,
+      missingKeyAnalysis: args.missingKeyAnalysis,
+      helperText: ideaExtractStatus.helperText,
+    }),
+    originalAnalysis: normalizeOriginalAnalysis(extractedIdea?.ideaSummary),
     detailMetrics: [
       {
         label: '提取模式',
@@ -826,11 +957,15 @@ function buildCompletenessModule(args: {
         ? '这层关键证据已经补齐'
         : args.detail.missingEvidenceLabel
       : '补完整性等级、工程成熟度和可落地成本判断',
-    detailSummary:
-      (args.displayState === 'trusted'
-        ? completeness?.summary
-        : getHeldBackModuleSummary(args)) ??
-      '完整性分析还没回填，这里先按缺证据处理。',
+    detailSummary: buildCompletenessDetailSummary({
+      completeness,
+      repositoryLevel: args.repository.completenessLevel ?? null,
+      displayState: args.displayState,
+      fallback: args.fallback,
+      conflict: args.conflict,
+      missingKeyAnalysis: args.missingKeyAnalysis,
+    }),
+    originalAnalysis: normalizeOriginalAnalysis(completeness?.summary),
     detailMetrics: [
       {
         label: '完整性等级',

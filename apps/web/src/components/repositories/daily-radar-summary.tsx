@@ -177,7 +177,7 @@ function SummaryGroup({
               targetUsersZh: item.targetUsersZh ?? '用户还不够清楚',
               monetizationSummaryZh:
                 item.monetizationSummaryZh ?? '收费路径还不够清楚',
-              sourceLabelZh: item.hasClaudeReview ? 'Claude 复核' : '系统判断',
+              sourceLabelZh: item.hasClaudeReview ? '历史复核' : '系统判断',
             };
 
           return (

@@ -36,7 +36,7 @@ export function AppNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-wrap items-center gap-2">
+    <nav className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
       {navItems.map((item) => {
         const isActive = item.match(pathname);
 
@@ -44,10 +44,11 @@ export function AppNav() {
           <Link
             key={item.href}
             href={item.href}
+            aria-current={isActive ? 'page' : undefined}
             className={`inline-flex items-center rounded-full px-4 py-2 text-sm font-semibold transition ${
               isActive
-                ? 'bg-slate-950 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                ? 'bg-slate-950 text-white shadow-sm shadow-slate-900/10'
+                : 'border border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-900'
             }`}
           >
             {item.label}

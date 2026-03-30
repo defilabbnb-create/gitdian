@@ -86,6 +86,7 @@ export class IdeaExtractService {
     options: {
       deferIfBusy?: boolean;
       mode?: IdeaExtractMode;
+      refreshInsight?: boolean;
     } = {},
   ): Promise<IdeaExtractCompletedResult | IdeaExtractDeferredResult> {
     const repository = await this.prisma.repository.findUnique({
@@ -213,6 +214,7 @@ export class IdeaExtractService {
     options: {
       deferIfBusy?: boolean;
       mode?: IdeaExtractMode;
+      refreshInsight?: boolean;
     } = {},
   ) {
     const deferIfBusy = options.deferIfBusy ?? false;
@@ -315,7 +317,9 @@ export class IdeaExtractService {
         },
       });
 
-      await this.repositoryInsightService.refreshInsight(repository.id);
+      if (options.refreshInsight !== false) {
+        await this.repositoryInsightService.refreshInsight(repository.id);
+      }
 
       return {
         repositoryId: repository.id,

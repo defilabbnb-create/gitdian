@@ -414,8 +414,8 @@ function buildThinFallbackSummary(
     comparison: {
       localVerdict: '暂无',
       claudeVerdict: '暂无',
-      localOneLiner: '暂无本地一句话',
-      claudeOneLiner: '暂无 Claude 一句话',
+      localOneLiner: '暂无主分析一句话',
+      claudeOneLiner: '暂无历史复核一句话',
     },
   };
 }
@@ -506,9 +506,10 @@ function buildSummaryFromFinalDecision(
           .filter(Boolean)
           .join(' + ') || '暂无',
       localOneLiner:
-        pickText(finalDecision.comparison?.localOneLinerZh) || '暂无本地一句话',
+        pickText(finalDecision.comparison?.localOneLinerZh) || '暂无主分析一句话',
       claudeOneLiner:
-        pickText(finalDecision.comparison?.claudeOneLinerZh) || '暂无 Claude 一句话',
+        pickText(finalDecision.comparison?.claudeOneLinerZh) ||
+        '暂无历史复核一句话',
     },
   };
 }
@@ -1232,7 +1233,8 @@ export function getRepositoryIdeaExtractStatus(
       status: 'SKIPPED_BY_GATE',
       mode: mode ?? 'skip',
       reason: analysis?.ideaExtractStatusReason ?? deepStatus.reason,
-      helperText: '基础判断已经完成，但这层深分析没有继续跑；下面会先用 snapshot、README 和本地初判补一版基础分析。',
+      helperText:
+        '基础判断已经完成，但这层深分析没有继续跑；下面会先用 snapshot、README 和主分析结果补一版基础分析。',
     };
   }
 
@@ -1702,8 +1704,8 @@ export function getRepositoryClaudeReviewLabel(
   repository: RepositoryDecisionTarget,
 ) {
   return repository.finalDecision?.hasClaudeReview
-    ? 'Claude 复核已完成'
-    : 'Claude 复核未执行';
+    ? '历史复核已保留'
+    : '当前仅主分析';
 }
 
 export function compareRepositoriesByInsightPriority(

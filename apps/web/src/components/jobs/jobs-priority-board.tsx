@@ -19,28 +19,77 @@ export function JobsPriorityBoard({
   focusedJobId,
 }: JobsPriorityBoardProps) {
   const viewModel = buildJobsPriorityViewModel(items, query);
+  const anomalyJobCount = viewModel.anomalyGroups.reduce(
+    (sum, group) => sum + group.count,
+    0,
+  );
+  const visibleAttentionJobCount = viewModel.attentionGroups.reduce(
+    (sum, group) => sum + group.count,
+    0,
+  );
+  const anomalyGridClass =
+    viewModel.anomalyGroups.length <= 1 ? 'grid gap-4' : 'grid gap-4 xl:grid-cols-2';
+  const attentionGridClass =
+    viewModel.attentionGroups.length <= 1 ? 'grid gap-4' : 'grid gap-4 xl:grid-cols-2';
 
   return (
     <section className="space-y-6" data-testid="jobs-priority-board">
       <section className="rounded-[32px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(3,105,161,0.86)_100%)] px-7 py-8 text-white shadow-xl shadow-slate-900/10">
-        <div className="max-w-4xl">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200/70">
-            任务工作台
-          </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-white md:text-[3rem]">
-            先看现在有没有异常，再决定先处理哪一类任务。
-          </h1>
-          <p className="mt-4 text-sm leading-7 text-slate-200 md:text-base">
-            {viewModel.summaryTitle} {viewModel.summaryDescription}
-          </p>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(300px,360px)] xl:items-end">
+          <div className="max-w-4xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200/70">
+              任务工作台
+            </p>
+            <h1 className="mt-3 text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl md:text-[3rem]">
+              先看现在有没有异常，再决定先处理哪一类任务。
+            </h1>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-200 md:text-base">
+              {viewModel.summaryTitle} {viewModel.summaryDescription}
+            </p>
 
-          <div className="mt-5 rounded-2xl border border-white/15 bg-white/5 px-4 py-3">
+            <div className="mt-5 flex flex-wrap gap-2 text-xs font-semibold">
+              <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-sky-50">
+                异常分组 {viewModel.anomalyGroups.length}
+              </span>
+              <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-sky-50">
+                关注分组 {viewModel.attentionGroups.length}
+              </span>
+              <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-sky-50">
+                下沉任务 {viewModel.hiddenJobCount}
+              </span>
+              {currentRepositoryId ? (
+                <span className="rounded-full border border-sky-200/30 bg-sky-400/10 px-3 py-1 text-sky-100">
+                  当前仓库上下文
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/15 bg-white/6 p-5 backdrop-blur">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80">
               Plain Text
             </p>
-            <div className="mt-2 space-y-1 font-mono text-xs text-sky-50">
+            <div className="mt-3 space-y-1 font-mono text-xs text-sky-50">
               <p>当前视图：聚合摘要</p>
               <p>聚合组数：{viewModel.visibleGroupCount}</p>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <HeroMetric
+                label="异常任务"
+                value={`${anomalyJobCount} 条`}
+                helper="先处理失败、卡住和排队过久"
+              />
+              <HeroMetric
+                label="重点关注"
+                value={`${visibleAttentionJobCount} 条`}
+                helper="正在占住链路或持续运行"
+              />
+              <HeroMetric
+                label="已下沉"
+                value={`${viewModel.hiddenJobCount} 条`}
+                helper="完整任务流里继续展开"
+              />
             </div>
           </div>
         </div>
@@ -57,7 +106,7 @@ export function JobsPriorityBoard({
         </div>
 
         {viewModel.anomalyGroups.length ? (
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className={anomalyGridClass}>
             {viewModel.anomalyGroups.map((group) => (
               <JobPriorityGroupCard
                 key={group.key}
@@ -86,7 +135,7 @@ export function JobsPriorityBoard({
         </div>
 
         {viewModel.attentionGroups.length ? (
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className={attentionGridClass}>
             {viewModel.attentionGroups.map((group) => (
               <JobPriorityGroupCard
                 key={group.key}
@@ -159,7 +208,7 @@ function JobPriorityGroupCard({
           <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
             {group.displayName}
           </h3>
-          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+          <p className="mt-3 max-w-3xl text-balance text-sm leading-7 text-slate-600">
             {group.summary}
           </p>
         </div>
@@ -206,6 +255,26 @@ function PriorityMetric({
       </dt>
       <dd className="mt-2 text-sm font-semibold text-slate-900">{value}</dd>
     </div>
+  );
+}
+
+function HeroMetric({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <article className="rounded-[22px] border border-white/10 bg-white/8 px-4 py-4">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-semibold tracking-tight text-white">{value}</p>
+      <p className="mt-2 text-sm leading-6 text-slate-300">{helper}</p>
+    </article>
   );
 }
 

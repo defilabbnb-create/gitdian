@@ -24,7 +24,7 @@ export function SettingsBehaviorNotes() {
         <NoteCard
           label="AI Fallback"
           title="决定异常时会不会自动降级"
-          description="当前系统默认使用本地 OMLX 处理 Completeness、Idea Fit 和 Idea Extract。只有你显式开启 fallback 时，AI Router 才会在主 provider 失败后尝试备用 provider，不会默认双跑。"
+          description="当前系统默认使用 API / OpenAI 主链处理 Completeness、Idea Fit 和 Idea Extract。只有你显式开启 fallback 时，AI Router 才会在主 provider 失败后尝试备用 provider，不会默认双跑。"
         />
         <NoteCard
           label="Fast Filter"

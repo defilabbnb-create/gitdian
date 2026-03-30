@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { QUEUE_NAMES } from '../queue/queue.constants';
+import { QUEUE_JOB_TYPES, QUEUE_NAMES } from '../queue/queue.constants';
 import { QueueService } from '../queue/queue.service';
 import {
   ClaudeConcurrencyService,
@@ -62,12 +62,36 @@ const SELF_TUNING_CONFIG_KEY = 'github.self_tuning.state';
 const DEEP_RUNTIME_STATS_CONFIG_KEY = 'analysis.deep.runtime_stats';
 const THROUGHPUT_WINDOW_MS = 5 * 60 * 1000;
 
+export function summarizeRecentAnalysisThroughput(args: {
+  jobs: Array<{
+    jobName: string;
+  }>;
+  windowMs?: number;
+}) {
+  const windowMs = args.windowMs ?? THROUGHPUT_WINDOW_MS;
+  const minutes = windowMs / 60_000;
+  const snapshotCount = args.jobs.filter(
+    (job) => job.jobName === QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT,
+  ).length;
+  const deepCount = args.jobs.filter(
+    (job) => job.jobName === QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
+  ).length;
+
+  return {
+    reposPerMinute: Number(((snapshotCount + deepCount) / minutes).toFixed(2)),
+    snapshotThroughput: Number((snapshotCount / minutes).toFixed(2)),
+    deepThroughput: Number((deepCount / minutes).toFixed(2)),
+  };
+}
+
 export function computeSystemLoadLevel(input: {
   snapshotQueueSize: number;
+  deepQueueSize: number;
   ideaExtractTimeoutRate: number;
 }): SelfTuningLoadLevel {
   if (
     input.snapshotQueueSize >= 1500 ||
+    input.deepQueueSize >= 2000 ||
     input.ideaExtractTimeoutRate > 0.15
   ) {
     return 'EXTREME';
@@ -75,6 +99,7 @@ export function computeSystemLoadLevel(input: {
 
   if (
     input.snapshotQueueSize >= 800 ||
+    input.deepQueueSize >= 800 ||
     input.ideaExtractTimeoutRate > 0.05
   ) {
     return 'HIGH_LOAD';
@@ -138,6 +163,36 @@ export function buildSelfTuningPolicy(systemLoadLevel: SelfTuningLoadLevel) {
         },
       };
   }
+}
+
+export function resolveSelfTuningPolicy(input: {
+  systemLoadLevel: SelfTuningLoadLevel;
+  snapshotQueueSize: number;
+  deepQueueSize: number;
+  ideaExtractTimeoutRate: number;
+}) {
+  const basePolicy = buildSelfTuningPolicy(input.systemLoadLevel);
+  const lowSnapshotPressure = input.snapshotQueueSize <= 50;
+  const deepDrainPressure = input.deepQueueSize >= 2_000;
+  const stableIdeaExtractTimeoutRate = input.ideaExtractTimeoutRate <= 0.05;
+
+  if (
+    input.systemLoadLevel === 'EXTREME' &&
+    lowSnapshotPressure &&
+    deepDrainPressure &&
+    stableIdeaExtractTimeoutRate
+  ) {
+    return {
+      ...basePolicy,
+      ideaExtractMaxInflight: Math.max(basePolicy.ideaExtractMaxInflight, 2),
+      policyMode: 'deep_drain_relief' as const,
+    };
+  }
+
+  return {
+    ...basePolicy,
+    policyMode: 'default' as const,
+  };
 }
 
 @Injectable()
@@ -239,9 +294,15 @@ export class SelfTuningService implements OnModuleInit, OnModuleDestroy {
     const timeoutRate = deltas.ideaExtractTimeoutCount / denominator;
     const loadLevel = computeSystemLoadLevel({
       snapshotQueueSize: snapshotQueue.total,
+      deepQueueSize: deepQueue.total,
       ideaExtractTimeoutRate: timeoutRate,
     });
-    const policy = buildSelfTuningPolicy(loadLevel);
+    const policy = resolveSelfTuningPolicy({
+      systemLoadLevel: loadLevel,
+      snapshotQueueSize: snapshotQueue.total,
+      deepQueueSize: deepQueue.total,
+      ideaExtractTimeoutRate: timeoutRate,
+    });
     const runtimeMetrics: SelfTuningRuntimeMetrics = {
       snapshotQueueSize: snapshotQueue.total,
       deepQueueSize: deepQueue.total,
@@ -275,6 +336,7 @@ export class SelfTuningService implements OnModuleInit, OnModuleDestroy {
       `load_${loadLevel.toLowerCase()}`,
       `snapshot_${snapshotQueue.total}`,
       `timeout_${Math.round(timeoutRate * 100)}`,
+      `policy_${policy.policyMode}`,
     ].join(':');
 
     const nextState: SelfTuningState = {
@@ -604,26 +666,17 @@ export class SelfTuningService implements OnModuleInit, OnModuleDestroy {
         },
         jobStatus: 'SUCCESS',
         jobName: {
-          in: [QUEUE_NAMES.ANALYSIS_SNAPSHOT, QUEUE_NAMES.ANALYSIS_SINGLE],
+          in: [QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT, QUEUE_JOB_TYPES.ANALYSIS_SINGLE],
         },
       },
       select: {
         jobName: true,
       },
     });
-    const minutes = THROUGHPUT_WINDOW_MS / 60_000;
-    const snapshotCount = jobs.filter(
-      (job) => job.jobName === QUEUE_NAMES.ANALYSIS_SNAPSHOT,
-    ).length;
-    const deepCount = jobs.filter(
-      (job) => job.jobName === QUEUE_NAMES.ANALYSIS_SINGLE,
-    ).length;
-
-    return {
-      reposPerMinute: Number(((snapshotCount + deepCount) / minutes).toFixed(2)),
-      snapshotThroughput: Number((snapshotCount / minutes).toFixed(2)),
-      deepThroughput: Number((deepCount / minutes).toFixed(2)),
-    };
+    return summarizeRecentAnalysisThroughput({
+      jobs,
+      windowMs: THROUGHPUT_WINDOW_MS,
+    });
   }
 
   private computeModelPressureScore(input: {

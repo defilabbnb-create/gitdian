@@ -3,12 +3,6 @@ import {
   getRepositoryDisplayModeMeta,
   getRepositoryViewMeta,
 } from '@/lib/repository-view-meta';
-import {
-  detectRepositoryConflictsBatch,
-} from '@/lib/repository-data-guard';
-import {
-  validateRepositoryHeadlineBatch,
-} from '@/lib/repository-decision';
 import { RepositoryListItemCard } from './repository-list-item';
 import { RepositoryPagination } from './repository-pagination';
 
@@ -30,8 +24,6 @@ export function RepositoryList({
 }: RepositoryListProps) {
   const viewMeta = getRepositoryViewMeta(query.view);
   const displayModeMeta = getRepositoryDisplayModeMeta(query.displayMode);
-  const headlineValidations = validateRepositoryHeadlineBatch(items);
-  const guardResults = detectRepositoryConflictsBatch(items);
 
   if (items.length === 0) {
     return (
@@ -81,8 +73,6 @@ export function RepositoryList({
           key={repository.id}
           repository={repository}
           query={query}
-          headlineValidation={headlineValidations.get(repository.id)}
-          dataGuard={guardResults.get(repository.id)}
         />
       ))}
       <RepositoryPagination pagination={pagination} query={query} />

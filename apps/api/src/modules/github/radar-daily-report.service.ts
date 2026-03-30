@@ -4,7 +4,6 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { ClaudeReviewService } from '../analysis/claude-review.service';
 import { RadarDailySummaryService } from './radar-daily-summary.service';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import {
@@ -56,7 +55,6 @@ export class RadarDailyReportService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly radarDailySummaryService: RadarDailySummaryService,
     private readonly telegramNotifierService: TelegramNotifierService,
-    private readonly claudeReviewService: ClaudeReviewService,
   ) {}
 
   async onModuleInit() {
@@ -459,55 +457,11 @@ export class RadarDailyReportService implements OnModuleInit, OnModuleDestroy {
   private async prepareSummaryForReport(
     summary: Awaited<ReturnType<RadarDailySummaryService['getSummaryByDate']>>,
   ) {
-    if (
-      !summary ||
-      !this.claudeReviewService.isEnabled() ||
-      !this.claudeReviewService.isConfigured()
-    ) {
+    if (!summary) {
       return summary;
     }
 
-    const maxPerRun = Math.max(
-      1,
-      Math.min(this.readPositiveInt('CLAUDE_REVIEW_MAX_PER_RUN', 10), 10),
-    );
-    const candidateIds = Array.from(
-      new Set([
-        ...summary.topGoodRepositoryIds,
-        ...summary.topCloneRepositoryIds,
-        ...summary.topRepositoryIds,
-      ]),
-    ).slice(0, maxPerRun);
-
-    if (!candidateIds.length) {
-      return summary;
-    }
-
-    try {
-      const outcome = await Promise.race([
-        this.claudeReviewService.reviewRepositoryIds(candidateIds, {
-          topCandidate: true,
-          source: 'daily_summary',
-          maxPerRun,
-        }),
-        this.sleep(25_000).then(() => null),
-      ]);
-
-      if (
-        outcome &&
-        outcome.results.some((result) => result.status === 'reviewed')
-      ) {
-        await this.radarDailySummaryService.markSummaryForRecompute(summary.date);
-        return this.radarDailySummaryService.getSummaryByDate(summary.date);
-      }
-    } catch (error) {
-      this.logger.warn(
-        `Claude review warmup before Telegram send failed: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`,
-      );
-    }
-
+    // Telegram summary delivery now depends only on the primary analysis pipeline.
     return summary;
   }
 

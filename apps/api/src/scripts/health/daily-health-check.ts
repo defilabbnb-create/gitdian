@@ -1,9 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { NestFactory } from '@nestjs/core';
-import { Prisma } from '@prisma/client';
+import { JobStatus, Prisma } from '@prisma/client';
 import { AppModule } from '../../app.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { QueueService } from '../../modules/queue/queue.service';
+import { QUEUE_NAMES } from '../../modules/queue/queue.constants';
+import { AdaptiveSchedulerService } from '../../modules/scheduler/adaptive-scheduler.service';
 import { HistoricalDataRecoveryService } from '../../modules/analysis/historical-data-recovery.service';
 import {
   collectDailyHealthMetrics,
@@ -12,6 +15,7 @@ import {
 } from './health-metrics.collector';
 import { diffDailyHealth } from './health-diff';
 import { evaluateDailyHealth } from './health-evaluator';
+import { generateLiveMd } from './generate-live-md';
 import { DailyHealthReport, writeDailyHealthReport } from './health-reporter';
 
 type HealthCliOptions = {
@@ -131,48 +135,11 @@ function toSnapshot(report: DailyHealthReport): DailyHealthSnapshot {
   return {
     generatedAt: report.generatedAt,
     summary: report.summary,
+    globalSnapshot: report.globalSnapshot,
+    recentSnapshot: report.recentSnapshot,
     rawReport: {} as never,
+    recentRawReport: {} as never,
   };
-}
-
-async function maybeRunAutoRepair(args: {
-  app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>>;
-  report: DailyHealthReport;
-  enabled: boolean;
-}) {
-  if (!args.enabled || args.report.status === 'HEALTHY') {
-    return null;
-  }
-
-  const recoveryService = args.app.get(HistoricalDataRecoveryService);
-
-  if (args.report.summary.homepageSummary.homepageUnsafe > 0) {
-    return recoveryService.runRecovery({
-      dryRun: false,
-      limit: 50,
-      onlyFeatured: true,
-      priority: 'P0',
-      mode: 'rerun_full_deep',
-    });
-  }
-
-  if (args.report.summary.analysisGapSummary.fallbackButStillVisibleCount > 0) {
-    return recoveryService.runRecovery({
-      dryRun: false,
-      limit: 80,
-      onlyFallback: true,
-      priority: 'P1',
-      mode: 'rerun_light_analysis',
-    });
-  }
-
-  return recoveryService.runRecovery({
-    dryRun: false,
-    limit: 120,
-    onlyIncomplete: true,
-    priority: 'P0',
-    mode: 'rerun_full_deep',
-  });
 }
 
 async function persistHealthReport(
@@ -195,6 +162,48 @@ async function persistHealthReport(
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
+}
+
+async function refreshQueueSummary(
+  app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>>,
+  report: DailyHealthReport,
+) {
+  const prisma = app.get(PrismaService);
+  const queueService = app.get(QueueService);
+  const historicalRecoveryService = app.get(HistoricalDataRecoveryService);
+  const [snapshotQueue, deepQueue, pendingCount, historicalQueueSummary] = await Promise.all([
+    queueService.getQueueDepth(QUEUE_NAMES.ANALYSIS_SNAPSHOT),
+    queueService.getQueueDepth(QUEUE_NAMES.ANALYSIS_SINGLE),
+    prisma.jobLog.count({
+      where: {
+        jobStatus: JobStatus.PENDING,
+      },
+    }),
+    historicalRecoveryService.getHistoricalRepairQueueSummary(),
+  ]);
+
+  report.summary.taskSummary.pendingCount = pendingCount;
+  report.summary.queueSummary.pendingCount = pendingCount;
+  report.summary.queueSummary.snapshotQueueSize = snapshotQueue.total;
+  report.summary.queueSummary.deepQueueSize = deepQueue.total;
+  report.summary.historicalRepairSummary.historicalRepairQueueCount =
+    historicalQueueSummary.totalQueued;
+  report.summary.historicalRepairSummary.queueActionBreakdown = {
+    downgrade_only: historicalQueueSummary.actionCounts.downgrade_only,
+    refresh_only: historicalQueueSummary.actionCounts.refresh_only,
+    evidence_repair: historicalQueueSummary.actionCounts.evidence_repair,
+    deep_repair: historicalQueueSummary.actionCounts.deep_repair,
+    decision_recalc: historicalQueueSummary.actionCounts.decision_recalc,
+    archive: 0,
+  };
+  report.summary.historicalRepairSummary.routerCapabilityBreakdown =
+    historicalQueueSummary.routerCapabilityBreakdown;
+  report.summary.historicalRepairSummary.routerFallbackBreakdown =
+    historicalQueueSummary.routerFallbackBreakdown;
+  report.summary.historicalRepairSummary.routerReviewRequiredCount =
+    historicalQueueSummary.routerReviewRequiredCount;
+  report.summary.historicalRepairSummary.routerDeterministicOnlyCount =
+    historicalQueueSummary.routerDeterministicOnlyCount;
 }
 
 async function bootstrap() {
@@ -223,20 +232,25 @@ async function bootstrap() {
       generatedAt: snapshot.generatedAt,
       status: evaluation.status,
       summary: snapshot.summary,
+      globalSnapshot: snapshot.globalSnapshot,
+      recentSnapshot: snapshot.recentSnapshot,
       checks: evaluation.checks,
       recommendations: evaluation.recommendations,
       diff,
       autoRepair: null,
     };
-
-    report.autoRepair = await maybeRunAutoRepair({
-      app,
-      report,
-      enabled: options.autoRepair,
-    });
+    if (!options.noWrite) {
+      if (options.autoRepair) {
+        const scheduler = app.get(AdaptiveSchedulerService);
+        report.autoRepair = await scheduler.triggerRecoveryFromHealth(report);
+      }
+      await refreshQueueSummary(app, report);
+      report.diff = previous ? diffDailyHealth(toSnapshot(report), toSnapshot(previous)) : null;
+    }
 
     if (!options.noWrite) {
       await persistHealthReport(app, report);
+      await generateLiveMd({ report });
     }
 
     const written = await writeDailyHealthReport({

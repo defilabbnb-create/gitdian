@@ -13,8 +13,11 @@ import { RepositoryDecisionService } from '../modules/analysis/repository-decisi
 import { QueueService } from '../modules/queue/queue.service';
 import { QUEUE_JOB_TYPES, QUEUE_NAMES, QueueName } from '../modules/queue/queue.constants';
 import {
+  buildAnalysisBacklogPanel,
   buildHumanSummary,
+  buildIncompletePanel,
   buildMarkdownReport,
+  buildReadyToRankPanel,
   buildTopBottlenecks,
   classifyRuntimeTaskStatus,
   evaluateRepoAnalysisState,
@@ -22,6 +25,8 @@ import {
   getTaskAnalysisDefinitions,
   pickRandomSamples,
   type IncompleteReason,
+  type HistoricalRepairActionBacklogRow,
+  type ReportRepoPanelRow,
 } from './helpers/task-analysis-completion-report.helper';
 
 export type TaskAnalysisCompletionCliOptions = {
@@ -56,8 +61,14 @@ type RepoJobRuntime = {
   completedCount: number;
   failedCount: number;
   deferredCount: number;
+  pendingSnapshotJobs: number;
+  runningSnapshotJobs: number;
+  pendingDeepJobs: number;
+  runningDeepJobs: number;
   latestSnapshotJobState: ReturnType<typeof classifyRuntimeTaskStatus> | null;
   latestDeepJobState: ReturnType<typeof classifyRuntimeTaskStatus> | null;
+  inflightActions: Set<string>;
+  latestInflightAction: string | null;
 };
 
 type RepoAuditRecord = {
@@ -84,12 +95,24 @@ type RepoAuditRecord = {
   priority: string | null;
   verdict: string | null;
   action: string | null;
+  historicalRepairAction: string | null;
+  historicalRepairBucket: string | null;
+  historicalRepairPriorityScore: number | null;
+  cleanupState: string | null;
+  frontendDecisionState: string | null;
   source: string | null;
   oneLinerStrength: string | null;
   oneLinerZh: string;
   targetUsersLabel: string | null;
   monetizationLabel: string | null;
   whyLabel: string | null;
+  evidenceCoverageRate: number | null;
+  keyEvidenceMissingCount: number;
+  keyEvidenceWeakCount: number;
+  keyEvidenceConflictCount: number;
+  evidenceConflictCount: number;
+  evidenceSupportingDimensions: string[];
+  evidenceCurrentAction: string | null;
   projectType: string | null;
   category: string | null;
   snapshotPromising: boolean | null;
@@ -99,6 +122,19 @@ type RepoAuditRecord = {
   appearedOnHomepage: boolean;
   appearedInDailySummary: boolean;
   appearedInTelegram: boolean;
+  pendingAnalysisJobs: number;
+  runningAnalysisJobs: number;
+  pendingSnapshotJobs: number;
+  runningSnapshotJobs: number;
+  pendingDeepJobs: number;
+  runningDeepJobs: number;
+  failedAnalysisJobs: number;
+  latestSnapshotJobState: ReturnType<typeof classifyRuntimeTaskStatus> | null;
+  latestDeepJobState: ReturnType<typeof classifyRuntimeTaskStatus> | null;
+  inflightActions: string[];
+  inflightAction: string | null;
+  needsDeepRepair: boolean;
+  needsDecisionRecalc: boolean;
   primaryIncompleteReason: IncompleteReason | null;
   incompleteReasons: IncompleteReason[];
   assessment: HistoricalRecoveryAssessment;
@@ -120,6 +156,9 @@ export type TaskAnalysisCompletionReportJson = {
   repoSummary?: Record<string, unknown>;
   analysisGapSummary?: Record<string, unknown>;
   queueSummary?: Record<string, unknown>;
+  backlogPanel?: Record<string, unknown>;
+  incompletePanel?: Record<string, unknown>;
+  readyToRankPanel?: Record<string, unknown>;
   exposureSummary?: Record<string, unknown>;
   bottleneckSummary?: Record<string, unknown>;
   qualitySummary?: Record<string, unknown>;
@@ -137,26 +176,13 @@ const repositorySelect = Prisma.validator<Prisma.RepositorySelect>()({
   fullName: true,
   htmlUrl: true,
   description: true,
-  homepage: true,
-  language: true,
-  topics: true,
-  stars: true,
   status: true,
-  ideaFitScore: true,
-  finalScore: true,
-  toolLikeScore: true,
-  roughPass: true,
-  categoryL1: true,
-  categoryL2: true,
-  createdAt: true,
   updatedAt: true,
-  createdAtGithub: true,
   updatedAtGithub: true,
   isFavorited: true,
   content: {
     select: {
       fetchedAt: true,
-      readmeText: true,
     },
   },
   favorite: {
@@ -170,16 +196,10 @@ const repositorySelect = Prisma.validator<Prisma.RepositorySelect>()({
       insightJson: true,
       claudeReviewJson: true,
       claudeReviewStatus: true,
-      claudeReviewReviewedAt: true,
       completenessJson: true,
       ideaFitJson: true,
       extractedIdeaJson: true,
       fallbackUsed: true,
-      analyzedAt: true,
-      manualVerdict: true,
-      manualAction: true,
-      manualNote: true,
-      manualUpdatedAt: true,
       confidence: true,
     },
   },
@@ -372,6 +392,36 @@ function readBoolean(value: unknown) {
   return value === true;
 }
 
+function readNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return 0;
+}
+
+function readOptionalNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function buildSinceDate(sinceDays: number | null) {
   if (!sinceDays || sinceDays <= 0) {
     return null;
@@ -407,6 +457,34 @@ function buildJobTimeWhere(sinceDate: Date | null): Prisma.JobLogWhereInput | un
   };
 }
 
+function buildAnalysisJobWhere(sinceDate: Date | null): Prisma.JobLogWhereInput {
+  const base: Prisma.JobLogWhereInput = {
+    jobName: {
+      in: [QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT, QUEUE_JOB_TYPES.ANALYSIS_SINGLE],
+    },
+  };
+
+  if (!sinceDate) {
+    return base;
+  }
+
+  return {
+    ...base,
+    OR: [
+      {
+        createdAt: {
+          gte: sinceDate,
+        },
+      },
+      {
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+      },
+    ],
+  };
+}
+
 function buildDailySummaryWhere(sinceDate: Date | null): Prisma.DailyRadarSummaryWhereInput | undefined {
   if (!sinceDate) {
     return undefined;
@@ -437,6 +515,20 @@ function extractRepositoryIdFromJob(job: AnalysisJobRow) {
   }
 
   return readString(result?.repositoryId);
+}
+
+function extractHistoricalRepairActionFromJob(job: AnalysisJobRow) {
+  const payload = readObject(job.payload);
+  const payloadMetadata = readObject(payload?.metadata);
+  const result = readObject(job.result);
+  const resultMetadata = readObject(result?.metadata);
+
+  return (
+    readString(payload?.historicalRepairAction) ??
+    readString(payloadMetadata?.historicalRepairAction) ??
+    readString(result?.historicalRepairAction) ??
+    readString(resultMetadata?.historicalRepairAction)
+  );
 }
 
 function detectCancelled(job: TaskRow) {
@@ -726,16 +818,22 @@ async function loadAnalysisJobs(
   sinceDate: Date | null,
 ) {
   const rows = await prisma.jobLog.findMany({
-    where: {
-      ...(buildJobTimeWhere(sinceDate) ?? {}),
-      jobName: {
-        in: [QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT, QUEUE_JOB_TYPES.ANALYSIS_SINGLE],
-      },
+    where: buildAnalysisJobWhere(sinceDate),
+    orderBy: {
+      createdAt: 'desc',
     },
     select: analysisJobSelect,
   });
 
   const repoJobMap = new Map<string, RepoJobRuntime>();
+  const actionBacklogMap = new Map<
+    string,
+    {
+      pendingJobs: number;
+      runningJobs: number;
+      repoIds: Set<string>;
+    }
+  >();
   let deferredCount = 0;
   let failedAnalysisCount = 0;
 
@@ -751,8 +849,14 @@ async function loadAnalysisJobs(
       completedCount: 0,
       failedCount: 0,
       deferredCount: 0,
+      pendingSnapshotJobs: 0,
+      runningSnapshotJobs: 0,
+      pendingDeepJobs: 0,
+      runningDeepJobs: 0,
       latestSnapshotJobState: null,
       latestDeepJobState: null,
+      inflightActions: new Set<string>(),
+      latestInflightAction: null,
     };
 
     const normalizedStatus = normalizeTaskStatus(row.jobStatus);
@@ -770,27 +874,75 @@ async function loadAnalysisJobs(
       failedAnalysisCount += 1;
     }
 
+    if (row.jobName === QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT) {
+      if (normalizedStatus === 'PENDING') {
+        current.pendingSnapshotJobs += 1;
+      }
+      if (normalizedStatus === 'RUNNING') {
+        current.runningSnapshotJobs += 1;
+      }
+    }
+
+    if (row.jobName === QUEUE_JOB_TYPES.ANALYSIS_SINGLE) {
+      if (normalizedStatus === 'PENDING') {
+        current.pendingDeepJobs += 1;
+      }
+      if (normalizedStatus === 'RUNNING') {
+        current.runningDeepJobs += 1;
+      }
+    }
+
     if (detectDeferred(row)) {
       current.deferredCount += 1;
       deferredCount += 1;
     }
 
+    const historicalRepairAction = extractHistoricalRepairActionFromJob(row);
+    if (normalizedStatus === 'PENDING' || normalizedStatus === 'RUNNING') {
+      const actionKey = historicalRepairAction ?? 'unclassified';
+      const actionCurrent = actionBacklogMap.get(actionKey) ?? {
+        pendingJobs: 0,
+        runningJobs: 0,
+        repoIds: new Set<string>(),
+      };
+
+      if (normalizedStatus === 'PENDING') {
+        actionCurrent.pendingJobs += 1;
+      }
+      if (normalizedStatus === 'RUNNING') {
+        actionCurrent.runningJobs += 1;
+      }
+      actionCurrent.repoIds.add(repositoryId);
+      actionBacklogMap.set(actionKey, actionCurrent);
+
+      if (historicalRepairAction) {
+        current.inflightActions.add(historicalRepairAction);
+      }
+      if (!current.latestInflightAction) {
+        current.latestInflightAction = historicalRepairAction ?? actionKey;
+      }
+    }
+
     if (row.jobName === QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT) {
-      current.latestSnapshotJobState = classifyRuntimeTaskStatus({
-        pendingCount: normalizedStatus === 'PENDING' ? 1 : 0,
-        runningCount: normalizedStatus === 'RUNNING' ? 1 : 0,
-        completedCount: normalizedStatus === 'COMPLETED' ? 1 : 0,
-        failedCount: normalizedStatus === 'FAILED' ? 1 : 0,
-      });
+      if (!current.latestSnapshotJobState) {
+        current.latestSnapshotJobState = classifyRuntimeTaskStatus({
+          pendingCount: normalizedStatus === 'PENDING' ? 1 : 0,
+          runningCount: normalizedStatus === 'RUNNING' ? 1 : 0,
+          completedCount: normalizedStatus === 'COMPLETED' ? 1 : 0,
+          failedCount: normalizedStatus === 'FAILED' ? 1 : 0,
+        });
+      }
     }
 
     if (row.jobName === QUEUE_JOB_TYPES.ANALYSIS_SINGLE) {
-      current.latestDeepJobState = classifyRuntimeTaskStatus({
-        pendingCount: normalizedStatus === 'PENDING' ? 1 : 0,
-        runningCount: normalizedStatus === 'RUNNING' ? 1 : 0,
-        completedCount: normalizedStatus === 'COMPLETED' ? 1 : 0,
-        failedCount: normalizedStatus === 'FAILED' ? 1 : 0,
-      });
+      if (!current.latestDeepJobState) {
+        current.latestDeepJobState = classifyRuntimeTaskStatus({
+          pendingCount: normalizedStatus === 'PENDING' ? 1 : 0,
+          runningCount: normalizedStatus === 'RUNNING' ? 1 : 0,
+          completedCount: normalizedStatus === 'COMPLETED' ? 1 : 0,
+          failedCount: normalizedStatus === 'FAILED' ? 1 : 0,
+        });
+      }
     }
 
     repoJobMap.set(repositoryId, current);
@@ -798,6 +950,15 @@ async function loadAnalysisJobs(
 
   return {
     repoJobMap,
+    actionBacklogRows: Array.from(actionBacklogMap.entries()).map(
+      ([action, current]) =>
+        ({
+          action,
+          pendingJobs: current.pendingJobs,
+          runningJobs: current.runningJobs,
+          repoCount: current.repoIds.size,
+        }) satisfies HistoricalRepairActionBacklogRow,
+    ),
     deferredCount,
     failedAnalysisCount,
   };
@@ -1007,10 +1168,12 @@ export async function buildTaskAnalysisCompletionReport(
     queueCompletedFailedMap.set(queueName, existing);
   }
 
-  const { repoJobMap, deferredCount, failedAnalysisCount } = await loadAnalysisJobs(
-    prisma,
-    sinceDate,
-  );
+  const {
+    repoJobMap,
+    actionBacklogRows,
+    deferredCount,
+    failedAnalysisCount,
+  } = await loadAnalysisJobs(prisma, sinceDate);
   const auditSnapshot = await repositoryDecisionService.getLatestAuditSnapshot();
   const repositoryWhere = buildRepositoryTimeWhere(sinceDate);
 
@@ -1154,6 +1317,9 @@ export async function buildTaskAnalysisCompletionReport(
       | 'SKIPPED_BY_STRENGTH';
     const deepAnalysisStatusReason = readString(derived.deepAnalysisStatusReason);
     const analysisState = readObject(derived.analysisState);
+    const historicalRepairGuard = readObject(analysisState?.historicalRepairGuard);
+    const evidenceSummary = readObject(derived.evidenceMapSummary);
+    const evidenceDecision = readObject(finalDecision?.evidenceDecision);
     const source = readString(finalDecision?.source);
     const priority = readString(finalDecision?.moneyPriority);
     const verdict = readString(finalDecision?.verdict);
@@ -1164,6 +1330,19 @@ export async function buildTaskAnalysisCompletionReport(
       readString(readObject(analysis?.insightJson)?.oneLinerZh) ??
       readString(readObject(analysis?.ideaSnapshotJson)?.oneLinerZh) ??
       '';
+    const evidenceSupportingDimensions = readStringArray(
+      evidenceSummary?.supportingDimensions,
+    );
+    const keyEvidenceMissingCount = readStringArray(
+      evidenceSummary?.keyMissingDimensions,
+    ).length;
+    const keyEvidenceWeakCount = readStringArray(
+      evidenceSummary?.keyWeakDimensions,
+    ).length;
+    const keyEvidenceConflictCount = readStringArray(
+      evidenceSummary?.keyConflictDimensions,
+    ).length;
+    const evidenceConflictCount = readNumber(evidenceSummary?.conflictCount);
     const isDisplayReady = readBoolean(analysisState?.displayReady);
     const isDeepReady = readBoolean(analysisState?.deepReady);
     const isReviewReady = readBoolean(analysisState?.reviewReady);
@@ -1179,9 +1358,24 @@ export async function buildTaskAnalysisCompletionReport(
       completedCount: 0,
       failedCount: 0,
       deferredCount: 0,
+      pendingSnapshotJobs: 0,
+      runningSnapshotJobs: 0,
+      pendingDeepJobs: 0,
+      runningDeepJobs: 0,
       latestSnapshotJobState: null,
       latestDeepJobState: null,
+      inflightActions: new Set<string>(),
+      latestInflightAction: null,
     };
+    const historicalRepairAction = readString(historicalRepairGuard?.action);
+    const historicalRepairBucket = readString(historicalRepairGuard?.bucket);
+    const historicalRepairPriorityScore = readOptionalNumber(
+      historicalRepairGuard?.priorityScore,
+    );
+    const cleanupState = readString(historicalRepairGuard?.cleanupState);
+    const frontendDecisionState =
+      readString(analysisState?.frontendDecisionState) ??
+      readString(historicalRepairGuard?.frontendDecisionState);
     const claudeEligible = Boolean(
       priority === 'P0' ||
         priority === 'P1' ||
@@ -1204,6 +1398,13 @@ export async function buildTaskAnalysisCompletionReport(
       headlineUserConflict: assessment.metrics.headlineUserConflict,
       headlineCategoryConflict: assessment.metrics.headlineCategoryConflict,
       monetizationOverclaim: assessment.metrics.monetizationOverclaim,
+      evidenceCoverageRate: readNumber(evidenceSummary?.coverageRate),
+      keyEvidenceMissingCount,
+      keyEvidenceWeakCount,
+      keyEvidenceConflictCount,
+      decisionConflictCount: readStringArray(
+        evidenceSummary?.decisionConflictDimensions,
+      ).length,
       lowValue: Boolean(priority === 'P3' || action === 'IGNORE'),
       appearedOnHomepage: item.signal.appearedOnHomepage ?? false,
       appearedInDailySummary: item.signal.appearedInDailySummary ?? false,
@@ -1326,10 +1527,15 @@ export async function buildTaskAnalysisCompletionReport(
     if (assessment.validator.riskFlags.includes('english_leak')) {
       englishLeakCount += 1;
     }
-    if (!isDeepReady && Boolean(readString(readObject(finalDecision?.moneyDecision)?.monetizationSummaryZh))) {
+    if (!isDeepReady && evidenceSupportingDimensions.includes('monetization')) {
       noDeepButHasMonetization += 1;
     }
-    if (!isDeepReady && Boolean(readString(finalDecision?.reasonZh))) {
+    if (
+      !isDeepReady &&
+      evidenceSupportingDimensions.some((dimension) =>
+        ['problem', 'market', 'execution'].includes(dimension),
+      )
+    ) {
       noDeepButHasStrongWhy += 1;
     }
     if (assessment.metrics.fallbackVisible && Boolean(oneLinerZh)) {
@@ -1377,6 +1583,11 @@ export async function buildTaskAnalysisCompletionReport(
       priority,
       verdict,
       action,
+      historicalRepairAction,
+      historicalRepairBucket,
+      historicalRepairPriorityScore,
+      cleanupState,
+      frontendDecisionState,
       source,
       oneLinerStrength,
       oneLinerZh,
@@ -1387,6 +1598,13 @@ export async function buildTaskAnalysisCompletionReport(
       whyLabel:
         readString(finalDecision?.reasonZh) ??
         readString(readObject(finalDecision?.moneyDecision)?.reasonZh),
+      evidenceCoverageRate: readNumber(evidenceSummary?.coverageRate) || null,
+      keyEvidenceMissingCount,
+      keyEvidenceWeakCount,
+      keyEvidenceConflictCount,
+      evidenceConflictCount,
+      evidenceSupportingDimensions,
+      evidenceCurrentAction: readString(evidenceDecision?.currentAction),
       projectType: readString(finalDecision?.projectType),
       category:
         readString(finalDecision?.categoryLabelZh) ?? readString(finalDecision?.category),
@@ -1400,6 +1618,23 @@ export async function buildTaskAnalysisCompletionReport(
       appearedOnHomepage: item.signal.appearedOnHomepage ?? false,
       appearedInDailySummary: item.signal.appearedInDailySummary ?? false,
       appearedInTelegram: item.signal.appearedInTelegram ?? false,
+      pendingAnalysisJobs: repoJobs.pendingCount,
+      runningAnalysisJobs: repoJobs.runningCount,
+      pendingSnapshotJobs: repoJobs.pendingSnapshotJobs,
+      runningSnapshotJobs: repoJobs.runningSnapshotJobs,
+      pendingDeepJobs: repoJobs.pendingDeepJobs,
+      runningDeepJobs: repoJobs.runningDeepJobs,
+      failedAnalysisJobs: repoJobs.failedCount,
+      latestSnapshotJobState: repoJobs.latestSnapshotJobState,
+      latestDeepJobState: repoJobs.latestDeepJobState,
+      inflightActions: Array.from(repoJobs.inflightActions),
+      inflightAction: repoJobs.latestInflightAction,
+      needsDeepRepair:
+        historicalRepairAction === 'deep_repair' ||
+        (!state.deepDone && hasFinalDecision),
+      needsDecisionRecalc:
+        historicalRepairAction === 'decision_recalc' ||
+        (hasInsight && !hasFinalDecision),
       primaryIncompleteReason: state.primaryIncompleteReason,
       incompleteReasons: state.incompleteReasons,
       assessment,
@@ -1705,6 +1940,11 @@ export async function buildTaskAnalysisCompletionReport(
           trustedListReady: item.trustedListReady,
           monetizationLabel: item.monetizationLabel,
           whyLabel: item.whyLabel,
+          evidenceCoverageRate: item.evidenceCoverageRate,
+          keyEvidenceMissingCount: item.keyEvidenceMissingCount,
+          keyEvidenceConflictCount: item.keyEvidenceConflictCount,
+          evidenceSupportingDimensions: item.evidenceSupportingDimensions,
+          evidenceCurrentAction: item.evidenceCurrentAction,
           primaryIncompleteReason: item.primaryIncompleteReason,
           incompleteReasons: item.incompleteReasons,
           deepAnalysisStatus: item.deepAnalysisStatus,
@@ -1716,27 +1956,30 @@ export async function buildTaskAnalysisCompletionReport(
       : [],
   };
 
-  const incompleteSamplePool = Array.from(repoMap.values()).filter((item) => item.incomplete);
-  const incompleteRandomSamples = pickRandomSamples(
-    incompleteSamplePool,
-    Math.min(options.limit, 100),
-  ).map((item) => ({
-    repoId: item.repoId,
-    fullName: item.fullName,
-    priority: item.priority,
-    source: item.source,
-    primaryIncompleteReason: item.primaryIncompleteReason,
-    incompleteReasons: item.incompleteReasons,
-    deepAnalysisStatus: item.deepAnalysisStatus,
-    deepAnalysisStatusReason: item.deepAnalysisStatusReason,
-    hasSnapshot: item.hasSnapshot,
-    hasInsight: item.hasInsight,
-    hasFinalDecision: item.hasFinalDecision,
-    hasIdeaFit: item.hasIdeaFit,
-    hasIdeaExtract: item.hasIdeaExtract,
-    hasCompleteness: item.hasCompleteness,
-    hasClaudeReview: item.hasClaudeReview,
-  }));
+  const incompleteSamplePool = options.includeSamples
+    ? Array.from(repoMap.values()).filter((item) => item.incomplete)
+    : [];
+  const incompleteRandomSamples = options.includeSamples
+    ? pickRandomSamples(incompleteSamplePool, Math.min(options.limit, 100)).map(
+        (item) => ({
+          repoId: item.repoId,
+          fullName: item.fullName,
+          priority: item.priority,
+          source: item.source,
+          primaryIncompleteReason: item.primaryIncompleteReason,
+          incompleteReasons: item.incompleteReasons,
+          deepAnalysisStatus: item.deepAnalysisStatus,
+          deepAnalysisStatusReason: item.deepAnalysisStatusReason,
+          hasSnapshot: item.hasSnapshot,
+          hasInsight: item.hasInsight,
+          hasFinalDecision: item.hasFinalDecision,
+          hasIdeaFit: item.hasIdeaFit,
+          hasIdeaExtract: item.hasIdeaExtract,
+          hasCompleteness: item.hasCompleteness,
+          hasClaudeReview: item.hasClaudeReview,
+        }),
+      )
+    : [];
 
   const focusSummary = {
     focusRepoCount: focusRepos.length,
@@ -1744,6 +1987,26 @@ export async function buildTaskAnalysisCompletionReport(
     focusConflictCount: focusRepos.filter((item) => item.severeConflict).length,
     focusUnsafeCount: focusRepos.filter((item) => item.homepageUnsafe).length,
   };
+
+  const reportPanelRows = Array.from(repoMap.values()) as ReportRepoPanelRow[];
+  const backlogPanel = buildAnalysisBacklogPanel({
+    snapshotQueue:
+      queueRows.find((row) => row.queue === QUEUE_NAMES.ANALYSIS_SNAPSHOT) ?? null,
+    deepQueue:
+      queueRows.find((row) => row.queue === QUEUE_NAMES.ANALYSIS_SINGLE) ?? null,
+    actionBreakdown: actionBacklogRows,
+    repos: reportPanelRows,
+    limit: Math.min(options.limit, 20),
+  });
+  const incompletePanel = buildIncompletePanel({
+    repos: reportPanelRows,
+    limit: Math.min(options.limit, 20),
+  });
+  const readyToRankPanel = buildReadyToRankPanel({
+    repos: reportPanelRows,
+    featuredRepoIds,
+    limit: Math.min(options.limit, 20),
+  });
 
   const runtimeState = {
     selfTuning: readObject(runtimeConfigMap.get('github.self_tuning.state')),
@@ -1767,6 +2030,9 @@ export async function buildTaskAnalysisCompletionReport(
     repoSummary,
     analysisGapSummary,
     queueSummary,
+    backlogPanel,
+    incompletePanel,
+    readyToRankPanel,
     exposureSummary,
     bottleneckSummary,
     qualitySummary,
@@ -1823,19 +2089,22 @@ async function bootstrap() {
     }
 
     const visibleReport = options.queueOnly
-      ? {
-          generatedAt: report.generatedAt,
-          taskSummary: report.taskSummary,
-          queueSummary: report.queueSummary,
-          bottleneckSummary: report.bottleneckSummary,
-        }
-      : options.repoOnly
         ? {
             generatedAt: report.generatedAt,
-            repoSummary: report.repoSummary,
-            analysisGapSummary: report.analysisGapSummary,
-            userPerceptionSummary: report.userPerceptionSummary,
+            taskSummary: report.taskSummary,
+            queueSummary: report.queueSummary,
+            backlogPanel: report.backlogPanel,
+            bottleneckSummary: report.bottleneckSummary,
           }
+        : options.repoOnly
+          ? {
+              generatedAt: report.generatedAt,
+              repoSummary: report.repoSummary,
+              analysisGapSummary: report.analysisGapSummary,
+              incompletePanel: report.incompletePanel,
+              readyToRankPanel: report.readyToRankPanel,
+              userPerceptionSummary: report.userPerceptionSummary,
+            }
         : options.homepageOnly
           ? {
               generatedAt: report.generatedAt,

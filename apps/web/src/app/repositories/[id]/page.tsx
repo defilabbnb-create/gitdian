@@ -3,6 +3,7 @@ import { RepositoryAnalysisWorkbench } from '@/components/repositories/repositor
 import { RepositoryDetailConclusion } from '@/components/repositories/repository-detail-conclusion';
 import { RepositoryDetailHeader } from '@/components/repositories/repository-detail-header';
 import { RepositoryDetailCompleteness } from '@/components/repositories/repository-detail-completeness';
+import { RepositoryEvidenceDisclosure } from '@/components/repositories/repository-evidence-disclosure';
 import { RepositoryDetailIdeaExtract } from '@/components/repositories/repository-detail-idea-extract';
 import { RepositoryDetailIdeaFit } from '@/components/repositories/repository-detail-idea-fit';
 import { RepositoryNextSteps } from '@/components/repositories/repository-next-steps';
@@ -105,18 +106,9 @@ export default async function RepositoryDetailPage({
 
             {decisionView ? (
               <section className="grid gap-6 xl:grid-cols-3">
-                <RepositoryDetailIdeaFit
-                  repository={repository}
-                  decisionViewModel={decisionView}
-                />
-                <RepositoryDetailIdeaExtract
-                  repository={repository}
-                  decisionViewModel={decisionView}
-                />
-                <RepositoryDetailCompleteness
-                  repository={repository}
-                  decisionViewModel={decisionView}
-                />
+                <RepositoryDetailIdeaFit decisionViewModel={decisionView} />
+                <RepositoryDetailIdeaExtract decisionViewModel={decisionView} />
+                <RepositoryDetailCompleteness decisionViewModel={decisionView} />
               </section>
             ) : null}
 
@@ -142,27 +134,10 @@ export default async function RepositoryDetailPage({
               />
             ) : null}
 
-            <details
-              id="repository-evidence"
-              className="group rounded-[32px] border border-slate-200 bg-white/85 p-6 shadow-sm backdrop-blur"
+            <RepositoryEvidenceDisclosure
+              title="更深的判断对比、补跑入口和原始证据都放到这里，默认不打断主流程。"
+              description="只有当你要复核结论、补跑判断或核对原始仓库证据时，再展开这一层。"
             >
-              <summary className="cursor-pointer list-none">
-                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      证据区
-                    </p>
-                    <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-                      判断对比、补跑入口、校准信息和相邻机会全部下沉到这里。
-                    </h2>
-                  </div>
-                  <span className="text-sm font-semibold text-slate-600 transition group-open:rotate-180">
-                    展开
-                  </span>
-                </div>
-              </summary>
-
-              <div className="mt-6 space-y-6">
                 <RepositoryAnalysisWorkbench
                   repository={repository}
                   relatedJobs={relatedJobItems}
@@ -170,18 +145,64 @@ export default async function RepositoryDetailPage({
                 />
 
                 <div className="grid gap-6 xl:grid-cols-2">
-                  <RelatedRepositories
-                    items={relatedRepositories}
-                    errorMessage={relatedRepositoriesErrorMessage}
-                  />
-                  <RepositoryRelatedJobs
-                    repositoryId={repository.id}
-                    jobs={relatedJobs}
-                    errorMessage={relatedJobsErrorMessage}
-                  />
+                  <details className="group rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm">
+                    <summary className="cursor-pointer list-none">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            相邻机会
+                          </p>
+                          <h3 className="mt-3 text-xl font-semibold tracking-tight text-slate-950">
+                            只有当你要横向比较时，再看这些相邻项目。
+                          </h3>
+                          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+                            这里先回答它是不是同类里更值得继续看的候选。
+                          </p>
+                        </div>
+                        <span className="text-sm font-semibold text-slate-600 transition group-open:rotate-180">
+                          展开
+                        </span>
+                      </div>
+                    </summary>
+
+                    <div className="mt-6 border-t border-slate-200 pt-6">
+                      <RelatedRepositories
+                        items={relatedRepositories}
+                        errorMessage={relatedRepositoriesErrorMessage}
+                      />
+                    </div>
+                  </details>
+
+                  <details className="group rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm">
+                    <summary className="cursor-pointer list-none">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            关联任务
+                          </p>
+                          <h3 className="mt-3 text-xl font-semibold tracking-tight text-slate-950">
+                            只有当你要排查执行状态时，再看这些关联任务。
+                          </h3>
+                          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+                            这里先回答它是不是卡在队列、失败重试，还是已经完成。
+                          </p>
+                        </div>
+                        <span className="text-sm font-semibold text-slate-600 transition group-open:rotate-180">
+                          展开
+                        </span>
+                      </div>
+                    </summary>
+
+                    <div className="mt-6 border-t border-slate-200 pt-6">
+                      <RepositoryRelatedJobs
+                        repositoryId={repository.id}
+                        jobs={relatedJobs}
+                        errorMessage={relatedJobsErrorMessage}
+                      />
+                    </div>
+                  </details>
                 </div>
-              </div>
-            </details>
+            </RepositoryEvidenceDisclosure>
           </>
         ) : (
           <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">

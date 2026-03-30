@@ -35,6 +35,11 @@ export function JobsExpandedFlow({
   showActions = true,
 }: JobsExpandedFlowProps) {
   const [isExpanded, setIsExpanded] = useState(Boolean(focusedJobId));
+  const activeFilterBadges = buildExpandedFlowBadges({
+    itemCount: items.length,
+    pagination,
+    query,
+  });
 
   useEffect(() => {
     if (focusedJobId) {
@@ -69,12 +74,22 @@ export function JobsExpandedFlow({
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
             首屏先告诉你现在要不要处理；筛选、仓库上下文和整批任务历史都放到这一层。
           </p>
+          <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold">
+            {activeFilterBadges.map((badge) => (
+              <span
+                key={badge}
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-700"
+              >
+                {badge}
+              </span>
+            ))}
+          </div>
         </div>
 
         <button
           type="button"
           onClick={() => setIsExpanded((value) => !value)}
-          className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+          className="inline-flex w-full items-center justify-center rounded-full border border-slate-300 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 sm:w-auto"
         >
           {isExpanded ? '收起完整任务流' : '展开完整任务流'}
         </button>
@@ -105,4 +120,34 @@ export function JobsExpandedFlow({
       ) : null}
     </section>
   );
+}
+
+function buildExpandedFlowBadges(args: {
+  itemCount: number;
+  pagination: PaginationMeta;
+  query: JobLogQueryState;
+}) {
+  const badges = [`当前页 ${args.itemCount} 条`, `总任务 ${args.pagination.total} 条`];
+
+  if (args.query.jobName) {
+    badges.push(`任务类型 · ${args.query.jobName}`);
+  }
+
+  if (args.query.jobStatus) {
+    badges.push(`任务状态 · ${args.query.jobStatus}`);
+  }
+
+  if (args.query.pageSize !== 20) {
+    badges.push(`每页 ${args.query.pageSize} 条`);
+  }
+
+  if (args.query.repositoryId) {
+    badges.push('限定当前仓库');
+  }
+
+  if (args.query.focusJobId) {
+    badges.push('已锁定单个任务');
+  }
+
+  return badges;
 }

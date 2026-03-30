@@ -92,4 +92,17 @@ export type GitHubIdeaSnapshotJobPayload = {
   deepAnalysisOnlyIfPromising?: boolean;
   targetCategories?: string[];
   rootJobId?: string | null;
+  historicalRepairLane?: string;
+  historicalRepairAction?: string;
+  historicalRepairPriorityScore?: number;
+  routerNormalizedTaskType?: string;
+  routerTaskIntent?: string;
+  routerCapabilityTier?: string;
+  routerPriorityClass?: string;
+  routerFallbackPolicy?: string;
+  routerRequiresReview?: boolean;
+  routerRetryClass?: string;
+  routerCostSensitivity?: string;
+  routerLatencySensitivity?: string;
+  routerReasonSummary?: string;
 };

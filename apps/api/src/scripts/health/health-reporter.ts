@@ -8,6 +8,8 @@ export type DailyHealthReport = {
   generatedAt: string;
   status: HealthEvaluation['status'];
   summary: DailyHealthSnapshot['summary'];
+  globalSnapshot: DailyHealthSnapshot['globalSnapshot'];
+  recentSnapshot: DailyHealthSnapshot['recentSnapshot'];
   checks: HealthEvaluation['checks'];
   recommendations: string[];
   diff: HealthDiffResult | null;
@@ -59,6 +61,9 @@ export function renderDailyHealthMarkdown(report: DailyHealthReport) {
   const quality = report.summary.qualitySummary;
   const queue = report.summary.queueSummary;
   const behavior = report.summary.behaviorSummary;
+  const historical = report.summary.historicalRepairSummary;
+  const global = report.globalSnapshot;
+  const recent = report.recentSnapshot;
   const diffLines =
     report.diff?.entries.map((item) => {
       const arrow =
@@ -75,11 +80,17 @@ export function renderDailyHealthMarkdown(report: DailyHealthReport) {
     '',
     '## 核心指标',
     '',
-    `- total repos: ${repo.totalRepos}`,
-    `- fully analyzed: ${repo.fullyAnalyzedRepos}`,
-    `- deep 覆盖率: ${((repo.deepDoneRepos / Math.max(1, repo.totalRepos)) * 100).toFixed(2)}%`,
-    `- incomplete: ${repo.incompleteRepos}`,
+    `- total repos: ${global.totalRepos}`,
+    `- fully analyzed: ${global.fullyAnalyzed}`,
+    `- deep 覆盖率: ${(global.deepCoverage * 100).toFixed(2)}%`,
+    `- incomplete: ${global.incomplete}`,
     `- fallback: ${repo.fallbackRepos}`,
+    '',
+    '## 最近 1 天',
+    '',
+    `- new repos: ${recent.newRepos}`,
+    `- recent tasks: ${recent.recentTasks}`,
+    `- recent failures: ${recent.recentFailures}`,
     '',
     '## 首页污染',
     '',
@@ -98,6 +109,32 @@ export function renderDailyHealthMarkdown(report: DailyHealthReport) {
     `- pending: ${queue.pendingCount}`,
     `- deep backlog: ${queue.deepQueueSize}`,
     `- claude backlog: ${queue.claudeQueueSize}`,
+    '',
+    '## 历史修复',
+    '',
+    `- visible_broken: ${historical.visibleBrokenCount}`,
+    `- high_value_weak: ${historical.highValueWeakCount}`,
+    `- stale_watch: ${historical.staleWatchCount}`,
+    `- archive_or_noise: ${historical.archiveOrNoiseCount}`,
+    `- historicalTrustedButWeak: ${historical.historicalTrustedButWeakCount}`,
+    `- immediateFrontendDowngrade: ${historical.immediateFrontendDowngradeCount}`,
+    `- evidenceCoverageRate: ${(historical.evidenceCoverageRate * 100).toFixed(2)}%`,
+    `- keyEvidenceMissingCount: ${historical.keyEvidenceMissingCount}`,
+    `- evidenceConflictCount: ${historical.evidenceConflictCount}`,
+    `- evidenceWeakButVisibleCount: ${historical.evidenceWeakButVisibleCount}`,
+    `- conflictDrivenDecisionRecalcCount: ${historical.conflictDrivenDecisionRecalcCount}`,
+    `- historicalRepairQueue: ${historical.historicalRepairQueueCount}`,
+    `- action breakdown: downgrade=${historical.historicalRepairActionBreakdown.downgrade_only}, refresh=${historical.historicalRepairActionBreakdown.refresh_only}, evidence=${historical.historicalRepairActionBreakdown.evidence_repair}, deep=${historical.historicalRepairActionBreakdown.deep_repair}, recalc=${historical.historicalRepairActionBreakdown.decision_recalc}`,
+    `- visible_broken actions: downgrade=${historical.visibleBrokenActionBreakdown.downgrade_only}, evidence=${historical.visibleBrokenActionBreakdown.evidence_repair}, deep=${historical.visibleBrokenActionBreakdown.deep_repair}, recalc=${historical.visibleBrokenActionBreakdown.decision_recalc}`,
+    `- high_value_weak actions: refresh=${historical.highValueWeakActionBreakdown.refresh_only}, evidence=${historical.highValueWeakActionBreakdown.evidence_repair}, deep=${historical.highValueWeakActionBreakdown.deep_repair}, recalc=${historical.highValueWeakActionBreakdown.decision_recalc}`,
+    `- cleanup states: freeze=${historical.freezeCandidateCount}, archive=${historical.archiveCandidateCount}, purge_ready=${historical.purgeReadyCount}`,
+    `- frozen still visible: ${historical.frozenReposStillVisibleCount}`,
+    `- archived still scheduled: ${historical.archivedReposStillScheduledCount}`,
+    `- router capability breakdown: light=${historical.routerCapabilityBreakdown.LIGHT}, standard=${historical.routerCapabilityBreakdown.STANDARD}, heavy=${historical.routerCapabilityBreakdown.HEAVY}, review=${historical.routerCapabilityBreakdown.REVIEW}, deterministic=${historical.routerCapabilityBreakdown.DETERMINISTIC_ONLY}`,
+    `- router fallback breakdown: provider=${historical.routerFallbackBreakdown.PROVIDER_FALLBACK}, deterministic=${historical.routerFallbackBreakdown.DETERMINISTIC_ONLY}, light=${historical.routerFallbackBreakdown.LIGHT_DERIVATION}, retry_review=${historical.routerFallbackBreakdown.RETRY_THEN_REVIEW}, retry_downgrade=${historical.routerFallbackBreakdown.RETRY_THEN_DOWNGRADE}, downgrade=${historical.routerFallbackBreakdown.DOWNGRADE_ONLY}`,
+    `- router review required: ${historical.routerReviewRequiredCount}`,
+    `- router deterministic-only: ${historical.routerDeterministicOnlyCount}`,
+    `- router cleanup suppressed: ${historical.frozenOrArchivedTaskSuppressedCount}`,
     '',
     '## 行为系统',
     '',

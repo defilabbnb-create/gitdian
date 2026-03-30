@@ -48,7 +48,12 @@ export class IdeaFitService {
     private readonly analysisTrainingKnowledgeService: AnalysisTrainingKnowledgeService,
   ) {}
 
-  async analyzeRepository(repositoryId: string) {
+  async analyzeRepository(
+    repositoryId: string,
+    options: {
+      refreshInsight?: boolean;
+    } = {},
+  ) {
     const repository = await this.prisma.repository.findUnique({
       where: { id: repositoryId },
       include: {
@@ -61,7 +66,7 @@ export class IdeaFitService {
       throw new NotFoundException(`Repository with id "${repositoryId}" was not found.`);
     }
 
-    return this.analyzeRepositoryRecord(repository);
+    return this.analyzeRepositoryRecord(repository, options);
   }
 
   async analyzeBatch(dto: BatchIdeaFitAnalysisDto) {
@@ -133,7 +138,12 @@ export class IdeaFitService {
     };
   }
 
-  private async analyzeRepositoryRecord(repository: RepositoryAnalysisTarget) {
+  private async analyzeRepositoryRecord(
+    repository: RepositoryAnalysisTarget,
+    options: {
+      refreshInsight?: boolean;
+    } = {},
+  ) {
     const promptInput = buildIdeaFitPromptInput(repository);
     const basePrompt = buildIdeaFitPrompt(promptInput);
     const prompt = await this.analysisTrainingKnowledgeService.enhancePrompt(
@@ -196,7 +206,9 @@ export class IdeaFitService {
       },
     });
 
-    await this.repositoryInsightService.refreshInsight(repository.id);
+    if (options.refreshInsight !== false) {
+      await this.repositoryInsightService.refreshInsight(repository.id);
+    }
 
     return {
       repositoryId: repository.id,
