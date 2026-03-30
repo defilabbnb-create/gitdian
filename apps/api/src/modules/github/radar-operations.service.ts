@@ -104,6 +104,7 @@ export class RadarOperationsService {
 
   async getWarnings(args: {
     isRunning: boolean;
+    schedulerEnabled: boolean;
     pendingWindowScheduledAt: string | null;
     schedulerReason: string | null;
     snapshotQueueSize: number;
@@ -164,6 +165,18 @@ export class RadarOperationsService {
 
     if (
       args.isRunning &&
+      !args.schedulerEnabled
+    ) {
+      warnings.push({
+        code: 'scheduler_env_disabled',
+        level: 'critical',
+        message:
+          'Radar 状态仍显示 running，但当前进程没有开启连续调度能力。请检查 ENABLE_CONTINUOUS_RADAR 与 GITHUB_NEW_REPOSITORY_INTAKE_ENABLED，否则不会继续补充新的 snapshot / deep 任务。',
+      });
+    }
+
+    if (
+      args.isRunning &&
       args.pendingWindowScheduledAt &&
       now - new Date(args.pendingWindowScheduledAt).getTime() >
         args.staleThresholdMs / 2
@@ -212,6 +225,19 @@ export class RadarOperationsService {
         code: 'github_aggressive_backoff_active',
         level: 'warning',
         message: `GitHub 搜索并发当前处于保守档位（current=${args.currentSearchConcurrency}, target=${args.targetSearchConcurrency}），系统正在主动回避 rate limit 压力。`,
+      });
+    }
+
+    if (
+      args.isRunning &&
+      args.snapshotQueueSize === 0 &&
+      !args.keywordModeEnabled
+    ) {
+      warnings.push({
+        code: 'keyword_mode_disabled',
+        level: 'warning',
+        message:
+          'snapshot 队列已经空转，但关键词供给层当前未启用。若要持续补 feed 并提高 AI 吞吐，建议开启 RADAR_KEYWORD_MODE_ENABLED。',
       });
     }
 

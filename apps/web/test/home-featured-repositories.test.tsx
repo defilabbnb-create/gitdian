@@ -144,6 +144,65 @@ function createTrustedButIneligibleRepository(index: number) {
   } as unknown as Partial<RepositoryListItem>);
 }
 
+function createRecoveryRepository(index: number) {
+  return createHomepageRepository(index, {
+    finalDecision: {
+      oneLinerStrength: 'MEDIUM',
+      moneyPriority: 'P2',
+      moneyPriorityLabelZh: 'P2 · 值得借鉴',
+      action: 'BUILD',
+      decisionSummary: {
+        headlineZh: '一个帮团队管理密钥与环境变量的工具',
+        finalDecisionLabelZh: '值得继续看 · 先补证据',
+        moneyPriorityLabelZh: 'P2 · 值得借鉴',
+        reasonZh: '用户、场景和收费路径都比较明确，但当前 headline 强度还不够进 trusted 首屏。',
+        targetUsersZh: '开发团队和平台工程团队',
+        monetizationSummaryZh: '适合按团队订阅和托管版验证付费。',
+      },
+      moneyDecision: {
+        score: 91,
+        targetUsersZh: '开发团队和平台工程团队',
+        monetizationSummaryZh: '适合按团队订阅和托管版验证付费。',
+      },
+    },
+    analysis: {
+      insightJson: {
+        oneLinerZh: '一个帮团队管理密钥与环境变量的工具',
+        verdict: 'GOOD',
+        verdictReason: '用户、场景和收费路径都比较明确，但当前 headline 强度还不够进 trusted 首屏。',
+        action: 'BUILD',
+        completenessScore: 84,
+        completenessLevel: 'HIGH',
+        category: {
+          main: 'tools',
+          sub: 'devtools',
+        },
+        projectReality: {
+          type: 'tool',
+          hasRealUser: true,
+          hasClearUseCase: true,
+          isDirectlyMonetizable: true,
+        },
+        summaryTags: ['密钥管理', '平台工程'],
+        oneLinerStrength: 'MEDIUM',
+      },
+      moneyPriority: {
+        score: 91,
+        moneyScore: 91,
+        reasonZh: '用户、场景和收费路径都比较明确，但当前 headline 强度还不够进 trusted 首屏。',
+        targetUsersZh: '开发团队和平台工程团队',
+        monetizationSummaryZh: '适合按团队订阅和托管版验证付费。',
+        signals: {
+          hasRealUser: true,
+          hasClearUseCase: true,
+          isDirectlyMonetizable: true,
+          looksInfraLayer: false,
+        },
+      },
+    },
+  } as unknown as Partial<RepositoryListItem>);
+}
+
 test('falls back to strong provisional homepage candidates when the trusted pool is empty', () => {
   const items = Array.from({ length: 5 }, (_, index) =>
     createStrongProvisionalRepository(index + 1),
@@ -205,6 +264,35 @@ test('new opportunities strip uses softer copy instead of the empty state in pro
 
   const html = renderToStaticMarkup(<HomeNewOpportunitiesStrip items={items} />);
 
+  assert.match(html, /值得先补一轮证据/);
+  assert.doesNotMatch(html, /data-home-empty-state="true"/);
+});
+
+test('falls back to recovery candidates when trusted and provisional pools are both empty', () => {
+  const items = Array.from({ length: 5 }, (_, index) =>
+    createRecoveryRepository(index + 1),
+  );
+
+  const selection = selectHomepageDecisionTerminal(
+    items,
+    new Map(),
+    getBehaviorMemoryProfile(),
+  );
+
+  assert.equal(selection.selectionMode, 'recovery');
+  assert.ok(selection.top1);
+  assert.equal(selection.top3.length, 3);
+  assert.equal(selection.newOpportunities.length, 1);
+});
+
+test('recovery selection keeps the homepage in evidence-recovery copy instead of empty state', () => {
+  const items = Array.from({ length: 5 }, (_, index) =>
+    createRecoveryRepository(index + 1),
+  );
+
+  const html = renderToStaticMarkup(<HomeNewOpportunitiesStrip items={items} />);
+
+  assert.match(html, /还没到高信任结论/);
   assert.match(html, /值得先补一轮证据/);
   assert.doesNotMatch(html, /data-home-empty-state="true"/);
 });

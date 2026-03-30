@@ -432,8 +432,13 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
                 : 'steady',
           fastStart: bootstrapFastStartEnabled,
         };
+    // Status is served from the API process, while the scheduler loop runs in the
+    // dedicated worker process. The worker forces ENABLE_QUEUE_WORKERS=true, so
+    // here we report whether continuous radar scheduling is configured overall.
+    const schedulerEnabled = this.isContinuousRadarEnabled();
     const warningState = await this.radarOperationsService.getWarnings({
       isRunning: state.isRunning,
+      schedulerEnabled,
       pendingWindowScheduledAt: state.pendingWindow?.scheduledAt ?? null,
       schedulerReason,
       snapshotQueueSize: snapshotQueue.total,
@@ -463,9 +468,7 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
     return {
       ...state,
       bootstrapFastStartEnabled,
-      schedulerEnabled:
-        process.env.ENABLE_QUEUE_WORKERS === 'true' &&
-        this.isContinuousRadarEnabled(),
+      schedulerEnabled,
       schedulerReason,
       snapshotQueueSize: snapshotQueue.total,
       deepQueueSize: deepQueue.total,

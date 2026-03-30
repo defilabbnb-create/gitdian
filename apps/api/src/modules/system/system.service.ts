@@ -15,6 +15,7 @@ export type SystemWarningsPayload = {
   radar: {
     mode: string;
     isRunning: boolean;
+    schedulerEnabled: boolean;
     schedulerReason: string | null;
     bootstrapCursorDate: string;
     pendingWindow:
@@ -96,6 +97,7 @@ export class SystemService {
       radar: {
         mode: status.mode,
         isRunning: status.isRunning,
+        schedulerEnabled: status.schedulerEnabled,
         schedulerReason: status.schedulerReason,
         bootstrapCursorDate: status.bootstrapCursorDate,
         pendingWindow: status.pendingWindow

@@ -87,7 +87,7 @@ type HomepageSelection = {
   top3: Candidate[];
   newOpportunities: Candidate[];
   profile: BehaviorMemoryProfile;
-  selectionMode: 'trusted' | 'provisional' | 'empty';
+  selectionMode: 'trusted' | 'provisional' | 'recovery' | 'empty';
 };
 
 export function HomeFeaturedRepositories({
@@ -159,7 +159,7 @@ export function HomeFeaturedRepositories({
   }
 
   const top1 = selection.top1;
-  const isProvisionalSelection = selection.selectionMode === 'provisional';
+  const isEvidenceRecoverySelection = selection.selectionMode !== 'trusted';
   const top1Reason = top1.decisionView.display.reason;
   const top1Users = sanitizeTopSignalValue(
     top1.decisionView.display.targetUsersLabel,
@@ -174,7 +174,7 @@ export function HomeFeaturedRepositories({
           今天最该推进
         </p>
         <h1 className="mt-2 text-4xl font-semibold tracking-tight text-slate-950 md:text-[3.2rem]">
-          {isProvisionalSelection ? '今天先补这一个。' : '今天先做这一个。'}
+          {isEvidenceRecoverySelection ? '今天先补这一个。' : '今天先做这一个。'}
         </h1>
         {selection.profile.preferredCategories.length ||
         selection.profile.avoidedCategories.length ? (
@@ -210,7 +210,7 @@ export function HomeFeaturedRepositories({
           {top1.headline}
         </Link>
         <p className="mt-4 text-lg font-semibold text-amber-200">
-          {isProvisionalSelection
+          {isEvidenceRecoverySelection
             ? '这是今天最值得先补证据的候选'
             : '这是今天最值得先做的项目'}
         </p>
@@ -235,7 +235,7 @@ export function HomeFeaturedRepositories({
         <div className="mt-6 grid gap-3 lg:grid-cols-3">
           <TopSignal label="用户是谁" value={top1Users} />
           <TopSignal
-            label={isProvisionalSelection ? '为什么先看它' : '为什么值得做'}
+            label={isEvidenceRecoverySelection ? '为什么先看它' : '为什么值得做'}
             value={top1Reason}
           />
           <TopSignal label="能不能收费" value={top1Monetization} />
@@ -270,7 +270,10 @@ export function HomeFeaturedRepositories({
           </a>
         </div>
 
-        <HomepageTopActionStrip candidate={top1} />
+        <HomepageTopActionStrip
+          candidate={top1}
+          evidenceRecoveryMode={selection.selectionMode === 'recovery'}
+        />
       </article>
 
       {selection.top3.length ? (
@@ -280,7 +283,7 @@ export function HomeFeaturedRepositories({
               Top 2-4
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-              {isProvisionalSelection
+              {isEvidenceRecoverySelection
                 ? '接下来优先补证据的 3 个候选'
                 : '接下来直接验证的 3 个机会'}
             </h2>
@@ -351,10 +354,12 @@ function TopSignal({
 
 function HomepageTopActionStrip({
   candidate,
+  evidenceRecoveryMode = false,
 }: {
   candidate: Candidate;
+  evidenceRecoveryMode?: boolean;
 }) {
-  const router = useRouter();
+  const router = useOptionalRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -381,6 +386,26 @@ function HomepageTopActionStrip({
     }),
     [candidate],
   );
+  const cta = evidenceRecoveryMode
+    ? {
+        primary: {
+          title: '先补分析',
+          intent: 'validate' as const,
+        },
+        secondary: {
+          title: '查看详情',
+          intent: 'reference' as const,
+        },
+        tertiary: {
+          title: '加入跟进列表',
+          intent: 'follow_up' as const,
+        },
+      }
+    : {
+        primary: candidate.decisionView.cta.primary,
+        secondary: candidate.decisionView.cta.secondary,
+        tertiary: candidate.decisionView.cta.tertiary,
+      };
 
   function handleKeepAsReference() {
     setErrorMessage(null);
@@ -416,7 +441,7 @@ function HomepageTopActionStrip({
     setFeedback(null);
 
     if (status === 'IN_PROGRESS' || status === 'VALIDATING') {
-      router.push(`/repositories/${candidate.repository.id}#next-steps`);
+      router?.push(`/repositories/${candidate.repository.id}#next-steps`);
       return;
     }
 
@@ -430,7 +455,7 @@ function HomepageTopActionStrip({
     appendActionLog('start_project_clicked', candidate.repository.id);
     setFeedback('已经切到进行中，现在去详情页继续推进。');
     startTransition(() => {
-      router.push(`/repositories/${candidate.repository.id}#next-steps`);
+      router?.push(`/repositories/${candidate.repository.id}#next-steps`);
     });
   }
 
@@ -498,27 +523,27 @@ function HomepageTopActionStrip({
         <span className="text-slate-300">现在就开始：</span>
         <button
           type="button"
-          onClick={() => handleIntent(candidate.decisionView.cta.primary.intent)}
+          onClick={() => handleIntent(cta.primary.intent)}
           className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
         >
-          {candidate.decisionView.cta.primary.title}
+          {cta.primary.title}
         </button>
         <button
           type="button"
-          onClick={() => handleIntent(candidate.decisionView.cta.tertiary.intent)}
-          disabled={isSubmitting || (isActiveFollowUp && candidate.decisionView.cta.tertiary.intent === 'follow_up')}
+          onClick={() => handleIntent(cta.tertiary.intent)}
+          disabled={isSubmitting || (isActiveFollowUp && cta.tertiary.intent === 'follow_up')}
           className="inline-flex items-center rounded-full border border-sky-400/40 bg-sky-500/10 px-4 py-2 font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {candidate.decisionView.cta.tertiary.intent === 'follow_up' && isActiveFollowUp
+          {cta.tertiary.intent === 'follow_up' && isActiveFollowUp
             ? '已加入跟进'
-            : candidate.decisionView.cta.tertiary.title}
+            : cta.tertiary.title}
         </button>
         <button
           type="button"
-          onClick={() => handleIntent(candidate.decisionView.cta.secondary.intent)}
+          onClick={() => handleIntent(cta.secondary.intent)}
           className="inline-flex items-center rounded-full border border-amber-400/40 bg-amber-500/10 px-4 py-2 font-semibold text-amber-100 transition hover:border-amber-300 hover:bg-amber-500/20"
         >
-          {candidate.decisionView.cta.secondary.title}
+          {cta.secondary.title}
         </button>
       </div>
       {feedback ? (
@@ -529,6 +554,14 @@ function HomepageTopActionStrip({
       ) : null}
     </div>
   );
+}
+
+function useOptionalRouter() {
+  try {
+    return useRouter();
+  } catch {
+    return null;
+  }
 }
 
 function RecommendationBreakdownChips({
@@ -585,6 +618,9 @@ export function selectHomepageDecisionTerminal(
   const provisionalCandidates = seededCandidates
     .filter((candidate) => passesHomepageProvisionalFallbackGuard(candidate))
     .sort((left, right) => compareCandidates(left, right));
+  const recoveryCandidates = seededCandidates
+    .filter((candidate) => passesHomepageRecoveryGuard(candidate))
+    .sort((left, right) => compareCandidates(left, right));
   const strictSelection = buildHomepageSelection(strictCandidates, profile);
   if (strictSelection.top1) {
     return {
@@ -604,6 +640,17 @@ export function selectHomepageDecisionTerminal(
     };
   }
 
+  const recoverySelection = buildHomepageSelection(recoveryCandidates, profile, {
+    topCandidateGuard: () => true,
+    visibleCandidateGuard: () => true,
+  });
+  if (recoverySelection.top1) {
+    return {
+      ...recoverySelection,
+      selectionMode: 'recovery',
+    };
+  }
+
   return {
     ...strictSelection,
     profile,
@@ -614,25 +661,32 @@ export function selectHomepageDecisionTerminal(
 function buildHomepageSelection(
   candidates: Candidate[],
   profile: BehaviorMemoryProfile,
+  options: {
+    topCandidateGuard?: (candidate: Candidate) => boolean;
+    visibleCandidateGuard?: (candidate: Candidate) => boolean;
+  } = {},
 ) {
+  const topCandidateGuard = options.topCandidateGuard ?? isTop1Candidate;
+  const visibleCandidateGuard = options.visibleCandidateGuard ?? isSecondaryCandidate;
   const activeTop1 =
     candidates.find(
       (candidate) =>
         (candidate.actionStatus === 'IN_PROGRESS' ||
           candidate.actionStatus === 'VALIDATING') &&
-        isSecondaryCandidate(candidate),
+        visibleCandidateGuard(candidate),
     ) ?? null;
-  const strictTop1 = candidates.find((candidate) => isTop1Candidate(candidate)) ?? null;
+  const strictTop1 =
+    candidates.find((candidate) => topCandidateGuard(candidate)) ?? null;
   const top1 =
     activeTop1 ??
     strictTop1 ??
-    candidates.find((candidate) => isSecondaryCandidate(candidate)) ??
+    candidates.find((candidate) => visibleCandidateGuard(candidate)) ??
     null;
 
   const secondaryPool = candidates.filter(
     (candidate) =>
       candidate.repository.id !== top1?.repository.id &&
-      isSecondaryCandidate(candidate),
+      visibleCandidateGuard(candidate),
   );
   const newOpportunities = candidates.filter(
     (candidate) =>
@@ -946,6 +1000,74 @@ function passesHomepageProvisionalFallbackGuard(candidate: Candidate) {
   return true;
 }
 
+function passesHomepageRecoveryGuard(candidate: Candidate) {
+  if (
+    candidate.actionStatus === 'COMPLETED' ||
+    candidate.actionStatus === 'DROPPED'
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.behaviorRecommendation.blocked &&
+    candidate.actionStatus !== 'IN_PROGRESS' &&
+    candidate.actionStatus !== 'VALIDATING'
+  ) {
+    return false;
+  }
+
+  if (hasLowValueHomepageSignal(candidate.summary)) {
+    return false;
+  }
+
+  if (
+    candidate.summary.moneyPriority.tier === 'P3' ||
+    candidate.summary.source === 'fallback' ||
+    candidate.summary.action === 'IGNORE'
+  ) {
+    return false;
+  }
+
+  if (
+    !candidate.hasRealUser ||
+    !candidate.hasClearUseCase ||
+    !candidate.isDirectlyMonetizable ||
+    candidate.hasUnclearUser
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.projectType === 'demo' ||
+    candidate.projectType === 'model' ||
+    candidate.projectType === 'infra' ||
+    candidate.looksInfraLike
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.decisionView.flags.fallback ||
+    candidate.decisionView.flags.conflict ||
+    candidate.guard.fallback ||
+    candidate.guard.snapshotConflict ||
+    candidate.guard.severeConflict ||
+    candidate.guard.weakStrength
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.oneLinerStrength === 'WEAK' ||
+    candidate.headline.startsWith('这个项目') ||
+    candidate.headline.startsWith('当前这个项目')
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function compareCandidates(left: Candidate, right: Candidate) {
   const actionDelta =
     getActionPriorityWeight(right.actionStatus) -
@@ -1122,7 +1244,7 @@ export function HomeNewOpportunitiesStrip({
           新机会
         </p>
         <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-          {selection.selectionMode === 'provisional'
+          {selection.selectionMode !== 'trusted'
             ? '这些方向还没到高信任结论，但值得先补一轮证据。'
             : '已经自动避开你验证失败的方向，剩下这些值得新开一轮判断。'}
         </h2>
