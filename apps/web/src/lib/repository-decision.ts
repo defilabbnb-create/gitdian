@@ -326,6 +326,12 @@ const GENERIC_HOMEPAGE_REASON_PATTERNS = [
   /^先确认谁会持续使用它，再决定要不要继续投入[。！]?$/,
 ];
 
+const ABSTRACT_SIGNAL_REASON_PATTERNS = [
+  /^(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:这块|这几块)?(?:证据)?\s*(?:还)?(?:偏弱|不足|缺失|待补|仍缺|还在补|不够稳|不够清楚)[。！]?$/,
+  /^(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:这块)?(?:证据)?\s*还有冲突[。！]?$/,
+  /^冲突集中在\s*(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:、\s*(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客))*[。！]?$/,
+];
+
 const STRONG_FORWARD_ACTION_PATTERNS = [
   /立即做/,
   /可以继续投入/,
@@ -823,13 +829,45 @@ export function localizeAnalysisTerms(value: string) {
     .trim();
 }
 
+function normalizeEvidenceDimensionList(value: string) {
+  return value
+    .replace(/\s*\/\s*/g, '、')
+    .replace(/\s*、\s*/g, '、')
+    .replace(/[、，,\s]+$/u, '')
+    .trim();
+}
+
+export function normalizeAnalysisEvidencePhrase(value: string) {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return '';
+  }
+
+  const weakEvidenceMatch = normalized.match(/^(.+?)\s*证据偏弱[。！]?$/u);
+
+  if (weakEvidenceMatch) {
+    return `${normalizeEvidenceDimensionList(weakEvidenceMatch[1])}这几块证据还偏弱`;
+  }
+
+  const conflictMatch = normalized.match(/^冲突集中在\s*(.+?)[。！]?$/u);
+
+  if (conflictMatch) {
+    return `当前冲突主要集中在${normalizeEvidenceDimensionList(conflictMatch[1])}`;
+  }
+
+  return normalized;
+}
+
 function cleanLocalizedDecisionText(value: unknown) {
   const normalized = cleanText(value);
   if (!normalized) {
     return '';
   }
 
-  return cleanDecisionText(localizeAnalysisTerms(normalized));
+  return cleanDecisionText(
+    normalizeAnalysisEvidencePhrase(localizeAnalysisTerms(normalized)),
+  );
 }
 
 function pickText(...values: Array<unknown>) {
@@ -874,11 +912,19 @@ function isGenericHomepageReason(value: string) {
   return GENERIC_HOMEPAGE_REASON_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function isAbstractSignalReason(value: string) {
+  return ABSTRACT_SIGNAL_REASON_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 function pickSpecificHomepageReason(...values: Array<unknown>) {
   for (const value of values) {
     const normalized = cleanLocalizedDecisionText(value);
 
-    if (normalized && !isGenericHomepageReason(normalized)) {
+    if (
+      normalized &&
+      !isGenericHomepageReason(normalized) &&
+      !isAbstractSignalReason(normalized)
+    ) {
       return normalized;
     }
   }
@@ -887,8 +933,220 @@ function pickSpecificHomepageReason(...values: Array<unknown>) {
 }
 
 function inferTargetUsersFromHeadline(headline: string) {
-  const matched = headline.match(/^一个帮(.+?)做.+的(?:工具|系统|平台|项目)/);
-  return matched?.[1]?.trim() ?? null;
+  const normalized = trimHeadlinePunctuation(headline);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const finalizeTargetUsers = (
+    value: string | null | undefined,
+    options: {
+      dedicatedScene?: boolean;
+    } = {},
+  ) => {
+    const trimmed = value
+      ?.replace(/^(?:主要)?面向/u, '')
+      .replace(/^(?:最)?适合/u, '')
+      .replace(/[，。；;：:、]+$/gu, '')
+      .trim();
+
+    if (!trimmed) {
+      return null;
+    }
+
+    if (
+      /(用户|开发者|团队|卖家|商家|运营|设计师|学生|老师|创作者|工程师|管理员|企业|公司|组织|研究者|程序员|博主|面试官|销售|客服|产品经理|HR|招聘者)/u.test(
+        trimmed,
+      )
+    ) {
+      return trimmed;
+    }
+
+    if (options.dedicatedScene) {
+      return `${trimmed}场景用户`;
+    }
+
+    return trimmed.length <= 10 ? `${trimmed}用户` : trimmed;
+  };
+
+  const patterns: Array<{
+    pattern: RegExp;
+    map?: (value: string) => string | null;
+    dedicatedScene?: boolean;
+  }> = [
+    {
+      pattern: /^(.+?用户)(?:利用|使用|通过|借助|在)/u,
+    },
+    {
+      pattern: /主要面向(.+?)(?:，|。|；|;|并|但|且|$)/u,
+    },
+    {
+      pattern: /面向(.+?)(?:，|。|；|;|并|但|且|$)/u,
+    },
+    {
+      pattern: /专为(.+?)设计/u,
+      dedicatedScene: true,
+    },
+    {
+      pattern: /帮助(.+?)(?:进行|完成|管理|处理|接入|搭建|记录|搜索|同步|分析|转录|结算)/u,
+    },
+    {
+      pattern: /^一个帮(.+?)做.+的(?:工具|系统|平台|项目)/u,
+    },
+  ];
+
+  for (const item of patterns) {
+    const matched = normalized.match(item.pattern);
+
+    if (!matched?.[1]) {
+      continue;
+    }
+
+    const resolved = item.map ? item.map(matched[1]) : matched[1];
+    const finalized = finalizeTargetUsers(resolved, {
+      dedicatedScene: item.dedicatedScene,
+    });
+
+    if (finalized) {
+      return finalized;
+    }
+  }
+
+  return null;
+}
+
+type RepositoryMetadataHint = {
+  pattern: RegExp;
+  subject: string;
+  targetUsers: string;
+};
+
+const REPOSITORY_METADATA_HINTS: RepositoryMetadataHint[] = [
+  {
+    pattern:
+      /(app[- ]store|app store connect|testflight|google play|ios apps?|iphone|swiftui|screenshots?)/i,
+    subject: '一个帮 iOS 应用生成 App Store 截图的工具',
+    targetUsers: 'iOS 应用开发者和移动产品团队',
+  },
+  {
+    pattern:
+      /(meeting|transcri|transcript|voice input|dictat|speech[- ]to[- ]text|speech to text|whisper|voice typing|audio notes|macos)/i,
+    subject: '一个面向 macOS 的会议转录和语音输入工具',
+    targetUsers: '需要会议转录或语音输入的 macOS 用户',
+  },
+  {
+    pattern: /(snippet|code snippet|snippets? manager)/i,
+    subject: '一个本地优先的代码片段管理工具',
+    targetUsers: '经常复用代码片段的开发者',
+  },
+  {
+    pattern: /(resume|ats|curriculum vitae|job application|cover letter)/i,
+    subject: '一个帮求职者优化简历并生成 ATS 匹配评分的工具',
+    targetUsers: '正在求职的开发者和候选人',
+  },
+  {
+    pattern:
+      /(expense|expenses|split bill|bill split|group expense|settlement|travel budget|trip costs?)/i,
+    subject: '一个帮小团队记账和自动结算群费的工具',
+    targetUsers: '需要分摊出行或活动费用的小团队',
+  },
+  {
+    pattern:
+      /(secret|secrets|environment variables?|env vars?|dotenv|apikey|api keys?|token manager|vault)/i,
+    subject: '一个帮团队管理密钥和环境变量的工具',
+    targetUsers: '开发团队和平台工程团队',
+  },
+  {
+    pattern:
+      /(auth|authentication|authorization|login|permissions?|rbac|sso|oauth)/i,
+    subject: '一个帮应用接入登录和权限能力的工具',
+    targetUsers: '需要快速接入登录和权限的开发团队',
+  },
+];
+
+function getRepositoryMetadataCorpus(repository: RepositoryDecisionTarget) {
+  return [
+    repository.name,
+    repository.fullName,
+    repository.description,
+    repository.homepage,
+    repository.language,
+    repository.topics?.join(' '),
+    repository.content?.readmeText?.slice(0, 1200),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join('\n');
+}
+
+function matchRepositoryMetadataHint(repository: RepositoryDecisionTarget) {
+  const corpus = getRepositoryMetadataCorpus(repository);
+
+  if (!corpus) {
+    return null;
+  }
+
+  return (
+    REPOSITORY_METADATA_HINTS.find((hint) => hint.pattern.test(corpus)) ?? null
+  );
+}
+
+function inferRepositorySpecificSubject(
+  repository: RepositoryDecisionTarget,
+  _summary: RepositoryDecisionSummary,
+) {
+  const hint = matchRepositoryMetadataHint(repository);
+
+  if (hint) {
+    return hint.subject;
+  }
+
+  const localizedDescription = trimHeadlinePunctuation(repository.description);
+
+  if (
+    localizedDescription &&
+    !hasEnglishLeak(localizedDescription) &&
+    !isGenericOneLiner(localizedDescription)
+  ) {
+    return localizedDescription;
+  }
+
+  return null;
+}
+
+function inferRepositoryTargetUsersFromMetadata(
+  repository: RepositoryDecisionTarget,
+  summary: RepositoryDecisionSummary,
+) {
+  const hint = matchRepositoryMetadataHint(repository);
+
+  if (hint) {
+    return hint.targetUsers;
+  }
+
+  const categoryLabel = summary.category.label;
+
+  if (categoryLabel.includes('开发工具') || categoryLabel.includes('CLI')) {
+    return '开发者和技术小团队';
+  }
+
+  if (categoryLabel.includes('自动化') || categoryLabel.includes('工作流')) {
+    return '运营团队和需要自动化流程的小团队';
+  }
+
+  if (categoryLabel.includes('数据')) {
+    return '数据团队和业务分析人员';
+  }
+
+  if (categoryLabel.includes('内容')) {
+    return '内容团队和运营人员';
+  }
+
+  if (categoryLabel.includes('安全') || categoryLabel.includes('身份认证')) {
+    return '开发团队和平台工程团队';
+  }
+
+  return null;
 }
 
 function trimHeadlinePunctuation(text: string | null | undefined) {
@@ -922,6 +1180,12 @@ function resolveSpecificFallbackSubject(
 
   if (safeHeadline) {
     return safeHeadline;
+  }
+
+  const metadataSubject = inferRepositorySpecificSubject(repository, summary);
+
+  if (metadataSubject) {
+    return metadataSubject;
   }
 
   const targetUsers = [
@@ -974,9 +1238,21 @@ function buildSpecificFallbackHeadline(
     summary.recommendedMoveLabel,
     repository.analysisState?.lightAnalysis?.nextStep,
   ).replace(/^[，、；：\s]+/, '');
-  const subject = resolveSpecificFallbackSubject(repository, summary);
+  const subject =
+    matchRepositoryMetadataHint(repository)?.subject ??
+    resolveSpecificFallbackSubject(repository, summary);
 
   if (reason) {
+    if (/这几块证据还偏弱$/.test(reason) && subject) {
+      return finalizeHeadline(`${subject}，但${reason}。`);
+    }
+
+    if (/^当前冲突主要集中在/.test(reason) && subject) {
+      return finalizeHeadline(
+        `${subject}，但${reason.replace(/^当前/, '').trim()}。`,
+      );
+    }
+
     if (/^冲突集中在/.test(reason) && subject) {
       const normalizedReason = reason
         .replace(/^冲突集中在\s*/, '')
@@ -1135,11 +1411,139 @@ function hasUnclearMonetizationLabel(label: string) {
 }
 
 function isGenericSafeTargetUsersLabel(label: string) {
-  return label === '独立开发者和小团队' || label === '开发者和小团队';
+  const normalized = cleanLocalizedDecisionText(label);
+
+  return (
+    normalized === '独立开发者和小团队' ||
+    normalized === '开发者和小团队' ||
+    normalized === '开发者' ||
+    normalized === '小团队'
+  );
 }
 
 function isGenericSafeMonetizationLabel(label: string) {
-  return label === '可以做团队订阅';
+  const normalized = cleanLocalizedDecisionText(label);
+
+  return (
+    normalized === '可以做团队订阅' ||
+    normalized === '能，可以直接做成订阅或团队付费产品。' ||
+    normalized === '能，已经能看到比较直接的收费路径。' ||
+    normalized === '更适合按专业版订阅或团队席位收费。'
+  );
+}
+
+function pickSpecificMonetizationText(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = cleanLocalizedDecisionText(value);
+
+    if (
+      normalized &&
+      !hasUnclearMonetizationLabel(normalized) &&
+      !isGenericSafeMonetizationLabel(normalized)
+    ) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
+function inferRepositoryMonetizationHint(
+  repository: RepositoryDecisionTarget,
+  summary: RepositoryDecisionSummary,
+) {
+  const corpus = [
+    repository.finalDecision?.decisionSummary?.headlineZh,
+    repository.finalDecision?.oneLinerZh,
+    repository.analysis?.ideaSnapshotJson?.oneLinerZh,
+    repository.analysis?.extractedIdeaJson?.ideaSummary,
+    repository.analysis?.insightJson?.oneLinerZh,
+    repository.analysisState?.lightAnalysis?.whyItMatters,
+    summary.oneLiner,
+    repository.description,
+    summary.categoryLabel,
+    summary.moneyPriority.projectTypeLabel,
+  ]
+    .map((value) => cleanLocalizedDecisionText(value))
+    .filter(Boolean)
+    .join(' ');
+
+  if (!corpus) {
+    return null;
+  }
+
+  if (/转录|语音|录音|会议纪要|字幕/u.test(corpus)) {
+    return '更适合按专业版订阅、录音时长或团队席位收费。';
+  }
+
+  if (/登录|权限|认证|身份|auth/iu.test(corpus)) {
+    return '更适合按项目数、活跃用户数或团队版收费。';
+  }
+
+  if (/记账|报销|结算|财务|账单/u.test(corpus)) {
+    return '更适合按团队席位、组织版或高级自动化能力收费。';
+  }
+
+  if (/API|接口|调用|网关|sdk|开发者平台/iu.test(corpus)) {
+    return '更适合按调用量、额度包或团队套餐收费。';
+  }
+
+  if (/客服|工单|自动回复|知识库|运营/u.test(corpus)) {
+    return '更适合按团队席位、自动化处理量或高级协作能力收费。';
+  }
+
+  if (/工作流|自动化|流程/u.test(corpus)) {
+    return '更适合按任务量、团队席位或高级自动化能力收费。';
+  }
+
+  if (/CLI|命令行|开发工具|部署|DevOps|监控|可观测|安全/iu.test(corpus)) {
+    return '更适合按专业版订阅、团队版或托管服务收费。';
+  }
+
+  return '更适合按专业版订阅或团队席位收费。';
+}
+
+function buildSubjectLedHomepageReason(
+  repository: RepositoryDecisionTarget,
+  summary: RepositoryDecisionSummary,
+  reason: string | null | undefined,
+) {
+  const normalizedReason = cleanLocalizedDecisionText(reason);
+
+  if (!normalizedReason) {
+    return null;
+  }
+
+  if (
+    !isGenericHomepageReason(normalizedReason) &&
+    !isAbstractSignalReason(normalizedReason)
+  ) {
+    return normalizedReason;
+  }
+
+  const subject = trimHeadlinePunctuation(resolveSpecificFallbackSubject(repository, summary));
+
+  if (!subject) {
+    return normalizedReason;
+  }
+
+  const compactReason = normalizedReason.replace(/\s+/g, '');
+
+  if (/^已经有人在用，可以收费/u.test(compactReason)) {
+    return `${subject}，已经能看到现实付费路径。`;
+  }
+
+  if (/^替代已有工具，有明显优势/u.test(compactReason)) {
+    return `${subject}，已经能看出替代现有方案的差异化价值。`;
+  }
+
+  if (/^自动化明确场景，可快速落地/u.test(compactReason)) {
+    return `${subject}，核心场景已经比较明确，具备快速验证空间。`;
+  }
+
+  return /^冲突集中在/u.test(compactReason)
+    ? `${subject}，${compactReason}。`
+    : `${subject}，但${compactReason.replace(/[。！？]+$/u, '')}。`;
 }
 
 function hasEnglishLeak(text: string) {
@@ -1797,19 +2201,39 @@ export function getRepositoryFallbackIdeaAnalysis(
   );
   const snapshotSkipped =
     snapshot?.isPromising === false || snapshot?.nextAction === 'SKIP';
+  const metadataTargetUsers = inferRepositoryTargetUsersFromMetadata(
+    repository,
+    summary,
+  );
+  const candidateTargetUsers = pickLocalizedText(
+    analysisState?.lightAnalysis?.targetUsers,
+    repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+    repository.analysis?.moneyPriority?.targetUsersZh,
+    repository.finalDecision?.moneyDecision?.targetUsersZh,
+    repository.finalDecision?.decisionSummary?.targetUsersZh,
+    !hasUnclearUserLabel(summary.targetUsersLabel)
+      ? summary.targetUsersLabel
+      : null,
+  );
   const targetUsers =
-    pickLocalizedText(
-      analysisState?.lightAnalysis?.targetUsers,
-      repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
-      repository.analysis?.moneyPriority?.targetUsersZh,
-      repository.finalDecision?.moneyDecision?.targetUsersZh,
-      repository.finalDecision?.decisionSummary?.targetUsersZh,
-      !hasUnclearUserLabel(summary.targetUsersLabel)
-        ? summary.targetUsersLabel
-        : null,
-    ) ||
+    (candidateTargetUsers && !isGenericSafeTargetUsersLabel(candidateTargetUsers)
+      ? candidateTargetUsers
+      : '') ||
+    metadataTargetUsers ||
     inferTargetUsersFromHeadline(headline) ||
     '先从最可能的真实用户访谈开始确认谁会持续使用它。';
+  const prioritizedReason =
+    pickSpecificHomepageReason(
+      isAbstractSignalReason(analysisState?.lightAnalysis?.whyItMatters ?? '')
+        ? null
+        : analysisState?.lightAnalysis?.whyItMatters,
+      cleanDecisionText(snapshot?.reason),
+      summary.verdictReason,
+      pickConservativeLocalizedText(repository.analysis?.ideaFitJson?.coreJudgement),
+      repository.analysis?.extractedIdeaJson?.ideaSummary,
+      pickConservativeLocalizedText(repository.analysis?.completenessJson?.summary),
+      insight?.verdictReason,
+    ) || pickLocalizedText(analysisState?.lightAnalysis?.whyItMatters);
   const monetization =
     pickLocalizedText(
       analysisState?.lightAnalysis?.monetization,
@@ -1826,7 +2250,7 @@ export function getRepositoryFallbackIdeaAnalysis(
       : '先验证是否有人愿意为这个场景持续付费，再决定是否继续投入。');
   const useCase =
     pickLocalizedText(
-      analysisState?.lightAnalysis?.whyItMatters,
+      prioritizedReason,
       pickConservativeLocalizedText(repository.analysis?.ideaFitJson?.coreJudgement),
       repository.analysis?.extractedIdeaJson?.ideaSummary,
       pickConservativeLocalizedText(repository.analysis?.completenessJson?.summary),
@@ -1838,7 +2262,7 @@ export function getRepositoryFallbackIdeaAnalysis(
     ) || '先把这个项目压缩成一个能明确用户、场景和收费方式的最小验证版本。';
   const whyItMatters =
     pickLocalizedText(
-      analysisState?.lightAnalysis?.whyItMatters,
+      prioritizedReason,
       pickConservativeLocalizedText(repository.analysis?.ideaFitJson?.coreJudgement),
       pickConservativeLocalizedText(repository.analysis?.completenessJson?.summary),
       repository.analysis?.extractedIdeaJson?.ideaSummary,
@@ -1954,7 +2378,7 @@ export function sanitizeDecisionHeadlineStrict(
 export function getRepositoryDisplayMonetizationLabel(
   repository: RepositoryDecisionTarget,
   summary: RepositoryDecisionSummary = getRepositoryDecisionSummary(repository),
-) {
+): string {
   const audit = getRepositoryDecisionConflictAudit(repository, summary);
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const signals = resolveRepositorySignals(repository);
@@ -1968,11 +2392,14 @@ export function getRepositoryDisplayMonetizationLabel(
     repository.finalDecision?.moneyDecision?.monetizationSummaryZh,
     repository.finalDecision?.decisionSummary?.monetizationSummaryZh,
   );
+  const specificMonetization =
+    pickSpecificMonetizationText(lightAnalysisMonetization, extractedIdeaMonetization) ||
+    inferRepositoryMonetizationHint(repository, summary);
 
   if (
       !raw ||
       hasUnclearMonetizationLabel(raw) ||
-      (extractedIdeaMonetization && isGenericSafeMonetizationLabel(raw)) ||
+      isGenericSafeMonetizationLabel(raw) ||
       !signals.hasRealUser ||
       !signals.hasClearUseCase ||
       !signals.isDirectlyMonetizable ||
@@ -1989,16 +2416,22 @@ export function getRepositoryDisplayMonetizationLabel(
   ) {
     if (
       lightAnalysisMonetization &&
-      !hasUnclearMonetizationLabel(lightAnalysisMonetization)
+      !hasUnclearMonetizationLabel(lightAnalysisMonetization) &&
+      !isGenericSafeMonetizationLabel(lightAnalysisMonetization)
     ) {
       return lightAnalysisMonetization;
     }
 
     if (
       extractedIdeaMonetization &&
-      !hasUnclearMonetizationLabel(extractedIdeaMonetization)
+      !hasUnclearMonetizationLabel(extractedIdeaMonetization) &&
+      !isGenericSafeMonetizationLabel(extractedIdeaMonetization)
     ) {
       return extractedIdeaMonetization;
+    }
+
+    if (specificMonetization) {
+      return specificMonetization;
     }
 
     return signals.hasRealUser && signals.hasClearUseCase
@@ -2006,13 +2439,15 @@ export function getRepositoryDisplayMonetizationLabel(
       : '收费路径还不够清楚，建议先确认真实用户和场景。';
   }
 
-  return raw;
+  return isGenericSafeMonetizationLabel(raw) && specificMonetization
+    ? specificMonetization
+    : raw;
 }
 
 export function getRepositoryDisplayTargetUsersLabel(
   repository: RepositoryDecisionTarget,
   summary: RepositoryDecisionSummary = getRepositoryDecisionSummary(repository),
-) {
+): string {
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const signals = resolveRepositorySignals(repository);
   const raw = cleanText(summary.targetUsersLabel);
@@ -2025,24 +2460,44 @@ export function getRepositoryDisplayTargetUsersLabel(
     repository.finalDecision?.moneyDecision?.targetUsersZh,
     repository.finalDecision?.decisionSummary?.targetUsersZh,
   );
+  const inferredTargetUsers =
+    inferRepositoryTargetUsersFromMetadata(repository, summary) ||
+    inferTargetUsersFromHeadline(
+      pickLocalizedText(
+        repository.finalDecision?.decisionSummary?.headlineZh,
+        repository.finalDecision?.oneLinerZh,
+        repository.analysis?.ideaSnapshotJson?.oneLinerZh,
+        repository.analysis?.insightJson?.oneLinerZh,
+        summary.oneLiner,
+        repository.description,
+      ),
+    ) || null;
 
   if (
     !raw ||
     !signals.hasRealUser ||
     !signals.hasClearUseCase ||
     hasUnclearUserLabel(raw) ||
-    (extractedIdeaTargetUsers && isGenericSafeTargetUsersLabel(raw)) ||
+    isGenericSafeTargetUsersLabel(raw) ||
     validation.riskFlags.includes('user_conflict') ||
     validation.riskFlags.includes('use_case_conflict') ||
     validation.riskFlags.includes('fallback_overclaim') ||
     validation.riskFlags.includes('snapshot_conflict')
   ) {
     if (lightAnalysisTargetUsers && !hasUnclearUserLabel(lightAnalysisTargetUsers)) {
-      return lightAnalysisTargetUsers;
+      return !isGenericSafeTargetUsersLabel(lightAnalysisTargetUsers)
+        ? lightAnalysisTargetUsers
+        : inferredTargetUsers ?? lightAnalysisTargetUsers;
     }
 
     if (extractedIdeaTargetUsers && !hasUnclearUserLabel(extractedIdeaTargetUsers)) {
-      return extractedIdeaTargetUsers;
+      return !isGenericSafeTargetUsersLabel(extractedIdeaTargetUsers)
+        ? extractedIdeaTargetUsers
+        : inferredTargetUsers ?? extractedIdeaTargetUsers;
+    }
+
+    if (inferredTargetUsers && !hasUnclearUserLabel(inferredTargetUsers)) {
+      return inferredTargetUsers;
     }
 
     return shouldDegradeHomepageHeadline(repository, summary)
@@ -2050,16 +2505,28 @@ export function getRepositoryDisplayTargetUsersLabel(
       : '目标用户还需要继续确认。';
   }
 
-  return raw;
+  return isGenericSafeTargetUsersLabel(raw) && inferredTargetUsers
+    ? inferredTargetUsers
+    : raw;
 }
 
 export function getRepositoryHomepageDecisionReason(
   repository: RepositoryDecisionTarget,
   summary: RepositoryDecisionSummary = getRepositoryDecisionSummary(repository),
-) {
+): string {
   const signals = repository.analysis?.moneyPriority?.signals;
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const snapshot = repository.analysis?.ideaSnapshotJson;
+  const prioritizedReason = pickLocalizedText(
+    repository.finalDecision?.decisionSummary?.reasonZh,
+    repository.finalDecision?.reasonZh,
+    repository.finalDecision?.moneyDecision?.reasonZh,
+    repository.analysisState?.lightAnalysis?.whyItMatters,
+    repository.analysis?.insightJson?.verdictReason,
+    summary.moneyPriority.reason,
+    summary.verdictReason,
+    cleanDecisionText(snapshot?.reason),
+  );
   const specificReason = pickSpecificHomepageReason(
     repository.finalDecision?.decisionSummary?.reasonZh,
     repository.finalDecision?.reasonZh,
@@ -2088,6 +2555,23 @@ export function getRepositoryHomepageDecisionReason(
       summary.moneyPriority.reason,
       summary.verdictReason,
     );
+  const enrichedSpecificReason = buildSubjectLedHomepageReason(
+    repository,
+    summary,
+    specificReason,
+  );
+  const enrichedFallbackReason = buildSubjectLedHomepageReason(
+    repository,
+    summary,
+    fallbackReason,
+  );
+  const normalizedPriorityReason = cleanLocalizedDecisionText(prioritizedReason);
+  const preferredPriorityReason =
+    normalizedPriorityReason &&
+    (isGenericHomepageReason(normalizedPriorityReason) ||
+      isAbstractSignalReason(normalizedPriorityReason))
+      ? buildSubjectLedHomepageReason(repository, summary, normalizedPriorityReason)
+      : null;
   const lowerReason = summary.moneyPriority.reason.toLowerCase();
   const hasDirectMonetization =
     Boolean(signals?.isDirectlyMonetizable) ||
@@ -2102,7 +2586,8 @@ export function getRepositoryHomepageDecisionReason(
     validation.riskFlags.includes('snapshot_conflict')
   ) {
     return (
-      fallbackReason ||
+      preferredPriorityReason ||
+      enrichedFallbackReason ||
       '基础判断偏保守，先不要把它当成已经完成的产品机会，优先确认用户、场景和是否值得继续分析。'
     );
   }
@@ -2113,18 +2598,29 @@ export function getRepositoryHomepageDecisionReason(
     hasWeakUserSignal ||
     hasWeakUseCaseSignal
   ) {
-    return fallbackReason || '先确认真实用户、场景和投入价值，再决定要不要继续推进。';
+    return (
+      preferredPriorityReason ||
+      enrichedFallbackReason ||
+      '先确认真实用户、场景和投入价值，再决定要不要继续推进。'
+    );
   }
 
-  if (specificReason) {
-    return specificReason;
+  if (preferredPriorityReason) {
+    return preferredPriorityReason;
+  }
+
+  if (enrichedSpecificReason) {
+    return enrichedSpecificReason;
   }
 
   if (
     hasDirectMonetization &&
     (summary.action === 'BUILD' || summary.moneyPriority.tier === 'P0')
   ) {
-    return '已经有人在用，可以收费';
+    return (
+      buildSubjectLedHomepageReason(repository, summary, '已经有人在用，可以收费') ||
+      '已经有人在用，可以收费'
+    );
   }
 
   if (
@@ -2133,16 +2629,22 @@ export function getRepositoryHomepageDecisionReason(
     lowerReason.includes('优势') ||
     lowerReason.includes('借鉴')
   ) {
-    return '替代已有工具，有明显优势';
+    return (
+      buildSubjectLedHomepageReason(repository, summary, '替代已有工具，有明显优势') ||
+      '替代已有工具，有明显优势'
+    );
   }
 
-  return '自动化明确场景，可快速落地';
+  return (
+    buildSubjectLedHomepageReason(repository, summary, '自动化明确场景，可快速落地') ||
+    '自动化明确场景，可快速落地'
+  );
 }
 
 export function getRepositoryHomepageMonetizationAnswer(
   repository: RepositoryDecisionTarget,
   summary: RepositoryDecisionSummary = getRepositoryDecisionSummary(repository),
-) {
+): string {
   const signals = repository.analysis?.moneyPriority?.signals;
   const validation = getRepositoryHeadlineValidation(repository, summary);
   const direct = Boolean(signals?.isDirectlyMonetizable);
@@ -2150,38 +2652,54 @@ export function getRepositoryHomepageMonetizationAnswer(
   const lightAnalysisMonetization = pickLocalizedText(
     repository.analysisState?.lightAnalysis?.monetization,
   );
+  const extractedIdeaMonetization = pickLocalizedText(
+    repository.analysis?.extractedIdeaJson?.monetization,
+    repository.analysis?.moneyPriority?.monetizationSummaryZh,
+    repository.finalDecision?.moneyDecision?.monetizationSummaryZh,
+    repository.finalDecision?.decisionSummary?.monetizationSummaryZh,
+  );
+  const specificMonetization =
+    pickSpecificMonetizationText(
+      displayLabel,
+      lightAnalysisMonetization,
+      extractedIdeaMonetization,
+    ) || inferRepositoryMonetizationHint(repository, summary);
 
   if (
     summary.source === 'fallback' ||
     validation.riskFlags.includes('fallback_overclaim') ||
     validation.riskFlags.includes('snapshot_conflict')
   ) {
-    return !hasUnclearMonetizationLabel(lightAnalysisMonetization)
-      ? lightAnalysisMonetization
+    return specificMonetization
+      ? specificMonetization
       : '收费路径还不够清楚，建议先确认真实用户和场景。';
   }
 
   if (displayLabel.includes('收费路径还不够清楚')) {
-    return !hasUnclearMonetizationLabel(lightAnalysisMonetization)
-      ? lightAnalysisMonetization
+    return specificMonetization
+      ? specificMonetization
       : '收费路径还不够清楚，建议先确认真实用户和场景。';
   }
 
   if (displayLabel.includes('更适合先验证价值')) {
-    return !hasUnclearMonetizationLabel(lightAnalysisMonetization)
-      ? lightAnalysisMonetization
+    return specificMonetization
+      ? specificMonetization
       : '更适合先验证价值，再判断是否具备收费空间。';
   }
 
+  if (specificMonetization) {
+    return specificMonetization;
+  }
+
   if (direct) {
-    return '能，可以直接做成订阅或团队付费产品。';
+    return '更适合按专业版订阅或团队席位收费。';
   }
 
   if (hasUnclearMonetizationLabel(displayLabel)) {
     return '暂时还不明确。';
   }
 
-  return '能，已经能看到比较直接的收费路径。';
+  return displayLabel;
 }
 
 export function getRepositoryAnalysisLayerLabel(

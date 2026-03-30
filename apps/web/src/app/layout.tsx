@@ -5,7 +5,7 @@ import { AppHeader } from '@/components/app-header';
 
 export const metadata: Metadata = {
   title: 'GitDian',
-  description: 'GitHub 创业机会发现系统 - 工程骨架',
+  description: 'GitHub 项目创业决策台，支持中文分析、分类筛选和任务跟进。',
 };
 
 type RootLayoutProps = {

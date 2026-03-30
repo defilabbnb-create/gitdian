@@ -8,6 +8,7 @@ import {
   getRepositoryDisplayTargetUsersLabel,
   getRepositoryFallbackIdeaAnalysis,
   getRepositoryHomepageDecisionReason,
+  getRepositoryHomepageMonetizationAnswer,
 } from '../src/lib/repository-decision';
 import { createRepositoryFixture } from './helpers/repository-fixture';
 
@@ -195,6 +196,36 @@ test('fallback idea analysis reuses extracted idea and deep modules when light a
   assert.match(fallback.whyItMatters, /客服协作场景已经明确|README 已经说明核心流程/);
 });
 
+test('fallback idea analysis prefers repository metadata over hallucinated generic copy', () => {
+  const repository = createRepositoryFixture({
+    description:
+      'Generate production-ready App Store screenshots for iOS apps with automated design and export at Apple-required resolutions.',
+    topics: ['ios', 'screenshots', 'app-store-connect'],
+    analysisState: {
+      lightAnalysis: {
+        targetUsers: '开发者和小团队',
+        monetization: '可以先按团队订阅、专业版或托管服务收费，重点验证谁会持续付费。',
+        whyItMatters: 'distribution / execution / technical_maturity 证据偏弱',
+        nextStep: '先补弱证据并刷新判断，再决定是否继续推进。',
+        source: 'snapshot',
+      },
+    },
+    finalDecision: {
+      decisionSummary: {
+        headlineZh: '一个帮开发者改写简历并生成 ATS 匹配评分的 CLI 工具',
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+  });
+
+  const fallback = getRepositoryFallbackIdeaAnalysis(repository);
+
+  assert.match(fallback.headline, /App Store 截图/);
+  assert.match(fallback.targetUsers, /iOS 应用开发者和移动产品团队/);
+  assert.match(fallback.whyItMatters, /分发、执行、技术成熟度这几块证据还偏弱/);
+  assert.doesNotMatch(fallback.whyItMatters, /distribution|execution/);
+});
+
 test('trusted display helpers fall back to extracted idea users and monetization when final decision copy is weak', () => {
   const repository = createRepositoryFixture({
     analysis: {
@@ -220,6 +251,94 @@ test('trusted display helpers fall back to extracted idea users and monetization
   assert.equal(
     getRepositoryDisplayMonetizationLabel(repository, summary),
     '可以先按专业版订阅收费。',
+  );
+});
+
+test('display target users prefer repository metadata when final decision copy is overly generic', () => {
+  const repository = createRepositoryFixture({
+    description:
+      'Generate production-ready App Store screenshots for iOS apps with automated design and export at Apple-required resolutions.',
+    topics: ['ios', 'screenshots', 'app-store-connect'],
+    finalDecision: {
+      decisionSummary: {
+        targetUsersZh: '开发者和小团队',
+      },
+      moneyDecision: {
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+    analysis: {
+      moneyPriority: {
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+  });
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(
+    getRepositoryDisplayTargetUsersLabel(repository, summary),
+    'iOS 应用开发者和移动产品团队',
+  );
+});
+
+test('homepage display infers concrete target users, reason, and monetization from repository-specific signals', () => {
+  const concreteHeadline =
+    'macOS 用户利用本地大模型进行会议转录和语音输入，产出纯文本记录。';
+  const repository = createRepositoryFixture({
+    description: concreteHeadline,
+    analysis: {
+      insightJson: {
+        oneLinerZh: concreteHeadline,
+        verdictReason: '技术成熟度 证据偏弱',
+      },
+      moneyPriority: {
+        reasonZh: '技术成熟度 证据偏弱',
+        targetUsersZh: '开发者和小团队',
+        monetizationSummaryZh: '可以做团队订阅',
+      },
+      extractedIdeaJson: {
+        ideaSummary: concreteHeadline,
+        targetUsers: [],
+        monetization: '',
+      },
+    },
+    finalDecision: {
+      oneLinerZh: concreteHeadline,
+      reasonZh: '技术成熟度 证据偏弱',
+      moneyDecision: {
+        targetUsersZh: '开发者和小团队',
+        monetizationSummaryZh: '可以做团队订阅',
+        reasonZh: '技术成熟度 证据偏弱',
+      },
+      decisionSummary: {
+        headlineZh: concreteHeadline,
+        targetUsersZh: '开发者和小团队',
+        monetizationSummaryZh: '可以做团队订阅',
+        reasonZh: '技术成熟度 证据偏弱',
+      },
+    },
+  });
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.match(
+    getRepositoryDisplayTargetUsersLabel(repository, summary),
+    /macOS 用户/,
+  );
+  assert.match(
+    getRepositoryHomepageDecisionReason(repository, summary),
+    /macOS 用户利用本地大模型进行会议转录和语音输入/,
+  );
+  assert.match(
+    getRepositoryHomepageDecisionReason(repository, summary),
+    /技术成熟度(?:这几块)?证据还偏弱|技术成熟度证据偏弱|技术成熟度 证据偏弱/,
+  );
+  assert.equal(
+    getRepositoryDisplayMonetizationLabel(repository, summary),
+    '更适合按专业版订阅、录音时长或团队席位收费。',
+  );
+  assert.equal(
+    getRepositoryHomepageMonetizationAnswer(repository, summary),
+    '更适合按专业版订阅、录音时长或团队席位收费。',
   );
 });
 

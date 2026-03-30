@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { normalizeRepositoryItem } from '../src/lib/api/normalizers';
 import { buildRepositoryDecisionViewModel } from '../src/lib/repository-decision-view-model';
 import { createRepositoryFixture } from './helpers/repository-fixture';
 
@@ -31,6 +32,69 @@ test('marks hasFinalDecision without deep analysis as provisional', () => {
   assert.equal(decisionView.display.finalDecisionLabel, '基础判断 · 仅供参考');
 });
 
+test('provisional display reason prefers concrete snapshot scene over repair-only hints', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      analysis: {
+        deepAnalysisStatus: 'NOT_STARTED',
+        ideaFitJson: null,
+        completenessJson: null,
+        extractedIdeaJson: {
+          ideaSummary: '一个帮开发者在命令行里搜索歌曲并管理播放列表的 CLI 工具',
+          targetUsers: ['开发者和小团队'],
+        },
+        ideaSnapshotJson: {
+          oneLinerZh: 'macOS 用户利用本地大模型进行会议转录和语音输入，产出纯文本记录。',
+          reason:
+            '明确针对macOS本地隐私场景，对标Granola和WisprFlow，具备清晰的SaaS或独立应用商业化路径。',
+        },
+        moneyPriority: {
+          targetUsersZh: '开发者和小团队',
+          reasonZh: 'technical_maturity 证据偏弱',
+        },
+      },
+      analysisState: {
+        analysisStatus: 'REVIEW_PENDING',
+        displayStatus: 'BASIC_READY',
+        trustedDisplayReady: false,
+        highConfidenceReady: false,
+        lightDeepReady: false,
+        fullDeepReady: false,
+        deepReady: false,
+        fullyAnalyzed: false,
+        incompleteReason: 'NO_DEEP_ANALYSIS',
+        incompleteReasons: ['NO_DEEP_ANALYSIS'],
+        lightAnalysis: {
+          targetUsers: '开发者和小团队',
+          whyItMatters: 'technical_maturity 证据偏弱',
+          nextStep: '先补弱证据并刷新判断，再决定是否继续推进。',
+          source: 'snapshot',
+        },
+      },
+      finalDecision: {
+        reasonZh: '这个方向需求明确，虽然同类不少，但只要切口更准，还是值得继续做。',
+        decisionSummary: {
+          reasonZh: 'technical_maturity 证据偏弱',
+          targetUsersZh: '开发者和小团队',
+        },
+        moneyDecision: {
+          targetUsersZh: '开发者和小团队',
+          reasonZh:
+            '这是面向明确开发者 / 团队工作流的真工具，用户、场景和产品边界都比较清楚，而且小团队有现实机会把它快速包装成可收费产品。',
+        },
+      },
+    }),
+  );
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'provisional');
+  assert.equal(decisionView.display.targetUsersLabel, '需要会议转录或语音输入的 macOS 用户');
+  assert.match(decisionView.display.reason, /macOS本地隐私场景/);
+  assert.doesNotMatch(decisionView.display.reason, /技术成熟度/);
+  assert.doesNotMatch(decisionView.display.reason, /命令行里搜索歌曲/);
+});
+
 test('downgrades fallback repositories to degraded safe copy', () => {
   const repository = createRepositoryFixture({
     analysisState: {
@@ -50,7 +114,7 @@ test('downgrades fallback repositories to degraded safe copy', () => {
   );
   assert.equal(
     decisionView.display.targetUsersLabel,
-    '独立开发者和小团队',
+    '先从最可能的真实用户访谈开始确认谁会持续使用它。',
   );
 });
 
@@ -231,4 +295,74 @@ test('keeps deep-complete repositories trusted', () => {
   assert.equal(decisionView.display.actionLabel, '立即做');
   assert.equal(decisionView.display.finalDecisionLabel, '值得做 · 立即做');
   assert.equal(decisionView.detail.primaryActionLabel, '开始验证');
+});
+
+test('deep-complete provisional repositories can still start validation on detail page', () => {
+  const repository = createRepositoryFixture({
+    analysisState: {
+      analysisStatus: 'REVIEW_PENDING',
+      displayStatus: 'BASIC_READY',
+      frontendDecisionState: 'provisional',
+      displayReady: true,
+      trustedDisplayReady: false,
+      highConfidenceReady: false,
+      reviewReady: false,
+      fullyAnalyzed: false,
+      lightDeepReady: true,
+      fullDeepReady: true,
+      deepReady: true,
+      fallbackVisible: false,
+      unsafe: false,
+    },
+  });
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'provisional');
+  assert.equal(decisionView.detail.primaryActionLabel, '开始验证');
+  assert.equal(
+    decisionView.detail.baseJudgementNotice,
+    '关键分析已补齐，但当前仍待最终复核。',
+  );
+});
+
+test('respects frontend decision state when backend marks a repo as provisional', () => {
+  const repository = createRepositoryFixture({
+    analysisState: {
+      displayStatus: 'BASIC_READY',
+      frontendDecisionState: 'provisional',
+      trustedDisplayReady: false,
+      highConfidenceReady: false,
+      reviewReady: false,
+      fullyAnalyzed: false,
+      incompleteReason: 'NO_CLAUDE_REVIEW',
+      incompleteReasons: ['NO_CLAUDE_REVIEW'],
+      lightAnalysis: {
+        targetUsers: '开发者和小团队',
+        monetization: '可以先按团队订阅、专业版或托管服务收费，重点验证谁会持续付费。',
+        whyItMatters: 'distribution / execution / technical_maturity 证据偏弱',
+        nextStep: '先补弱证据并刷新判断，再决定是否继续推进。',
+        source: 'snapshot',
+      },
+    },
+    description:
+      'Generate production-ready App Store screenshots for iOS apps with automated design and export at Apple-required resolutions.',
+    topics: ['ios', 'screenshots', 'app-store-connect'],
+    finalDecision: {
+      decisionSummary: {
+        headlineZh: '一个帮开发者改写简历并生成 ATS 匹配评分的 CLI 工具',
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+  });
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'provisional');
+  assert.equal(
+    decisionView.display.targetUsersLabel,
+    'iOS 应用开发者和移动产品团队',
+  );
+  assert.match(decisionView.display.reason, /分发、执行、技术成熟度/);
+  assert.doesNotMatch(decisionView.display.reason, /distribution|execution/);
 });

@@ -15,6 +15,7 @@ import {
   getRepositoryIdeaExtractStatus,
   isRepositoryDecisionLowConfidence,
   localizeAnalysisTerms,
+  normalizeAnalysisEvidencePhrase,
   type RepositoryDecisionSummary,
 } from '@/lib/repository-decision';
 import {
@@ -260,6 +261,45 @@ function buildDisplayState(args: {
   return 'degraded' as const;
 }
 
+function applyAnalysisStateDisplayFloor(
+  displayState: RepositoryDecisionDisplayState,
+  repository: RepositoryDecisionViewModelTarget,
+) {
+  const analysisState = repository.analysisState;
+
+  if (!analysisState) {
+    return displayState;
+  }
+
+  if (analysisState.frontendDecisionState === 'degraded') {
+    return 'degraded' as const;
+  }
+
+  if (analysisState.unsafe || analysisState.displayStatus === 'UNSAFE') {
+    return 'degraded' as const;
+  }
+
+  if (
+    analysisState.frontendDecisionState === 'provisional' &&
+    displayState === 'trusted'
+  ) {
+    return 'provisional' as const;
+  }
+
+  if (
+    displayState === 'trusted' &&
+    (analysisState.trustedDisplayReady === false ||
+      analysisState.highConfidenceReady === false ||
+      analysisState.reviewReady === false ||
+      analysisState.fullyAnalyzed === false ||
+      analysisState.displayStatus === 'BASIC_READY')
+  ) {
+    return 'provisional' as const;
+  }
+
+  return displayState;
+}
+
 function getTrustedActionLabel(action: RepositoryInsightAction) {
   if (action === 'BUILD') {
     return '立即做';
@@ -370,7 +410,9 @@ function buildDisplayConfidence(
 }
 
 function normalizeFallbackDisplayValue(value: string | null | undefined) {
-  const normalized = value ? localizeAnalysisTerms(value).trim() : '';
+  const normalized = value
+    ? normalizeAnalysisEvidencePhrase(localizeAnalysisTerms(value).trim())
+    : '';
   const latinCharCount = (normalized.match(/[A-Za-z]/g) ?? []).length;
   const chineseCharCount = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
 
@@ -574,12 +616,23 @@ function selectDetailPrimaryAction(args: {
     args.hasFinalDecisionWithoutDeep ||
     args.missingKeyAnalysis;
 
-  if (args.displayState === 'trusted' && !needsAdditionalAnalysis) {
+  if (
+    !needsAdditionalAnalysis &&
+    !args.conflict &&
+    !args.fallback &&
+    (args.displayState === 'trusted' || args.displayState === 'provisional')
+  ) {
     return {
       label: '开始验证',
-      description: '先用最短路径验证这个判断是否值得继续推进。',
+      description:
+        args.displayState === 'trusted'
+          ? '先用最短路径验证这个判断是否值得继续推进。'
+          : '关键分析已补齐，虽然还在待复核，但已经可以先验证最核心假设。',
       intent: 'validate' as const,
-      baseJudgementNotice: null,
+      baseJudgementNotice:
+        args.displayState === 'trusted'
+          ? null
+          : '关键分析已补齐，但当前仍待最终复核。',
     };
   }
 
@@ -1256,25 +1309,29 @@ export function buildRepositoryDecisionViewModel(
     conflict,
     missingKeyAnalysis,
   });
+  const guardedDisplayState = applyAnalysisStateDisplayFloor(
+    displayState,
+    repository,
+  );
   const lowConfidence =
     isRepositoryDecisionLowConfidence(repositoryRecord, summary) ||
-    displayState === 'degraded';
-  const confidence = buildDisplayConfidence(displayState, lowConfidence);
+    guardedDisplayState === 'degraded';
+  const confidence = buildDisplayConfidence(guardedDisplayState, lowConfidence);
   const actionDisplay = buildDisplayAction({
-    displayState,
+    displayState: guardedDisplayState,
     action: summary.action,
     fallback,
     conflict,
     missingKeyAnalysis,
   });
   const priorityDisplay = buildDisplayPriority(
-    displayState,
+    guardedDisplayState,
     summary.moneyPriority.tier,
     summary.moneyPriority.label,
   );
   const fallbackAnalysis = getRepositoryFallbackIdeaAnalysis(repositoryRecord, summary);
   const reason = buildDisplayReason({
-    displayState,
+    displayState: guardedDisplayState,
     repository,
     summary,
     fallbackAnalysis,
@@ -1283,25 +1340,25 @@ export function buildRepositoryDecisionViewModel(
     hasFinalDecisionWithoutDeep,
     missingKeyAnalysis,
   });
-  const caution = buildDisplayCaution(displayState);
-  const verdictLabel = buildDisplayVerdict(displayState, summary);
-  const headlines = buildHeadline(repository, summary, displayState);
+  const caution = buildDisplayCaution(guardedDisplayState);
+  const verdictLabel = buildDisplayVerdict(guardedDisplayState, summary);
+  const headlines = buildHeadline(repository, summary, guardedDisplayState);
   const monetization = buildDisplayMonetization({
-    displayState,
+    displayState: guardedDisplayState,
     repository,
     summary,
     fallbackAnalysis,
   });
   const targetUsersLabel = buildDisplayTargetUsers({
-    displayState,
+    displayState: guardedDisplayState,
     repository,
     summary,
     fallbackAnalysis,
   });
-  const worthDoingLabel = buildDisplayWorthDoing(displayState, summary);
-  const cta = buildCta(displayState);
+  const worthDoingLabel = buildDisplayWorthDoing(guardedDisplayState, summary);
+  const cta = buildCta(guardedDisplayState);
   const detail = buildDetailFields({
-    displayState,
+    displayState: guardedDisplayState,
     deep,
     fallback,
     conflict,
@@ -1311,7 +1368,7 @@ export function buildRepositoryDecisionViewModel(
   const analysisModules = {
     ideaFit: buildIdeaFitModule({
       repository,
-      displayState,
+      displayState: guardedDisplayState,
       fallback,
       conflict,
       missingKeyAnalysis,
@@ -1320,7 +1377,7 @@ export function buildRepositoryDecisionViewModel(
     ideaExtract: buildIdeaExtractModule({
       repository,
       relatedJobs: options.relatedJobs,
-      displayState,
+      displayState: guardedDisplayState,
       fallback,
       conflict,
       missingKeyAnalysis,
@@ -1328,7 +1385,7 @@ export function buildRepositoryDecisionViewModel(
     }),
     completeness: buildCompletenessModule({
       repository,
-      displayState,
+      displayState: guardedDisplayState,
       fallback,
       conflict,
       missingKeyAnalysis,
@@ -1345,7 +1402,7 @@ export function buildRepositoryDecisionViewModel(
   };
 
   return {
-    displayState,
+    displayState: guardedDisplayState,
     display: {
       headline: headlines.headline,
       homepageHeadline: headlines.homepageHeadline,
@@ -1407,11 +1464,11 @@ export function buildRepositoryDecisionViewModel(
       hasFinalDecision,
       hasDeepAnalysis,
       hasFinalDecisionWithoutDeep,
-      hideFromHomepage: guard.hideFromHomepage || displayState !== 'trusted',
-      allowStrongClaims: displayState === 'trusted',
-      allowStrongMonetization: displayState === 'trusted',
-      allowStrongUserPersona: displayState === 'trusted',
-      allowStrongAction: displayState === 'trusted',
+      hideFromHomepage: guard.hideFromHomepage || guardedDisplayState !== 'trusted',
+      allowStrongClaims: guardedDisplayState === 'trusted',
+      allowStrongMonetization: guardedDisplayState === 'trusted',
+      allowStrongUserPersona: guardedDisplayState === 'trusted',
+      allowStrongAction: guardedDisplayState === 'trusted',
     },
     cta,
   };

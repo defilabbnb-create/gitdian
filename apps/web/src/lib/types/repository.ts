@@ -431,6 +431,7 @@ export interface RepositoryLightAnalysisRecord {
 export interface RepositoryAnalysisStateRecord {
   analysisStatus: RepositoryDerivedAnalysisStatus;
   displayStatus: RepositoryDisplayStatus;
+  frontendDecisionState?: 'trusted' | 'provisional' | 'degraded' | null;
   analysisStatusReason?: string | null;
   displayStatusReason?: string | null;
   incompleteReason?: RepositoryIncompleteReason | null;

@@ -6,6 +6,7 @@ import {
   buildRepositoryListSearchParams,
   RepositoryListQueryState,
 } from '@/lib/types/repository';
+import { COMMON_CATEGORY_SUGGESTIONS } from '@/lib/repository-category-suggestions';
 
 type RepositoryQuickFiltersProps = {
   query: RepositoryListQueryState;
@@ -23,13 +24,15 @@ export function RepositoryQuickFilters({
   const hasManualInsightActive = query.hasManualInsight === true;
   const hasBuildActionActive = query.recommendedAction === 'BUILD';
   const hasCloneActionActive = query.recommendedAction === 'CLONE';
+  const activeCategory = query.finalCategory ?? '';
   const hasActiveQuickFilter =
     isHighOpportunityActive ||
     hasExtractedIdeaActive ||
     hasGoodInsightActive ||
     hasManualInsightActive ||
     hasBuildActionActive ||
-    hasCloneActionActive;
+    hasCloneActionActive ||
+    activeCategory.length > 0;
 
   function pushQuery(nextQuery: Partial<RepositoryListQueryState>) {
     const search = buildRepositoryListSearchParams({
@@ -79,6 +82,12 @@ export function RepositoryQuickFilters({
     });
   }
 
+  function handleToggleCategory(category: string) {
+    pushQuery({
+      finalCategory: activeCategory === category ? undefined : category,
+    });
+  }
+
   function handleClear() {
     pushQuery({
       opportunityLevel: undefined,
@@ -86,6 +95,7 @@ export function RepositoryQuickFilters({
       hasGoodInsight: undefined,
       hasManualInsight: undefined,
       recommendedAction: undefined,
+      finalCategory: undefined,
     });
   }
 
@@ -147,6 +157,38 @@ export function RepositoryQuickFilters({
               清除快捷筛选
             </button>
           ) : null}
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-slate-900">常见分类</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              不用再先展开高级筛选，常见分类直接点选就能缩到对应项目池。
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {COMMON_CATEGORY_SUGGESTIONS.map((category) => {
+              const active = activeCategory === category;
+
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => handleToggleCategory(category)}
+                  className={`inline-flex h-10 items-center justify-center rounded-full border px-4 text-sm font-semibold transition ${
+                    active
+                      ? 'border-slate-950 bg-slate-950 text-white'
+                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white'
+                  }`}
+                >
+                  {category}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </section>

@@ -48,6 +48,36 @@ const GENERIC_COPY_PATTERNS = [
   /^待分类$/,
 ];
 
+const GENERIC_SAFE_TARGET_USER_PATTERNS = [
+  /^独立开发者和小团队$/,
+  /^开发者和小团队$/,
+  /^开发者$/,
+  /^小团队$/,
+];
+
+const GENERIC_SAFE_MONETIZATION_PATTERNS = [
+  /^可以做团队订阅[。！]?$/,
+  /^能，可以直接做成订阅或团队付费产品[。！]?$/,
+  /^能，已经能看到比较直接的收费路径[。！]?$/,
+  /^更适合按专业版订阅或团队席位收费[。！]?$/,
+];
+
+const GENERIC_REASON_PATTERNS = [
+  /^已经有人在用，可以收费[。！]?$/,
+  /^替代已有工具，有明显优势[。！]?$/,
+  /^自动化明确场景，可快速落地[。！]?$/,
+  /^先确认真实用户、场景和投入价值，再决定要不要继续推进[。！]?$/,
+  /^基础判断偏保守.*$/,
+  /^后端最终判断还在补齐.*$/,
+  /^当前先按低优先展示.*$/,
+  /^先确认谁会持续使用它，再决定要不要继续投入[。！]?$/,
+  /^这个方向需求明确[，,].*$/,
+  /^这是面向明确.*团队工作流的真工具.*$/,
+  /^(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:这块)?(?:证据)?\s*(?:偏弱|不足|缺失|待补|仍缺|还在补|不够稳|不够清楚)[。！]?$/,
+  /^(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:这块)?(?:证据)?\s*还有冲突[。！]?$/,
+  /^冲突集中在\s*(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:、\s*(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客))*[。！]?$/,
+];
+
 function cleanText(...values: Array<unknown>) {
   for (const value of values) {
     if (typeof value === 'string') {
@@ -98,6 +128,85 @@ function pickPreferredText(...values: Array<unknown>) {
   return null;
 }
 
+function pickPreferredSpecificText(
+  values: Array<unknown>,
+  isTooGeneric: (value: string) => boolean,
+) {
+  for (const value of values) {
+    const normalized = normalizePreferredText(value);
+
+    if (normalized && !isTooGeneric(normalized)) {
+      return normalized;
+    }
+  }
+
+  return pickPreferredText(...values);
+}
+
+function inferTargetUsersFromCopy(value: unknown) {
+  const normalized = normalizePreferredText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const patterns = [
+    /^(.+?用户)(?:利用|使用|通过|借助|在)/u,
+    /主要面向(.+?)(?:，|。|；|;|并|但|且|$)/u,
+    /面向(.+?)(?:，|。|；|;|并|但|且|$)/u,
+    /专为(.+?)设计/u,
+    /帮助(.+?)(?:进行|完成|管理|处理|接入|搭建|记录|搜索|同步|分析|转录|结算)/u,
+    /^一个帮(.+?)做.+的(?:工具|系统|平台|项目)/u,
+  ];
+
+  for (const pattern of patterns) {
+    const matched = normalized.match(pattern);
+
+    if (matched?.[1]?.trim()) {
+      return matched[1].trim();
+    }
+  }
+
+  return null;
+}
+
+function sanitizeReasonCopy(value: unknown) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = localizeAnalysisTerms(value)
+    .replace(/对标\s*[A-Za-z][A-Za-z0-9+ .-]*(?:和[A-Za-z][A-Za-z0-9+ .-]*)*(?=[，,。；;]|$)/gu, '')
+    .replace(/\bSaaS\b/gi, '订阅式')
+    .replace(/\s+/g, ' ')
+    .replace(/，\s*，/gu, '，')
+    .replace(/[，,]\s*(?=[。！？]|$)/gu, '')
+    .trim();
+
+  return normalized || null;
+}
+
+function pickPreferredTargetUsers(...values: Array<unknown>) {
+  return pickPreferredSpecificText(
+    values,
+    (value) => GENERIC_SAFE_TARGET_USER_PATTERNS.some((pattern) => pattern.test(value)),
+  );
+}
+
+function pickPreferredMonetization(...values: Array<unknown>) {
+  return pickPreferredSpecificText(
+    values,
+    (value) => GENERIC_SAFE_MONETIZATION_PATTERNS.some((pattern) => pattern.test(value)),
+  );
+}
+
+function pickPreferredReason(...values: Array<unknown>) {
+  return pickPreferredSpecificText(
+    values,
+    (value) => GENERIC_REASON_PATTERNS.some((pattern) => pattern.test(value)),
+  );
+}
+
 function formatSnapshotCategoryLabel(
   item: Pick<RepositoryListItem, 'analysis' | 'finalDecision'>,
 ) {
@@ -125,6 +234,13 @@ function resolveLocalizedDecisionCopy(
   const analysis = item.analysis;
   const finalDecision = item.finalDecision;
   const lightAnalysis = item.analysisState?.lightAnalysis;
+  const inferredTargetUsers =
+    inferTargetUsersFromCopy(analysis?.ideaSnapshotJson?.oneLinerZh) ??
+    inferTargetUsersFromCopy(analysis?.ideaSnapshotJson?.reason) ??
+    inferTargetUsersFromCopy(finalDecision?.decisionSummary?.headlineZh) ??
+    inferTargetUsersFromCopy(finalDecision?.oneLinerZh) ??
+    inferTargetUsersFromCopy(analysis?.extractedIdeaJson?.ideaSummary) ??
+    inferTargetUsersFromCopy(analysis?.insightJson?.oneLinerZh);
 
   return {
     headline: pickPreferredText(
@@ -140,27 +256,30 @@ function resolveLocalizedDecisionCopy(
       finalDecision?.decisionSummary?.categoryLabelZh,
       finalDecision?.categoryLabelZh,
     ),
-    targetUsers: pickPreferredText(
-      lightAnalysis?.targetUsers,
-      analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
-      analysis?.moneyPriority?.targetUsersZh,
+    targetUsers: pickPreferredTargetUsers(
       finalDecision?.moneyDecision?.targetUsersZh,
       finalDecision?.decisionSummary?.targetUsersZh,
+      analysis?.moneyPriority?.targetUsersZh,
+      analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+      lightAnalysis?.targetUsers,
+      inferredTargetUsers,
     ),
-    monetization: pickPreferredText(
+    monetization: pickPreferredMonetization(
       lightAnalysis?.monetization,
       analysis?.extractedIdeaJson?.monetization,
       analysis?.moneyPriority?.monetizationSummaryZh,
       finalDecision?.moneyDecision?.monetizationSummaryZh,
       finalDecision?.decisionSummary?.monetizationSummaryZh,
     ),
-    reason: pickPreferredText(
-      lightAnalysis?.whyItMatters,
-      analysis?.insightJson?.verdictReason,
-      analysis?.moneyPriority?.reasonZh,
+    reason: pickPreferredReason(
+      finalDecision?.decisionSummary?.reasonZh,
       finalDecision?.reasonZh,
       finalDecision?.moneyDecision?.reasonZh,
-      finalDecision?.decisionSummary?.reasonZh,
+      sanitizeReasonCopy(analysis?.ideaSnapshotJson?.reason),
+      analysis?.insightJson?.verdictReason,
+      analysis?.moneyPriority?.reasonZh,
+      sanitizeReasonCopy(lightAnalysis?.whyItMatters),
+      lightAnalysis?.nextStep,
     ),
   };
 }
