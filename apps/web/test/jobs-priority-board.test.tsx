@@ -153,6 +153,15 @@ test('the first screen renders one aggregate card for repeated same-type pending
 
   assert.equal(aggregateCards.length, 1);
   assert.match(html, /3 个任务/);
+  assert.doesNotMatch(html, /健康状态摘要/);
+});
+
+test('steady-state first screen still renders a health aggregate card', () => {
+  const html = renderPriorityBoard([]);
+
+  assert.match(html, /data-testid="jobs-aggregated-group"/);
+  assert.match(html, /当前没有需要首屏盯住的任务/);
+  assert.match(html, /健康状态摘要/);
 });
 
 test('cancel task is not a first-screen high-priority action', () => {

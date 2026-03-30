@@ -1,3 +1,5 @@
+import { JobStatus } from '@prisma/client';
+
 export type NormalizedQueueObservedState =
   | 'active'
   | 'waiting'
@@ -11,6 +13,8 @@ export type NormalizedQueueObservedState =
 
 export type StaleJobLogDisposition =
   | 'keep_running'
+  | 'keep_pending'
+  | 'mark_running'
   | 'mark_pending'
   | 'mark_success'
   | 'mark_failed'
@@ -58,8 +62,46 @@ export function normalizeQueueObservedState(
 }
 
 export function decideStaleJobLogReconciliation(
+  currentStatus: JobStatus,
   state: NormalizedQueueObservedState,
 ): StaleJobLogDecision {
+  if (currentStatus === JobStatus.PENDING) {
+    switch (state) {
+      case 'active':
+        return {
+          disposition: 'mark_running',
+          reason: 'queue_active_should_be_running',
+        };
+      case 'waiting':
+      case 'waiting-children':
+      case 'delayed':
+      case 'prioritized':
+        return {
+          disposition: 'keep_pending',
+          reason: `queue_${state}_matches_pending`,
+        };
+      case 'completed':
+        return {
+          disposition: 'mark_success',
+          reason: 'queue_completed_should_be_success',
+        };
+      case 'failed':
+      case 'missing':
+        return {
+          disposition: 'mark_failed',
+          reason:
+            state === 'failed'
+              ? 'queue_failed_should_be_failed'
+              : 'queue_job_missing',
+        };
+      default:
+        return {
+          disposition: 'manual_review',
+          reason: 'queue_state_unknown',
+        };
+    }
+  }
+
   switch (state) {
     case 'active':
       return {
@@ -111,4 +153,3 @@ export function readRepositoryIdFromPayload(payload: unknown) {
   const root = readObject(payload);
   return readString(root?.repositoryId);
 }
-

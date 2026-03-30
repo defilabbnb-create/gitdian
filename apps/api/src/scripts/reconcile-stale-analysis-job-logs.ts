@@ -51,6 +51,7 @@ type QueueInspection = {
 
 type ReconcileRowResult = {
   jobLogId: string;
+  jobStatus: JobStatus;
   queueName: string;
   queueJobId: string | null;
   jobName: string;
@@ -69,6 +70,8 @@ type QueueBreakdownRow = {
   queueName: string;
   inspectedCount: number;
   keptRunningCount: number;
+  keptPendingCount: number;
+  markedRunningCount: number;
   movedToPendingCount: number;
   markedSuccessCount: number;
   markedFailedCount: number;
@@ -78,6 +81,7 @@ type QueueBreakdownRow = {
 type ActionBreakdownRow = {
   action: string;
   inspectedCount: number;
+  markedRunningCount: number;
   movedToPendingCount: number;
   markedSuccessCount: number;
   markedFailedCount: number;
@@ -95,6 +99,8 @@ type StaleAnalysisJobLogReconcileReport = {
   summary: {
     inspectedCount: number;
     keptRunningCount: number;
+    keptPendingCount: number;
+    markedRunningCount: number;
     movedToPendingCount: number;
     markedSuccessCount: number;
     markedFailedCount: number;
@@ -227,14 +233,17 @@ function toIsoString(value: Date | null) {
   return value ? value.toISOString() : null;
 }
 
-function calculateAgeMinutes(startedAt: Date | null, now: Date) {
-  if (!startedAt) {
+function calculateAgeMinutes(row: StaleJobLogRow, now: Date) {
+  const baseline =
+    row.jobStatus === JobStatus.PENDING ? row.createdAt : row.startedAt ?? row.createdAt;
+
+  if (!baseline) {
     return 0;
   }
 
   return Math.max(
     0,
-    Number(((now.getTime() - startedAt.getTime()) / 60_000).toFixed(2)),
+    Number(((now.getTime() - baseline.getTime()) / 60_000).toFixed(2)),
   );
 }
 
@@ -254,6 +263,8 @@ function buildQueueBreakdown(results: ReconcileRowResult[]): QueueBreakdownRow[]
       queueName: row.queueName,
       inspectedCount: 0,
       keptRunningCount: 0,
+      keptPendingCount: 0,
+      markedRunningCount: 0,
       movedToPendingCount: 0,
       markedSuccessCount: 0,
       markedFailedCount: 0,
@@ -262,6 +273,12 @@ function buildQueueBreakdown(results: ReconcileRowResult[]): QueueBreakdownRow[]
     existing.inspectedCount += 1;
     if (row.disposition === 'keep_running') {
       existing.keptRunningCount += 1;
+    }
+    if (row.disposition === 'keep_pending') {
+      existing.keptPendingCount += 1;
+    }
+    if (row.disposition === 'mark_running') {
+      existing.markedRunningCount += 1;
     }
     if (row.disposition === 'mark_pending') {
       existing.movedToPendingCount += 1;
@@ -291,12 +308,16 @@ function buildActionBreakdown(results: ReconcileRowResult[]): ActionBreakdownRow
     const existing = map.get(action) ?? {
       action,
       inspectedCount: 0,
+      markedRunningCount: 0,
       movedToPendingCount: 0,
       markedSuccessCount: 0,
       markedFailedCount: 0,
     };
 
     existing.inspectedCount += 1;
+    if (row.disposition === 'mark_running') {
+      existing.markedRunningCount += 1;
+    }
     if (row.disposition === 'mark_pending') {
       existing.movedToPendingCount += 1;
     }
@@ -327,6 +348,8 @@ function renderMarkdown(report: StaleAnalysisJobLogReconcileReport) {
     `- Stale Minutes: ${report.scope.staleMinutes}`,
     `- Inspected: ${report.summary.inspectedCount}`,
     `- Kept running: ${report.summary.keptRunningCount}`,
+    `- Kept pending: ${report.summary.keptPendingCount}`,
+    `- Marked running: ${report.summary.markedRunningCount}`,
     `- Moved to pending: ${report.summary.movedToPendingCount}`,
     `- Marked success: ${report.summary.markedSuccessCount}`,
     `- Marked failed: ${report.summary.markedFailedCount}`,
@@ -337,7 +360,7 @@ function renderMarkdown(report: StaleAnalysisJobLogReconcileReport) {
 
   for (const row of report.queueBreakdown) {
     lines.push(
-      `- ${row.queueName}: inspected=${row.inspectedCount}, keep_running=${row.keptRunningCount}, pending=${row.movedToPendingCount}, success=${row.markedSuccessCount}, failed=${row.markedFailedCount}, manual_review=${row.manualReviewCount}`,
+      `- ${row.queueName}: inspected=${row.inspectedCount}, keep_running=${row.keptRunningCount}, keep_pending=${row.keptPendingCount}, running=${row.markedRunningCount}, pending=${row.movedToPendingCount}, success=${row.markedSuccessCount}, failed=${row.markedFailedCount}, manual_review=${row.manualReviewCount}`,
     );
   }
 
@@ -345,7 +368,7 @@ function renderMarkdown(report: StaleAnalysisJobLogReconcileReport) {
     lines.push('', '## Action Breakdown');
     for (const row of report.actionBreakdown.slice(0, 10)) {
       lines.push(
-        `- ${row.action}: inspected=${row.inspectedCount}, pending=${row.movedToPendingCount}, success=${row.markedSuccessCount}, failed=${row.markedFailedCount}`,
+        `- ${row.action}: inspected=${row.inspectedCount}, running=${row.markedRunningCount}, pending=${row.movedToPendingCount}, success=${row.markedSuccessCount}, failed=${row.markedFailedCount}`,
       );
     }
   }
@@ -411,7 +434,31 @@ async function applyReconciliation(args: {
   reason: string;
   queueJob: Job | null;
 }) {
-  if (args.disposition === 'keep_running' || args.disposition === 'manual_review') {
+  if (
+    args.disposition === 'keep_running' ||
+    args.disposition === 'keep_pending' ||
+    args.disposition === 'manual_review'
+  ) {
+    return;
+  }
+
+  if (args.disposition === 'mark_running') {
+    const startedAt =
+      typeof args.queueJob?.processedOn === 'number'
+        ? new Date(args.queueJob.processedOn)
+        : args.row.startedAt ?? new Date();
+
+    await args.prisma.jobLog.update({
+      where: { id: args.row.id },
+      data: {
+        jobStatus: JobStatus.RUNNING,
+        startedAt,
+        finishedAt: null,
+        durationMs: null,
+        progress: 0,
+        errorMessage: `Stale ${args.row.jobStatus} JobLog reconciled to RUNNING (${args.reason}).`,
+      },
+    });
     return;
   }
 
@@ -424,7 +471,7 @@ async function applyReconciliation(args: {
         finishedAt: null,
         durationMs: null,
         progress: 0,
-        errorMessage: `Stale RUNNING JobLog reconciled to PENDING (${args.reason}).`,
+        errorMessage: `Stale ${args.row.jobStatus} JobLog reconciled to PENDING (${args.reason}).`,
       },
     });
     return;
@@ -461,17 +508,17 @@ async function applyReconciliation(args: {
 
   await args.prisma.jobLog.update({
     where: { id: args.row.id },
-    data: {
-      jobStatus: JobStatus.FAILED,
-      finishedAt,
-      durationMs,
-      progress: 0,
-      errorMessage:
-        args.queueJob?.failedReason ??
-        `Stale RUNNING JobLog reconciled to FAILED (${args.reason}).`,
-      result: {
-        staleReconciled: true,
-        reconcileReason: args.reason,
+      data: {
+        jobStatus: JobStatus.FAILED,
+        finishedAt,
+        durationMs,
+        progress: 0,
+        errorMessage:
+          args.queueJob?.failedReason ??
+          `Stale ${args.row.jobStatus} JobLog reconciled to FAILED (${args.reason}).`,
+        result: {
+          staleReconciled: true,
+          reconcileReason: args.reason,
         queueState: args.observedState,
         queueJobMissing: args.observedState === 'missing',
       },
@@ -495,18 +542,31 @@ async function main() {
     const cutoff = new Date(now.getTime() - options.staleMinutes * 60_000);
     const rows = (await prisma.jobLog.findMany({
       where: {
-        jobStatus: JobStatus.RUNNING,
+        jobStatus: {
+          in: [JobStatus.RUNNING, JobStatus.PENDING],
+        },
         queueName: {
           in: options.queueNames,
         },
         OR: [
           {
-            startedAt: {
-              lt: cutoff,
-            },
+            jobStatus: JobStatus.RUNNING,
+            OR: [
+              {
+                startedAt: {
+                  lt: cutoff,
+                },
+              },
+              {
+                startedAt: null,
+              },
+            ],
           },
           {
-            startedAt: null,
+            jobStatus: JobStatus.PENDING,
+            createdAt: {
+              lt: cutoff,
+            },
           },
         ],
       },
@@ -540,7 +600,10 @@ async function main() {
         row,
         queueCache,
       });
-      const decision = decideStaleJobLogReconciliation(inspection.observedState);
+      const decision = decideStaleJobLogReconciliation(
+        row.jobStatus,
+        inspection.observedState,
+      );
       observedStateBreakdown[inspection.observedState] =
         (observedStateBreakdown[inspection.observedState] ?? 0) + 1;
 
@@ -557,6 +620,7 @@ async function main() {
 
       results.push({
         jobLogId: row.id,
+        jobStatus: row.jobStatus,
         queueName: row.queueName ?? '<null>',
         queueJobId: row.queueJobId,
         jobName: row.jobName,
@@ -564,7 +628,7 @@ async function main() {
         historicalRepairAction: readHistoricalRepairActionFromPayload(row.payload),
         triggeredBy: row.triggeredBy,
         startedAt: toIsoString(row.startedAt),
-        ageMinutes: calculateAgeMinutes(row.startedAt, now),
+        ageMinutes: calculateAgeMinutes(row, now),
         observedState: inspection.observedState,
         disposition: decision.disposition,
         reason: decision.reason,
@@ -587,6 +651,12 @@ async function main() {
         inspectedCount: results.length,
         keptRunningCount: results.filter(
           (item) => item.disposition === 'keep_running',
+        ).length,
+        keptPendingCount: results.filter(
+          (item) => item.disposition === 'keep_pending',
+        ).length,
+        markedRunningCount: results.filter(
+          (item) => item.disposition === 'mark_running',
         ).length,
         movedToPendingCount: results.filter(
           (item) => item.disposition === 'mark_pending',
@@ -611,7 +681,7 @@ async function main() {
       nextActions: [
         results.some((item) => item.disposition === 'manual_review')
           ? '存在 queue state 无法自动归类的陈旧 JobLog，先人工核对这些 manual_review 样本。'
-          : '陈旧 RUNNING JobLog 已全部可自动归类，可继续按当前脚本周期性对账。',
+          : '陈旧 PENDING / RUNNING JobLog 已全部可自动归类，可继续按当前脚本周期性对账。',
         results.some((item) => item.disposition === 'mark_failed')
           ? 'queue job missing/failed 的陈旧记录已经能自动转成 FAILED，这些 repo 后续会重新暴露到 backlog / incomplete 面板里。'
           : '本轮没有 queue missing/failed 的陈旧记录，不需要额外回补失败链路。',

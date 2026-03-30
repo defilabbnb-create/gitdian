@@ -19,6 +19,7 @@ export function JobsPriorityBoard({
   focusedJobId,
 }: JobsPriorityBoardProps) {
   const viewModel = buildJobsPriorityViewModel(items, query);
+  const showSteadyStateCard = viewModel.visibleGroupCount === 0;
   const anomalyJobCount = viewModel.anomalyGroups.reduce(
     (sum, group) => sum + group.count,
     0,
@@ -146,10 +147,7 @@ export function JobsPriorityBoard({
             ))}
           </div>
         ) : (
-          <QuietEmptyState
-            title="现在没有需要首屏盯住的运行中任务"
-            description="如果你只是想回看上下文，可以直接展开完整任务流；首屏不再重复平铺正常排队任务。"
-          />
+          showSteadyStateCard ? <SteadyStateAggregateCard /> : null
         )}
 
         {viewModel.hiddenGroupCount ? (
@@ -309,5 +307,61 @@ function QuietEmptyState({
         {description}
       </p>
     </section>
+  );
+}
+
+function SteadyStateAggregateCard() {
+  return (
+    <article
+      data-job-aggregate-card="true"
+      data-job-group-state="HEALTHY"
+      data-testid="jobs-aggregated-group"
+      className="rounded-[28px] border border-emerald-200 bg-emerald-50/70 p-6 shadow-sm"
+    >
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em]">
+            <span className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-emerald-700">
+              HEALTHY
+            </span>
+            <span className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-emerald-700">
+              当前无异常
+            </span>
+            <span className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-emerald-700">
+              主链路空闲
+            </span>
+          </div>
+
+          <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+            当前没有需要首屏盯住的任务
+          </h3>
+          <p className="mt-3 max-w-3xl text-balance text-sm leading-7 text-slate-600">
+            现在没有失败、卡住或排队过久的任务，刚刚清理过的陈旧记录也已经对账完成。首屏继续保留一张健康摘要卡，方便你确认系统现在确实在稳定状态，而不是页面没加载出来。
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-right">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+            当前建议动作
+          </p>
+          <p className="mt-2 text-sm font-semibold text-slate-950">继续观察</p>
+        </div>
+      </div>
+
+      <dl className="mt-5 grid gap-3 md:grid-cols-3">
+        <PriorityMetric label="任务类型" value="健康状态摘要" />
+        <PriorityMetric label="当前状态" value="没有异常或积压" />
+        <PriorityMetric label="主链路" value="当前空闲" />
+      </dl>
+
+      <div className="mt-5 flex flex-wrap gap-3">
+        <Link
+          href="/jobs"
+          className="inline-flex items-center rounded-full border border-slate-950 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+        >
+          查看完整任务流
+        </Link>
+      </div>
+    </article>
   );
 }
