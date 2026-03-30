@@ -177,6 +177,15 @@ type RepositoryWithAnalysisContext = Prisma.RepositoryGetPayload<{
   };
 }>;
 
+type SingleAnalysisBulkEntries = Parameters<
+  QueueService['enqueueSingleAnalysesBulk']
+>[0];
+type SingleAnalysisBulkEntry = SingleAnalysisBulkEntries[number];
+type ActiveRepositoryJobState = {
+  snapshotRepositoryIds: Set<string>;
+  deepRepositoryIds: Set<string>;
+};
+
 @Injectable()
 export class GitHubService {
   private readonly logger = new Logger(GitHubService.name);
@@ -796,6 +805,7 @@ export class GitHubService {
       };
     }
 
+    const activeJobState = await this.loadActiveRepositoryJobState(repositoryIds);
     const repositories = await this.prisma.repository.findMany({
       where: {
         id: {
@@ -808,8 +818,7 @@ export class GitHubService {
       },
     });
 
-    const repositoryOutcomes = await Promise.all(
-      repositories.map(async (repository) => {
+    const repositoryOutcomes = repositories.map((repository) => {
         const snapshot = this.ideaSnapshotService.readIdeaSnapshot(
           repository.analysis?.ideaSnapshotJson,
         );
@@ -827,14 +836,10 @@ export class GitHubService {
           deepAnalysisOnlyIfPromising: args.deepAnalysisOnlyIfPromising,
           targetCategories: args.targetCategories,
         });
-        const hasActiveSnapshotJob = await this.hasActiveRepositoryJob(
-          QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT,
-          repository.id,
-        );
-        const hasActiveDeepJob = await this.hasActiveRepositoryJob(
-          QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
-          repository.id,
-        );
+        const hasActiveSnapshotJob =
+          activeJobState.snapshotRepositoryIds.has(repository.id);
+        const hasActiveDeepJob =
+          activeJobState.deepRepositoryIds.has(repository.id);
         const shouldQueueSnapshot =
           args.runIdeaSnapshot &&
           !hasActiveSnapshotJob &&
@@ -856,8 +861,7 @@ export class GitHubService {
           shouldQueueDeepAnalysisDirect,
           decision,
         };
-      }),
-    );
+      });
 
     const bulkSnapshotTargets = repositoryOutcomes.filter(
       (outcome) => outcome.shouldQueueSnapshot,
@@ -878,9 +882,26 @@ export class GitHubService {
         args.parentJobId ?? undefined,
       );
     }
+    const deepDirectTargets = repositoryOutcomes.filter(
+      (outcome) => outcome.shouldQueueDeepAnalysisDirect,
+    );
+    if (deepDirectTargets.length > 0) {
+      await this.enqueueDeepAnalysisChildJobs(
+        deepDirectTargets.map(({ repository }) =>
+          this.buildDeepAnalysisChildQueueEntry({
+            repositoryId: repository.id,
+            windowDate: args.windowDate,
+            runFastFilterByDefault: args.runFastFilter,
+            parentJobId: args.parentJobId ?? undefined,
+            roughLevel: repository.roughLevel,
+          }),
+        ),
+        args.triggeredBy,
+      );
+    }
 
     const categoryCounts = new Map<string, number>();
-    let deepAnalysisQueued = 0;
+    const deepAnalysisQueued = deepDirectTargets.length;
     let deepSkipped = 0;
     let promisingCandidates = 0;
     let goodIdeas = 0;
@@ -891,15 +912,7 @@ export class GitHubService {
     let dataCount = 0;
 
     for (const outcome of repositoryOutcomes) {
-      if (outcome.shouldQueueDeepAnalysisDirect) {
-        await this.enqueueDeepAnalysisChildJob(
-          outcome.repository.id,
-          args.windowDate,
-          args.runFastFilter,
-          args.parentJobId ?? undefined,
-        );
-        deepAnalysisQueued += 1;
-      } else if (
+      if (
         args.runDeepAnalysis &&
         !outcome.shouldQueueSnapshot &&
         !outcome.hasActiveDeepJob &&
@@ -981,6 +994,131 @@ export class GitHubService {
         .slice(0, 6),
       topRepositoryIds,
     };
+  }
+
+  private async loadActiveRepositoryJobState(
+    repositoryIds: string[],
+  ): Promise<ActiveRepositoryJobState> {
+    const trackedRepositoryIds = new Set(repositoryIds.filter(Boolean));
+    const state: ActiveRepositoryJobState = {
+      snapshotRepositoryIds: new Set<string>(),
+      deepRepositoryIds: new Set<string>(),
+    };
+
+    if (!trackedRepositoryIds.size) {
+      return state;
+    }
+
+    const activeJobs = await this.prisma.jobLog.findMany({
+      where: {
+        jobName: {
+          in: [
+            QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT,
+            QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
+          ],
+        },
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+      },
+      select: {
+        jobName: true,
+        payload: true,
+      },
+    });
+
+    for (const job of activeJobs) {
+      const repositoryId = this.readRepositoryIdFromJobPayload(job.payload);
+      if (!repositoryId || !trackedRepositoryIds.has(repositoryId)) {
+        continue;
+      }
+
+      if (job.jobName === QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT) {
+        state.snapshotRepositoryIds.add(repositoryId);
+      }
+      if (job.jobName === QUEUE_JOB_TYPES.ANALYSIS_SINGLE) {
+        state.deepRepositoryIds.add(repositoryId);
+      }
+    }
+
+    return state;
+  }
+
+  private readRepositoryIdFromJobPayload(payload: Prisma.JsonValue | null) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return null;
+    }
+
+    if (!('repositoryId' in payload)) {
+      return null;
+    }
+
+    const repositoryId = (payload as Record<string, unknown>).repositoryId;
+    return typeof repositoryId === 'string' && repositoryId.length > 0
+      ? repositoryId
+      : null;
+  }
+
+  private buildDeepAnalysisChildQueueEntry(args: {
+    repositoryId: string;
+    windowDate: string;
+    runFastFilterByDefault: boolean;
+    parentJobId?: string;
+    roughLevel: RepositoryWithAnalysisContext['roughLevel'];
+  }): SingleAnalysisBulkEntry {
+    return {
+      repositoryId: args.repositoryId,
+      dto: {
+        runFastFilter: args.runFastFilterByDefault && !args.roughLevel,
+        runCompleteness: true,
+        runIdeaFit: true,
+        runIdeaExtract: true,
+        forceRerun: false,
+      },
+      parentJobId: args.parentJobId,
+      metadata: {
+        fromBackfill: true,
+        windowDate: args.windowDate,
+      },
+    };
+  }
+
+  private async enqueueDeepAnalysisChildJobs(
+    entries: SingleAnalysisBulkEntries,
+    triggeredBy: string,
+  ) {
+    if (!entries.length) {
+      return;
+    }
+
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
+    if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+      try {
+        await bulkQueueService.enqueueSingleAnalysesBulk(entries, triggeredBy);
+        return;
+      } catch (error) {
+        this.logger.warn(
+          `github deep child bulk enqueue failed batchSize=${entries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
+        );
+      }
+    }
+
+    await Promise.all(
+      entries.map((entry) =>
+        this.queueService.enqueueSingleAnalysis(
+          entry.repositoryId,
+          entry.dto,
+          entry.triggeredBy ?? triggeredBy,
+          {
+            parentJobId: entry.parentJobId,
+            metadata: entry.metadata,
+            jobOptionsOverride: entry.jobOptionsOverride,
+          },
+        ),
+      ),
+    );
   }
 
   private async runWithConcurrency<T>(
@@ -1311,39 +1449,6 @@ export class GitHubService {
 
   async processIdeaSnapshotQueueJob(payload: GitHubIdeaSnapshotJobPayload) {
     return this.runIdeaSnapshotChildJob(payload);
-  }
-
-  private async enqueueDeepAnalysisChildJob(
-    repositoryId: string,
-    windowDate: string,
-    runFastFilterByDefault: boolean,
-    parentJobId?: string,
-  ) {
-    const repository = await this.prisma.repository.findUnique({
-      where: { id: repositoryId },
-      select: {
-        roughLevel: true,
-      },
-    });
-
-    return this.queueService.enqueueSingleAnalysis(
-      repositoryId,
-      {
-        runFastFilter: runFastFilterByDefault && !repository?.roughLevel,
-        runCompleteness: true,
-        runIdeaFit: true,
-        runIdeaExtract: true,
-        forceRerun: false,
-      },
-      'backfill',
-      {
-        parentJobId,
-        metadata: {
-          fromBackfill: true,
-          windowDate,
-        },
-      },
-    );
   }
 
   private shouldDeepAnalyzeRepository({

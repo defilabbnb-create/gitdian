@@ -343,6 +343,11 @@ type EnqueueCandidate = {
   extraMetadata?: Record<string, unknown>;
 };
 
+type SingleAnalysisBulkEntries = Parameters<
+  QueueService['enqueueSingleAnalysesBulk']
+>[0];
+type SingleAnalysisBulkEntry = SingleAnalysisBulkEntries[number];
+
 type EnqueueSummary = LegacyLocalAnalysisReport['enqueueResult'];
 type FrozenPoolPromotionSummary = LegacyLocalAnalysisReport['frozenPoolPromotion'];
 type EnqueueCandidateResult =
@@ -364,7 +369,7 @@ const LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY_ENV_NAME =
   'LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY';
 const LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY_FALLBACK = 8;
 
-function createEnqueueSummary(): EnqueueSummary {
+export function createEnqueueSummary(): EnqueueSummary {
   return {
     queuedCount: 0,
     skippedCount: 0,
@@ -395,6 +400,120 @@ function recordQueuedCandidate(summary: EnqueueSummary, item: EnqueueCandidate) 
 function recordSkippedCandidate(summary: EnqueueSummary, reason: string) {
   summary.skippedCount += 1;
   summary.skippedByReason[reason] = (summary.skippedByReason[reason] ?? 0) + 1;
+}
+
+function isFrozenPoolRetryReason(reason: string) {
+  return reason.includes('analysis_pool_frozen_non_member:analysis_single');
+}
+
+function buildLegacyLocalAnalysisQueueEntry(args: {
+  item: EnqueueCandidate;
+  remediationMode: string;
+  frozenPoolPromotionApplied?: boolean;
+}): SingleAnalysisBulkEntry {
+  return {
+    repositoryId: args.item.repoId,
+    dto: {
+      runFastFilter: true,
+      runCompleteness: true,
+      runIdeaFit: true,
+      runIdeaExtract: true,
+      forceRerun: true,
+    },
+    metadata: {
+      remediationMode: args.remediationMode,
+      previousProvider: args.item.provider,
+      previousModel: args.item.modelName,
+      remediationReason: args.item.remediationReason,
+      ...(args.frozenPoolPromotionApplied
+        ? {
+            frozenPoolPromotionApplied: true,
+          }
+        : {}),
+      ...(args.item.extraMetadata ?? {}),
+    },
+    jobOptionsOverride: {
+      priority: toQueuePriority(args.item.moneyPriority),
+    },
+  };
+}
+
+async function tryBulkEnqueueLegacyLocalAnalysisEntries(args: {
+  entries: SingleAnalysisBulkEntries;
+  remediationMode: string;
+  queueService: QueueService;
+}) {
+  const bulkQueueService = args.queueService as QueueService & {
+    enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+  };
+
+  if (
+    !args.entries.length ||
+    typeof bulkQueueService.enqueueSingleAnalysesBulk !== 'function'
+  ) {
+    return false;
+  }
+
+  await bulkQueueService.enqueueSingleAnalysesBulk(
+    args.entries,
+    args.remediationMode,
+  );
+  return true;
+}
+
+async function enqueueLegacyLocalAnalysisCandidatesIndividually(args: {
+  candidates: EnqueueCandidate[];
+  remediationMode: string;
+  queueService: QueueService;
+  frozenPoolPromotionApplied?: boolean;
+}) {
+  return runWithConcurrency(
+    args.candidates,
+    resolveLegacyLocalAnalysisEnqueueConcurrency(args.candidates.length),
+    async (item): Promise<EnqueueCandidateResult> => {
+      const entry = buildLegacyLocalAnalysisQueueEntry({
+        item,
+        remediationMode: args.remediationMode,
+        frozenPoolPromotionApplied: args.frozenPoolPromotionApplied,
+      });
+
+      try {
+        await args.queueService.enqueueSingleAnalysis(
+          entry.repositoryId,
+          entry.dto,
+          args.remediationMode,
+          {
+            parentJobId: entry.parentJobId,
+            metadata: entry.metadata,
+            jobOptionsOverride: entry.jobOptionsOverride,
+          },
+        );
+        return {
+          status: 'queued',
+          item,
+        };
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : 'queue_enqueue_failed';
+
+        if (
+          !args.frozenPoolPromotionApplied &&
+          isFrozenPoolRetryReason(reason)
+        ) {
+          return {
+            status: 'retry_after_frozen_promotion',
+            item,
+          };
+        }
+
+        return {
+          status: 'skipped',
+          item,
+          reason,
+        };
+      }
+    },
+  );
 }
 
 function mergeFrozenPoolPromotion(
@@ -530,7 +649,7 @@ function renderMarkdown(report: LegacyLocalAnalysisReport) {
   return lines.join('\n');
 }
 
-async function enqueueCandidates(args: {
+export async function enqueueCandidates(args: {
   candidates: EnqueueCandidate[];
   remediationMode: string;
   queueService: QueueService;
@@ -541,57 +660,37 @@ async function enqueueCandidates(args: {
   const retryAfterFrozenPromotion: EnqueueCandidate[] = [];
   let frozenPoolPromotion = args.frozenPoolPromotion;
 
-  const firstPassResults = await runWithConcurrency(
-    args.candidates,
-    resolveLegacyLocalAnalysisEnqueueConcurrency(args.candidates.length),
-    async (item): Promise<EnqueueCandidateResult> => {
-      try {
-        await args.queueService.enqueueSingleAnalysis(
-          item.repoId,
-          {
-            runFastFilter: true,
-            runCompleteness: true,
-            runIdeaFit: true,
-            runIdeaExtract: true,
-            forceRerun: true,
-          },
-          args.remediationMode,
-          {
-            metadata: {
-              remediationMode: args.remediationMode,
-              previousProvider: item.provider,
-              previousModel: item.modelName,
-              remediationReason: item.remediationReason,
-              ...(item.extraMetadata ?? {}),
-            },
-            jobOptionsOverride: {
-              priority: toQueuePriority(item.moneyPriority),
-            },
-          },
-        );
-        return {
-          status: 'queued',
-          item,
-        };
-      } catch (error) {
-        const reason =
-          error instanceof Error ? error.message : 'queue_enqueue_failed';
-
-        if (reason.includes('analysis_pool_frozen_non_member:analysis_single')) {
-          return {
-            status: 'retry_after_frozen_promotion',
-            item,
-          };
-        }
-
-        return {
-          status: 'skipped',
-          item,
-          reason,
-        };
-      }
-    },
+  const firstPassEntries = args.candidates.map((item) =>
+    buildLegacyLocalAnalysisQueueEntry({
+      item,
+      remediationMode: args.remediationMode,
+    }),
   );
+  let firstPassResults: EnqueueCandidateResult[] | null = null;
+
+  try {
+    const bulkQueued = await tryBulkEnqueueLegacyLocalAnalysisEntries({
+      entries: firstPassEntries,
+      remediationMode: args.remediationMode,
+      queueService: args.queueService,
+    });
+    if (bulkQueued) {
+      for (const item of args.candidates) {
+        recordQueuedCandidate(args.enqueueResult, item);
+      }
+      return {
+        frozenPoolPromotion,
+      };
+    }
+  } catch {
+    // Fall back to per-item handling so frozen-pool retries and granular reasons stay intact.
+  }
+
+  firstPassResults = await enqueueLegacyLocalAnalysisCandidatesIndividually({
+    candidates: args.candidates,
+    remediationMode: args.remediationMode,
+    queueService: args.queueService,
+  });
 
   for (const result of firstPassResults) {
     if (result.status === 'queued') {
@@ -623,55 +722,47 @@ async function enqueueCandidates(args: {
     buildFrozenPoolPromotionSummary(promotionResult),
   );
 
-  const retryResults = await runWithConcurrency(
-    retryAfterFrozenPromotion,
-    resolveLegacyLocalAnalysisEnqueueConcurrency(
-      retryAfterFrozenPromotion.length,
-    ),
-    async (item): Promise<EnqueueCandidateResult> => {
-      try {
-        await args.queueService.enqueueSingleAnalysis(
-          item.repoId,
-          {
-            runFastFilter: true,
-            runCompleteness: true,
-            runIdeaFit: true,
-            runIdeaExtract: true,
-            forceRerun: true,
-          },
-          args.remediationMode,
-          {
-            metadata: {
-              remediationMode: args.remediationMode,
-              previousProvider: item.provider,
-              previousModel: item.modelName,
-              remediationReason: item.remediationReason,
-              frozenPoolPromotionApplied: true,
-              ...(item.extraMetadata ?? {}),
-            },
-            jobOptionsOverride: {
-              priority: toQueuePriority(item.moneyPriority),
-            },
-          },
-        );
-        return {
-          status: 'queued',
-          item,
-        };
-      } catch (error) {
-        return {
-          status: 'skipped',
-          item,
-          reason:
-            error instanceof Error ? error.message : 'queue_enqueue_failed',
-        };
-      }
-    },
+  const retryEntries = retryAfterFrozenPromotion.map((item) =>
+    buildLegacyLocalAnalysisQueueEntry({
+      item,
+      remediationMode: args.remediationMode,
+      frozenPoolPromotionApplied: true,
+    }),
   );
+  let retryResults: EnqueueCandidateResult[] | null = null;
+
+  try {
+    const bulkQueued = await tryBulkEnqueueLegacyLocalAnalysisEntries({
+      entries: retryEntries,
+      remediationMode: args.remediationMode,
+      queueService: args.queueService,
+    });
+    if (bulkQueued) {
+      for (const item of retryAfterFrozenPromotion) {
+        recordQueuedCandidate(args.enqueueResult, item);
+      }
+      return {
+        frozenPoolPromotion,
+      };
+    }
+  } catch {
+    // Fall back to per-item handling to preserve current queue semantics.
+  }
+
+  retryResults = await enqueueLegacyLocalAnalysisCandidatesIndividually({
+    candidates: retryAfterFrozenPromotion,
+    remediationMode: args.remediationMode,
+    queueService: args.queueService,
+    frozenPoolPromotionApplied: true,
+  });
 
   for (const result of retryResults) {
     if (result.status === 'queued') {
       recordQueuedCandidate(args.enqueueResult, result.item);
+      continue;
+    }
+
+    if (result.status !== 'skipped') {
       continue;
     }
 
@@ -1329,4 +1420,6 @@ async function main() {
   }
 }
 
-void main();
+if (require.main === module) {
+  void main();
+}
