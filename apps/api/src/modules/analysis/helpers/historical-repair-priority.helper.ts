@@ -426,6 +426,9 @@ function resolveHistoricalRepairAction(args: {
   conflictDrivenDecisionRecalc: boolean;
 } {
   const { item } = args;
+  const watchOnlyDecisionRecalcCandidate = isWatchOnlyDecisionRecalcCandidate(
+    item,
+  );
   const lowRepairRoi = Boolean(
     item.repositoryValueTier === 'LOW' &&
       (item.moneyPriority === null || item.moneyPriority === 'P3'),
@@ -552,6 +555,35 @@ function resolveHistoricalRepairAction(args: {
       conflictDrivenDecisionRecalc: false,
     };
   }
+  if (watchOnlyDecisionRecalcCandidate) {
+    if (
+      args.coreEvidenceGap ||
+      args.keyEvidenceMissing ||
+      item.evidenceRepairGaps.length > 0 ||
+      args.evidenceWeakOnly ||
+      args.evidenceConflict ||
+      args.evidenceDecisionConflict
+    ) {
+      return {
+        action: 'evidence_repair',
+        conflictDrivenDecisionRecalc: false,
+      };
+    }
+    if (
+      item.needsFrontendDowngrade ||
+      args.historicalTrustedButWeak ||
+      item.frontendDowngradeSeverity === 'CONSERVATIVE'
+    ) {
+      return {
+        action: 'downgrade_only',
+        conflictDrivenDecisionRecalc: false,
+      };
+    }
+    return {
+      action: 'refresh_only',
+      conflictDrivenDecisionRecalc: false,
+    };
+  }
   if (unstableDecisionSignal) {
     return {
       action: 'decision_recalc',
@@ -643,6 +675,26 @@ function resolveFrontendDecisionState(args: {
   }
 
   return args.item.displayStatus === 'BASIC_READY' ? 'provisional' : 'degraded';
+}
+
+function isWatchOnlyDecisionRecalcCandidate(item: HistoricalRepairBucketedItem) {
+  if (item.historicalRepairBucket !== 'stale_watch') {
+    return false;
+  }
+
+  if (item.strictVisibilityLevel !== 'DETAIL_ONLY') {
+    return false;
+  }
+
+  if (item.repositoryValueTier === 'HIGH') {
+    return false;
+  }
+
+  if (item.moneyPriority === 'P0' || item.moneyPriority === 'P1') {
+    return false;
+  }
+
+  return true;
 }
 
 function scoreHistoricalRepairPriority(args: {

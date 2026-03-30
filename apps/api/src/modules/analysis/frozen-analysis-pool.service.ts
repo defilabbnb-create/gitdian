@@ -2427,6 +2427,14 @@ export class FrozenAnalysisPoolService {
 
   private applyPendingSuppressionPolicy(rows: FrozenPendingQueueJob[]) {
     for (const row of rows) {
+      const actionDriftPolicy = this.resolvePendingActionDriftPolicy(row);
+      if (actionDriftPolicy) {
+        row.suppressible = actionDriftPolicy.suppressible;
+        row.lowRoiStale = actionDriftPolicy.lowRoiStale;
+        row.suppressionReason = actionDriftPolicy.suppressionReason;
+        continue;
+      }
+
       const policy = evaluateFrozenPendingSuppression({
         member: {
           cleanupState: row.member.cleanupState,
@@ -2445,6 +2453,25 @@ export class FrozenAnalysisPoolService {
       row.lowRoiStale = policy.lowRoiStale;
       row.suppressionReason = policy.suppressionReason;
     }
+  }
+
+  private resolvePendingActionDriftPolicy(row: FrozenPendingQueueJob) {
+    if (row.historicalRepairAction !== 'decision_recalc') {
+      return null;
+    }
+
+    if (row.member.historicalRepairAction === 'decision_recalc') {
+      return null;
+    }
+
+    return {
+      suppressible: true,
+      lowRoiStale:
+        row.member.historicalRepairAction === 'refresh_only' ||
+        row.member.historicalRepairAction === 'downgrade_only' ||
+        row.member.historicalRepairAction === 'archive',
+      suppressionReason: `outdated_decision_recalc_pending_current_${row.member.historicalRepairAction}`,
+    };
   }
 
   private buildPendingQueueBreakdown(

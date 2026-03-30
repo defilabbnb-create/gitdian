@@ -504,6 +504,52 @@ test('decision recalc compression removes compressed repos from pending and repa
   assert.doesNotThrow(() => JSON.stringify(result));
 });
 
+test('outdated pending decision_recalc jobs are suppressed when current action has been downgraded', async () => {
+  const service = new FrozenAnalysisPoolService(
+    {},
+    {},
+    {},
+    {},
+    {},
+  );
+  const downgradedMember = createMember({
+    repoId: 'repo-refresh',
+    fullName: 'acme/repo-refresh',
+    historicalRepairBucket: 'stale_watch',
+    historicalRepairAction: 'refresh_only',
+    strictVisibilityLevel: 'DETAIL_ONLY',
+    repositoryValueTier: 'MEDIUM',
+    moneyPriority: 'P2',
+  });
+  const rows = [
+    {
+      jobId: 'job-stale-decision',
+      queueName: 'analysis.single',
+      repositoryId: 'repo-refresh',
+      member: downgradedMember,
+      historicalRepairAction: 'decision_recalc',
+      routerCapabilityTier: 'FAST',
+      drainPriorityClass: 'P2',
+      waitingDurationHours: 10,
+      waitingDurationBucket: 'h6_24',
+      replayRisk: false,
+      redundant: false,
+      suppressible: false,
+      lowRoiStale: false,
+      suppressionReason: null,
+    },
+  ];
+
+  service.applyPendingSuppressionPolicy(rows);
+
+  assert.equal(rows[0].suppressible, true);
+  assert.equal(rows[0].lowRoiStale, true);
+  assert.equal(
+    rows[0].suppressionReason,
+    'outdated_decision_recalc_pending_current_refresh_only',
+  );
+});
+
 test('pending drain finish pass integrates pending triage and decision recalc compression stats', async () => {
   const freezeState = buildAnalysisPoolFreezeState({
     batchId: 'batch-1',
