@@ -19,17 +19,21 @@ export function RepositoryRelatedJobItem({
   const detailsHref = repositoryId
     ? `/jobs?repositoryId=${repositoryId}&focusJobId=${job.id}#job-${job.id}`
     : `/jobs?focusJobId=${job.id}#job-${job.id}`;
+  const statusSignal = resolveStatusSignal(job.jobStatus);
 
   return (
     <article className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
             关联任务
-        </p>
+          </p>
           <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-950">
             {getJobDisplayName(job.jobName)}
           </h3>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            执行信号：{statusSignal}
+          </p>
           <div className="mt-3 flex flex-wrap gap-3 text-sm text-slate-600">
             <span>开始于：{formatDateTime(job.startedAt)}</span>
             <span>结束于：{formatDateTime(job.finishedAt)}</span>
@@ -52,12 +56,13 @@ export function RepositoryRelatedJobItem({
       </div>
 
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
-        <SummaryCard title="执行输入" text={summarizeObject(job.payload)} />
-        <SummaryCard title="执行结果" text={summarizeObject(job.result)} />
+        <SummaryCard title="关键输入摘要" text={summarizeObject(job.payload)} />
+        <SummaryCard title="关键结果摘要" text={summarizeObject(job.result)} />
       </div>
 
       {job.errorMessage ? (
         <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <span className="font-semibold">失败原因：</span>
           {job.errorMessage}
         </div>
       ) : null}
@@ -141,7 +146,7 @@ function summarizeObject(value?: Record<string, unknown> | null) {
     .slice(0, 4)
     .map(([key, currentValue]) => {
       if (Array.isArray(currentValue)) {
-        return `${key}: ${currentValue.length} item(s)`;
+        return `${key}: ${currentValue.length} 个条目`;
       }
 
       if (
@@ -155,4 +160,18 @@ function summarizeObject(value?: Record<string, unknown> | null) {
       return `${key}: ${String(currentValue)}`;
     })
     .join(' · ');
+}
+
+function resolveStatusSignal(status: JobLogItem['jobStatus']) {
+  switch (status) {
+    case 'FAILED':
+      return '执行失败，需要先查错误原因';
+    case 'RUNNING':
+      return '正在执行，先观察结果';
+    case 'PENDING':
+      return '排队中，先看是否长时间不推进';
+    case 'SUCCESS':
+    default:
+      return '已执行完成，可继续核对结论';
+  }
 }

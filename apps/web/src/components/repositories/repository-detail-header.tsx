@@ -28,6 +28,7 @@ export function RepositoryDetailHeader({
           decisionViewModel.display.monetizationLabel,
           '收费路径还在校准，先补关键分析后再判断是否真的能收钱。',
         );
+  const executionSignal = resolveExecutionSignalSummary(decisionViewModel);
 
   return (
     <section className="overflow-hidden rounded-[36px] border border-slate-200 bg-[linear-gradient(140deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.97)_55%,_rgba(30,64,175,0.86)_100%)] px-8 py-8 text-white shadow-xl shadow-slate-900/10">
@@ -43,7 +44,7 @@ export function RepositoryDetailHeader({
             {decisionViewModel.display.headline}
           </p>
           <p className="text-sm text-slate-300">
-            优先把谁会用、为什么值得看、怎么收费和下一步动作放到台面上，避免详情页只剩一堆保守提示。
+            先看清现在卡在什么环节，再决定要不要补跑或继续推进，避免重复看同一段结论文案。
           </p>
         </div>
 
@@ -86,13 +87,22 @@ export function RepositoryDetailHeader({
             value={categorySummary}
           />
           <HeroNarrative
-            label="怎么收费"
-            value={monetizationSummary}
+            label="当前卡点"
+            value={executionSignal.blockingSignal}
           />
           <HeroNarrative
-            label="下一步"
-            value={decisionViewModel.detail.primaryActionDescription}
+            label="要不要补跑"
+            value={executionSignal.rerunHint}
           />
+        </div>
+
+        <div className="rounded-[24px] border border-white/10 bg-white/8 px-5 py-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+            当前收费判断
+          </p>
+          <p className="mt-3 text-sm leading-7 text-slate-100">
+            {monetizationSummary}
+          </p>
         </div>
       </div>
     </section>
@@ -151,4 +161,44 @@ function softenHeldBackNarrative(value: string, fallback: string) {
   }
 
   return `${normalized} 当前先按待验证线索看，不直接当作已验证收入。`;
+}
+
+function resolveExecutionSignalSummary(decisionViewModel: RepositoryDecisionViewModel) {
+  const blockingSignals: string[] = [];
+
+  if (decisionViewModel.flags.fallback) {
+    blockingSignals.push('当前仍是 fallback 兜底判断，先别当成稳定结论。');
+  }
+
+  if (decisionViewModel.flags.conflict) {
+    blockingSignals.push('关键信号有冲突，结论还没真正收敛。');
+  }
+
+  if (
+    decisionViewModel.flags.hasFinalDecisionWithoutDeep ||
+    decisionViewModel.flags.missingKeyAnalysis ||
+    decisionViewModel.flags.incomplete
+  ) {
+    blockingSignals.push('深分析还没补齐，关键证据仍有缺口。');
+  }
+
+  const blockingSignal =
+    blockingSignals[0] ??
+    (decisionViewModel.displayState === 'trusted'
+      ? '当前没有明显执行卡点，可以继续推进验证。'
+      : decisionViewModel.detail.missingEvidenceLabel);
+
+  const rerunHint =
+    decisionViewModel.detail.primaryActionIntent === 'analyze'
+      ? '建议先补跑分析链路，补齐缺证据后再判断是否继续投入。'
+      : decisionViewModel.detail.primaryActionIntent === 'review'
+        ? '先看冲突证据和执行记录，再决定是否需要补跑。'
+        : decisionViewModel.displayState === 'trusted'
+          ? '不需要立刻补跑，先按主动作进入真实验证。'
+          : '先按主动作验证关键场景，只有卡住时再补跑。';
+
+  return {
+    blockingSignal,
+    rerunHint,
+  };
 }

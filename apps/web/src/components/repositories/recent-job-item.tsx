@@ -9,6 +9,7 @@ type RecentJobItemProps = {
 
 export function RecentJobItem({ job }: RecentJobItemProps) {
   const href = `/jobs?focusJobId=${job.id}#job-${job.id}`;
+  const statusSignal = resolveStatusSignal(job.jobStatus);
 
   return (
     <Link
@@ -19,6 +20,9 @@ export function RecentJobItem({ job }: RecentJobItemProps) {
         <div>
           <p className="text-sm font-semibold text-slate-950">
             {getJobDisplayName(job.jobName)}
+          </p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            执行信号：{statusSignal}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
             <span>开始于：{formatDateTime(job.startedAt)}</span>
@@ -108,7 +112,7 @@ function summarizeObject(value?: Record<string, unknown> | null) {
     .slice(0, 4)
     .map(([key, currentValue]) => {
       if (Array.isArray(currentValue)) {
-        return `${key}: ${currentValue.length} item(s)`;
+        return `${key}: ${currentValue.length} 个条目`;
       }
 
       if (
@@ -122,4 +126,18 @@ function summarizeObject(value?: Record<string, unknown> | null) {
       return `${key}: ${String(currentValue)}`;
     })
     .join(' · ');
+}
+
+function resolveStatusSignal(status: JobLogItem['jobStatus']) {
+  switch (status) {
+    case 'FAILED':
+      return '执行失败，需要先查错误原因';
+    case 'RUNNING':
+      return '正在执行，先观察结果';
+    case 'PENDING':
+      return '排队中，先看是否长时间不推进';
+    case 'SUCCESS':
+    default:
+      return '已执行完成，可继续核对结论';
+  }
 }

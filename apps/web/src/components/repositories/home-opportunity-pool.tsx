@@ -390,7 +390,7 @@ function OpportunityPoolRefinementControls({
           细查模式
         </p>
         <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
-          先用快捷条件缩到可看范围，再切视角和展开高级筛选。
+          先缩小范围，再分清哪些是视角预设，哪些是你手动加的条件。
         </h3>
       </div>
       <RepositoryQuickFilters query={query} />

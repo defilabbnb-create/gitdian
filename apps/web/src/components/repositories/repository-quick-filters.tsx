@@ -107,7 +107,7 @@ export function RepositoryQuickFilters({
             快捷筛选
           </p>
           <p className="mt-2 text-sm leading-7 text-slate-600">
-            一键切到高机会项目，或者只看已经完成点子提取的仓库。
+            一键切到高机会项目，或者只看已经完成点子提取的仓库。这里加上的条件会继续保留，切换首页视角时不会被静默清掉。
           </p>
         </div>
 

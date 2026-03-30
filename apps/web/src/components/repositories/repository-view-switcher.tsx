@@ -5,9 +5,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   applyRepositoryViewQuery,
   buildRepositoryListSearchParams,
+  getActiveRepositoryViewPresetKeys,
   RepositoryDisplayMode,
   RepositoryListQueryState,
   RepositoryRecommendedView,
+  stripActiveRepositoryViewPresetFilters,
 } from '@/lib/types/repository';
 import {
   getRepositoryDisplayModeMeta,
@@ -46,6 +48,45 @@ const displayModeOptions = (
   ...meta,
 }));
 
+const VIEW_PRESET_LABELS: Partial<
+  Record<keyof RepositoryListQueryState, string>
+> = {
+  opportunityLevel: '创业等级',
+  isFavorited: '收藏状态',
+  hasIdeaFitAnalysis: 'Idea Fit',
+  hasExtractedIdea: '点子提取',
+  hasPromisingIdeaSnapshot: '候选快照',
+  hasGoodInsight: '好点子结论',
+  finalVerdict: '最终结论',
+  createdAfterDays: '时间范围',
+  sortBy: '排序字段',
+  order: '排序顺序',
+};
+
+function getViewPresetSummary(view: RepositoryRecommendedView) {
+  const presetKeys = getActiveRepositoryViewPresetKeys(
+    applyRepositoryViewQuery(
+      {
+        page: 1,
+        pageSize: 20,
+        view: 'moneyFirst',
+        displayMode: 'insight',
+        sortBy: 'latest',
+        order: 'desc',
+      },
+      view,
+    ),
+  )
+    .map((key) => VIEW_PRESET_LABELS[key])
+    .filter((value): value is string => Boolean(value));
+
+  if (presetKeys.length === 0) {
+    return '不额外接管任何筛选条件';
+  }
+
+  return `切换后自动替换：${presetKeys.join(' / ')}`;
+}
+
 export function RepositoryViewSwitcher({
   query,
 }: RepositoryViewSwitcherProps) {
@@ -54,31 +95,10 @@ export function RepositoryViewSwitcher({
   const isSecondaryView = !PRIMARY_VIEW_OPTIONS.includes(query.view);
 
   function handleSwitch(nextView: RepositoryRecommendedView) {
-    const baseQuery: RepositoryListQueryState = {
+    const baseQuery = stripActiveRepositoryViewPresetFilters({
       ...query,
       page: 1,
-      view: nextView,
-      opportunityLevel: undefined,
-      isFavorited: undefined,
-      hasIdeaFitAnalysis: undefined,
-      hasExtractedIdea: undefined,
-      hasPromisingIdeaSnapshot: undefined,
-      hasGoodInsight: undefined,
-      hasManualInsight: undefined,
-      finalVerdict: undefined,
-      finalCategory: undefined,
-      moneyPriority: undefined,
-      decisionSource: undefined,
-      hasConflict: undefined,
-      needsRecheck: undefined,
-      hasTrainingHints: undefined,
-      recommendedAction: undefined,
-      createdAfterDays: undefined,
-      sortBy:
-        query.sortBy === 'createdAtGithub' ? 'latest' : query.sortBy,
-      order:
-        query.sortBy === 'createdAtGithub' ? 'desc' : query.order,
-    };
+    });
 
     const viewQuery = applyRepositoryViewQuery(baseQuery, nextView);
     const search = buildRepositoryListSearchParams(viewQuery);
@@ -111,7 +131,7 @@ export function RepositoryViewSwitcher({
             先选你现在要用什么角度做决定。
           </h3>
           <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">
-            默认推荐“挣钱优先”。如果你想补看完整机会池或只看工具机会，再切到其他视角。
+            默认推荐“挣钱优先”。切换视角时只会替换视角自带的预设条件，你已经手动加上的搜索、分类和动作筛选会继续保留。
           </p>
         </div>
 
@@ -149,6 +169,13 @@ export function RepositoryViewSwitcher({
                 }`}
               >
                 {option.helper}
+              </p>
+              <p
+                className={`mt-3 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                  query.view === value ? 'text-slate-400' : 'text-slate-400'
+                }`}
+              >
+                {getViewPresetSummary(value)}
               </p>
             </button>
           );
@@ -195,7 +222,7 @@ export function RepositoryViewSwitcher({
             <div>
               <p className="text-sm font-semibold text-slate-950">更多视角</p>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                这些视角更适合补看待分析项目、回溯雷达和长尾机会池，不抢首页主判断入口。
+                这些视角更适合补看待分析项目、回溯雷达和长尾机会池，不抢首页主判断入口；切换时同样会保留你手动加的筛选。
               </p>
             </div>
             <span className="inline-flex w-fit items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
@@ -224,6 +251,13 @@ export function RepositoryViewSwitcher({
                 }`}
               >
                 {option.helper}
+              </p>
+              <p
+                className={`mt-3 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                  query.view === option.value ? 'text-slate-400' : 'text-slate-400'
+                }`}
+              >
+                {getViewPresetSummary(option.value)}
               </p>
             </button>
           ))}

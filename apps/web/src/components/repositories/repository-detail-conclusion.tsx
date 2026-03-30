@@ -7,6 +7,8 @@ type RepositoryDetailConclusionProps = {
 export function RepositoryDetailConclusion({
   decisionViewModel,
 }: RepositoryDetailConclusionProps) {
+  const rerunRecommendation = resolveRerunRecommendation(decisionViewModel);
+
   return (
     <section id="decision" className="rounded-[36px] border border-slate-200 bg-white/95 p-7 shadow-sm backdrop-blur">
       <div className="space-y-5">
@@ -15,10 +17,10 @@ export function RepositoryDetailConclusion({
             主判断
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            {decisionViewModel.display.headline}
+            先判断为什么会停、卡在哪里、要不要补跑。
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            当前先把结论和下一步动作收口到一屏里，下面的模块继续展开看细节。
+            这一块只保留一组判断行，避免和头部、行动区重复叙述同一段 headline / reason / next step。
           </p>
         </div>
 
@@ -32,16 +34,16 @@ export function RepositoryDetailConclusion({
             }
           />
           <DecisionRow
-            label="为什么这样判断"
+            label="为什么会停"
             value={decisionViewModel.display.reason}
           />
           <DecisionRow
-            label="缺什么证据"
+            label="当前卡点"
             value={decisionViewModel.detail.missingEvidenceLabel}
           />
           <DecisionRow
-            label="下一步该做什么"
-            value={decisionViewModel.detail.primaryActionDescription}
+            label="要不要补跑"
+            value={rerunRecommendation}
           />
         </div>
       </div>
@@ -64,4 +66,22 @@ function DecisionRow({
       <p className="text-sm leading-7 text-slate-700">{value}</p>
     </div>
   );
+}
+
+function resolveRerunRecommendation(
+  decisionViewModel: RepositoryDecisionViewModel,
+) {
+  const actionHint = `${decisionViewModel.detail.primaryActionLabel}：${decisionViewModel.detail.primaryActionDescription}`;
+
+  if (decisionViewModel.detail.primaryActionIntent === 'analyze') {
+    return `${actionHint} 当前建议先补跑，再回到结论层确认是否继续投入。`;
+  }
+
+  if (decisionViewModel.detail.primaryActionIntent === 'review') {
+    return `${actionHint} 当前先复核冲突和执行证据，再决定是否补跑。`;
+  }
+
+  return decisionViewModel.displayState === 'trusted'
+    ? `${actionHint} 当前优先进入验证，不需要立刻补跑。`
+    : `${actionHint} 先做主动作验证，遇到卡点再补跑。`;
 }

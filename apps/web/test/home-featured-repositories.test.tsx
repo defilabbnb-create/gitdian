@@ -3,6 +3,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
+  HomeFeaturedRepositories,
   HomeNewOpportunitiesStrip,
   selectHomepageDecisionTerminal,
 } from '../src/components/repositories/home-featured-repositories';
@@ -266,6 +267,17 @@ test('new opportunities strip uses softer copy instead of the empty state in pro
 
   assert.match(html, /值得先补一轮证据/);
   assert.doesNotMatch(html, /data-home-empty-state="true"/);
+});
+
+test('homepage top action keeps follow-up naming aligned with favorites page', () => {
+  const items = Array.from({ length: 5 }, (_, index) =>
+    createStrongProvisionalRepository(index + 1),
+  );
+
+  const html = renderToStaticMarkup(<HomeFeaturedRepositories items={items} />);
+
+  assert.match(html, /加入跟进清单/);
+  assert.doesNotMatch(html, /加入跟进列表/);
 });
 
 test('falls back to recovery candidates when trusted and provisional pools are both empty', () => {

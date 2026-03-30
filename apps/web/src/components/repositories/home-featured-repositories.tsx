@@ -397,7 +397,7 @@ function HomepageTopActionStrip({
           intent: 'reference' as const,
         },
         tertiary: {
-          title: '加入跟进列表',
+          title: '加入跟进清单',
           intent: 'follow_up' as const,
         },
       }
@@ -406,6 +406,17 @@ function HomepageTopActionStrip({
         secondary: candidate.decisionView.cta.secondary,
         tertiary: candidate.decisionView.cta.tertiary,
       };
+  const resolveCtaLabel = (
+    intent: RepositoryDecisionCtaIntent,
+    fallbackLabel: string,
+  ) => (intent === 'follow_up' ? '加入跟进清单' : fallbackLabel);
+  const resolveCtaActiveLabel = (
+    intent: RepositoryDecisionCtaIntent,
+    fallbackLabel: string,
+  ) =>
+    intent === 'follow_up' && isActiveFollowUp
+      ? '已在跟进清单'
+      : resolveCtaLabel(intent, fallbackLabel);
 
   function handleKeepAsReference() {
     setErrorMessage(null);
@@ -486,12 +497,12 @@ function HomepageTopActionStrip({
         });
       }
 
-      setFeedback('已加入跟进列表，现在可以去收藏页继续推进。');
+      setFeedback('已加入跟进清单（收藏页），现在可以继续推进。');
     } catch (error) {
       setErrorMessage(
         error instanceof Error
-          ? `已加入跟进列表，但收藏同步失败：${error.message}`
-          : '已加入跟进列表，但收藏同步失败，请稍后再试。',
+          ? `已加入跟进清单，但收藏记录同步失败：${error.message}`
+          : '已加入跟进清单，但收藏记录同步失败，请稍后再试。',
       );
     } finally {
       setIsSubmitting(false);
@@ -526,7 +537,7 @@ function HomepageTopActionStrip({
           onClick={() => handleIntent(cta.primary.intent)}
           className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
         >
-          {cta.primary.title}
+          {resolveCtaActiveLabel(cta.primary.intent, cta.primary.title)}
         </button>
         <button
           type="button"
@@ -534,16 +545,15 @@ function HomepageTopActionStrip({
           disabled={isSubmitting || (isActiveFollowUp && cta.tertiary.intent === 'follow_up')}
           className="inline-flex items-center rounded-full border border-sky-400/40 bg-sky-500/10 px-4 py-2 font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {cta.tertiary.intent === 'follow_up' && isActiveFollowUp
-            ? '已加入跟进'
-            : cta.tertiary.title}
+          {resolveCtaActiveLabel(cta.tertiary.intent, cta.tertiary.title)}
         </button>
         <button
           type="button"
           onClick={() => handleIntent(cta.secondary.intent)}
-          className="inline-flex items-center rounded-full border border-amber-400/40 bg-amber-500/10 px-4 py-2 font-semibold text-amber-100 transition hover:border-amber-300 hover:bg-amber-500/20"
+          disabled={isSubmitting || (isActiveFollowUp && cta.secondary.intent === 'follow_up')}
+          className="inline-flex items-center rounded-full border border-amber-400/40 bg-amber-500/10 px-4 py-2 font-semibold text-amber-100 transition hover:border-amber-300 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {cta.secondary.title}
+          {resolveCtaActiveLabel(cta.secondary.intent, cta.secondary.title)}
         </button>
       </div>
       {feedback ? (

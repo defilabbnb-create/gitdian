@@ -187,7 +187,7 @@ export function RepositoryNextSteps({
     appendActionLog('follow_up_added', repoId);
     setIsActiveFollowUp(true);
     setStatusLabel(getExecutionStatusLabel(nextStatus));
-    setFeedback('已加入跟进列表，现在可以去任务页继续推进。');
+    setFeedback('已加入跟进清单（收藏页），可以去任务页继续推进。');
 
     try {
       if (!isFavoritedState) {
@@ -210,8 +210,8 @@ export function RepositoryNextSteps({
     } catch (error) {
       setErrorMessage(
         error instanceof Error
-          ? `已加入跟进列表，但收藏同步失败：${error.message}`
-          : '已加入跟进列表，但收藏同步失败，请稍后再试。',
+          ? `已加入跟进清单，但收藏记录同步失败：${error.message}`
+          : '已加入跟进清单，但收藏记录同步失败，请稍后再试。',
       );
     } finally {
       setIsSubmitting(false);
@@ -280,6 +280,8 @@ export function RepositoryNextStepsPanel({
   onPrimaryAction,
   onAddFollowUp,
 }: RepositoryNextStepsPanelProps) {
+  const runbookSignal = resolveRunbookSignal(decisionViewModel, statusLabel);
+
   return (
     <section
       id="next-steps"
@@ -291,15 +293,18 @@ export function RepositoryNextStepsPanel({
             行动区
           </p>
           <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            只保留一个主动作，避免 CTA 互相竞争。
+            先看执行信号，再决定是否补跑。
           </h3>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
-            {decisionViewModel.detail.primaryActionDescription}
+            当前只保留一个主动作，先用状态和卡点判断是继续推进、等待队列，还是回到补跑链路。
           </p>
         </div>
-        <span className="text-sm font-medium text-slate-600">
-          当前状态：{statusLabel}
-        </span>
+      </div>
+
+      <div className="mt-5 grid gap-3 lg:grid-cols-3">
+        <SignalCard label="任务状态" value={runbookSignal.status} />
+        <SignalCard label="当前卡点" value={runbookSignal.blocking} />
+        <SignalCard label="补跑判断" value={runbookSignal.rerunHint} />
       </div>
 
       <div className="mt-5 rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -316,7 +321,7 @@ export function RepositoryNextStepsPanel({
           {decisionViewModel.detail.primaryActionLabel}
         </button>
         <p className="mt-4 text-sm leading-7 text-slate-600">
-          {decisionViewModel.display.reason}
+          {decisionViewModel.detail.primaryActionDescription}
         </p>
       </div>
 
@@ -327,7 +332,7 @@ export function RepositoryNextStepsPanel({
           disabled={isSubmitting || isActiveFollowUp}
           className="inline-flex items-center rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isActiveFollowUp ? '已加入跟进' : '加入跟进'}
+          {isActiveFollowUp ? '已在跟进清单' : '加入跟进清单'}
         </button>
         <a
           href={htmlUrl}
@@ -347,4 +352,42 @@ export function RepositoryNextStepsPanel({
       ) : null}
     </section>
   );
+}
+
+function SignalCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <section className="rounded-[24px] border border-slate-200 bg-white px-4 py-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {label}
+      </p>
+      <p className="mt-3 text-sm leading-7 text-slate-700">{value}</p>
+    </section>
+  );
+}
+
+function resolveRunbookSignal(
+  decisionViewModel: RepositoryDecisionViewModel,
+  statusLabel: string,
+) {
+  const blocking = decisionViewModel.detail.missingEvidenceLabel;
+  const rerunHint =
+    decisionViewModel.detail.primaryActionIntent === 'analyze'
+      ? '建议补跑：当前证据不足，先补分析再下结论。'
+      : decisionViewModel.detail.primaryActionIntent === 'review'
+        ? '先复核：先看冲突证据，确认后再决定是否补跑。'
+        : decisionViewModel.displayState === 'trusted'
+          ? '暂不补跑：结论已收敛，优先进入真实验证。'
+          : '按主动作推进：遇到卡点时再补跑。';
+
+  return {
+    status: statusLabel,
+    blocking,
+    rerunHint,
+  };
 }

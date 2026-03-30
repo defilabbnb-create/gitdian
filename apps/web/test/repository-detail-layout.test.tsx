@@ -125,6 +125,13 @@ test('detail page keeps only one main judgement row in the primary flow', () => 
   assert.equal(judgementRows.length, 1);
 });
 
+test('detail conclusion section focuses on triage framing instead of repeating headline title', () => {
+  const repository = createRepositoryFixture();
+  const html = renderDetailPrimaryFlow(repository);
+
+  assert.match(html, /先判断为什么会停、卡在哪里、要不要补跑/);
+});
+
 test('detail page renders exactly one primary CTA', () => {
   const repository = createRepositoryFixture();
   const html = renderDetailPrimaryFlow(repository);
@@ -132,6 +139,23 @@ test('detail page renders exactly one primary CTA', () => {
 
   assert.equal(matches.length, 1);
   assert.match(html, /开始验证/);
+});
+
+test('next steps panel surfaces status, blocking signal, and rerun judgement before CTA', () => {
+  const repository = createRepositoryFixture();
+  const html = renderDetailPrimaryFlow(repository);
+
+  assert.match(html, /任务状态/);
+  assert.match(html, /当前卡点/);
+  assert.match(html, /补跑判断/);
+});
+
+test('detail action panel keeps follow-up naming aligned with favorites page', () => {
+  const repository = createRepositoryFixture();
+  const html = renderDetailPrimaryFlow(repository);
+
+  assert.match(html, /加入跟进清单/);
+  assert.doesNotMatch(html, /加入跟进<\/button>/);
 });
 
 test('provisional detail page does not show competing primary CTAs', () => {

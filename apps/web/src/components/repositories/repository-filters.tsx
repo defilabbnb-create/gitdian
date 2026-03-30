@@ -5,8 +5,11 @@ import { FormEvent, startTransition, useEffect, useState, useTransition } from '
 import { usePathname, useRouter } from 'next/navigation';
 import { getRepositoryViewMeta } from '@/lib/repository-view-meta';
 import {
+  applyRepositoryViewQuery,
   buildRepositoryListSearchParams,
+  getActiveRepositoryViewPresetKeys,
   RepositoryListQueryState,
+  stripActiveRepositoryViewPresetFilters,
 } from '@/lib/types/repository';
 import { COMMON_CATEGORY_SUGGESTIONS } from '@/lib/repository-category-suggestions';
 
@@ -24,7 +27,7 @@ const PRIMARY_FILTER_KEYS = [
 type ActiveFilterChip = {
   key: string;
   label: string;
-  hidden?: boolean;
+  scope: 'view' | 'manual';
 };
 
 export function RepositoryFilters({ query }: RepositoryFiltersProps) {
@@ -32,11 +35,15 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
   const router = useRouter();
   const [isPending] = useTransition();
   const [categoryDraft, setCategoryDraft] = useState(query.finalCategory ?? '');
-  const advancedFilterCount = countAdvancedFilters(query);
+  const activeViewPresetKeys = new Set(getActiveRepositoryViewPresetKeys(query));
+  const advancedFilterCount = countAdvancedFilters(query, activeViewPresetKeys);
   const showAdvancedByDefault = advancedFilterCount > 0;
-  const activeFilterChips = buildActiveFilterChips(query);
-  const hiddenActiveFilterCount = activeFilterChips.filter(
-    (chip) => chip.hidden,
+  const activeFilterChips = buildActiveFilterChips(query, activeViewPresetKeys);
+  const viewPresetChips = activeFilterChips.filter(
+    (chip) => chip.scope === 'view',
+  ).length;
+  const manualFilterChips = activeFilterChips.filter(
+    (chip) => chip.scope === 'manual',
   ).length;
 
   useEffect(() => {
@@ -62,6 +69,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
       formData.get('hasExtractedIdea') || '',
     );
     const hasGoodInsightValue = String(formData.get('hasGoodInsight') || '');
+    const hasManualInsightValue = String(formData.get('hasManualInsight') || '');
     const finalVerdictValue = String(formData.get('finalVerdict') || '');
     const finalCategoryValue = String(formData.get('finalCategory') || '').trim();
     const moneyPriorityValue = String(formData.get('moneyPriority') || '');
@@ -71,7 +79,6 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
     const hasTrainingHintsValue = String(formData.get('hasTrainingHints') || '');
     const recommendedActionValue = String(formData.get('recommendedAction') || '');
     const keepImplicitViewFilters = shouldKeepImplicitViewFilters(query.view);
-
     const search = buildRepositoryListSearchParams({
       page: 1,
       pageSize,
@@ -110,7 +117,10 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
         hasGoodInsightValue === ''
           ? undefined
           : hasGoodInsightValue === 'true',
-      hasManualInsight: undefined,
+      hasManualInsight:
+        hasManualInsightValue === ''
+          ? undefined
+          : hasManualInsightValue === 'true',
       finalVerdict:
         finalVerdictValue === ''
           ? undefined
@@ -162,17 +172,35 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
     });
   }
 
-  function handleClearHiddenFilters() {
+  function handleKeepOnlyCurrentView() {
+    const search = buildRepositoryListSearchParams(
+      applyRepositoryViewQuery(
+        {
+          page: 1,
+          pageSize: query.pageSize,
+          view: query.view,
+          displayMode: query.displayMode,
+          sortBy: 'moneyPriority',
+          order: 'desc',
+        },
+        query.view,
+      ),
+    );
+
+    startTransition(() => {
+      router.push(search ? `${pathname}?${search}` : pathname);
+    });
+  }
+
+  function handleSwitchToManualFilters() {
     const search = buildRepositoryListSearchParams({
-      ...query,
-      page: 1,
-      view:
-        query.view === 'newRadar' || query.view === 'backfilledPromising'
-          ? 'all'
-          : query.view,
-      hasPromisingIdeaSnapshot: undefined,
-      hasManualInsight: undefined,
-      createdAfterDays: undefined,
+      ...applyRepositoryViewQuery(
+        stripActiveRepositoryViewPresetFilters({
+          ...query,
+          page: 1,
+        }),
+        'all',
+      ),
     });
 
     startTransition(() => {
@@ -223,21 +251,31 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
             <div>
               <p className="text-sm font-semibold text-slate-950">当前生效条件</p>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                {hiddenActiveFilterCount > 0
-                  ? `有 ${hiddenActiveFilterCount} 项条件不会在表单里直接显示，但会继续影响结果。`
-                  : '下面这些条件都会直接影响当前结果。'}
+                {viewPresetChips > 0
+                  ? `当前视角自带 ${viewPresetChips} 项条件；你另外手动加了 ${manualFilterChips} 项。切换视角时只会替换“视角自带条件”。`
+                  : '当前这些条件都来自你手动添加的筛选。'}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              {hiddenActiveFilterCount > 0 ? (
+              {viewPresetChips > 0 ? (
                 <button
                   type="button"
-                  onClick={handleClearHiddenFilters}
+                  onClick={handleSwitchToManualFilters}
                   disabled={isPending}
                   className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  移除隐藏条件
+                  切到纯手动筛选
+                </button>
+              ) : null}
+              {manualFilterChips > 0 ? (
+                <button
+                  type="button"
+                  onClick={handleKeepOnlyCurrentView}
+                  disabled={isPending}
+                  className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  只保留当前视角条件
                 </button>
               ) : null}
               <button
@@ -251,20 +289,50 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            {activeFilterChips.map((chip) => (
-              <span
-                key={chip.key}
-                className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${
-                  chip.hidden
-                    ? 'border-amber-200 bg-amber-50 text-amber-800'
-                    : 'border-slate-200 bg-slate-50 text-slate-700'
-                }`}
-              >
-                {chip.hidden ? '隐藏条件 · ' : ''}
-                {chip.label}
-              </span>
-            ))}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                视角自带条件
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {activeFilterChips
+                  .filter((chip) => chip.scope === 'view')
+                  .map((chip) => (
+                    <span
+                      key={chip.key}
+                      className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800"
+                    >
+                      {chip.label}
+                    </span>
+                  ))}
+                {viewPresetChips === 0 ? (
+                  <span className="text-sm text-slate-500">当前没有视角预设。</span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                你手动加的条件
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {activeFilterChips
+                  .filter((chip) => chip.scope === 'manual')
+                  .map((chip) => (
+                    <span
+                      key={chip.key}
+                      className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+                    >
+                      {chip.label}
+                    </span>
+                  ))}
+                {manualFilterChips === 0 ? (
+                  <span className="text-sm text-slate-500">
+                    目前只在使用当前视角的默认条件。
+                  </span>
+                ) : null}
+              </div>
+            </div>
           </div>
         </section>
       ) : null}
@@ -482,6 +550,22 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
               </select>
             </FilterField>
 
+            <FilterField label="人工判断">
+              <select
+                name="hasManualInsight"
+                defaultValue={
+                  typeof query.hasManualInsight === 'boolean'
+                    ? String(query.hasManualInsight)
+                    : ''
+                }
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+              >
+                <option value="">全部</option>
+                <option value="true">只看我判断过的</option>
+                <option value="false">排除人工判断</option>
+              </select>
+            </FilterField>
+
             <FilterField label="最终分类">
               <>
                 <input
@@ -658,13 +742,20 @@ function FilterField({
   );
 }
 
-function countAdvancedFilters(query: RepositoryListQueryState) {
+function countAdvancedFilters(
+  query: RepositoryListQueryState,
+  activeViewPresetKeys: Set<keyof RepositoryListQueryState>,
+) {
   return Object.entries(query).reduce((count, [key, value]) => {
     if (PRIMARY_FILTER_KEYS.includes(key as (typeof PRIMARY_FILTER_KEYS)[number])) {
       return count;
     }
 
     if (key === 'page' || key === 'view' || key === 'displayMode') {
+      return count;
+    }
+
+    if (activeViewPresetKeys.has(key as keyof RepositoryListQueryState)) {
       return count;
     }
 
@@ -690,6 +781,7 @@ function countAdvancedFilters(query: RepositoryListQueryState) {
 
 function buildActiveFilterChips(
   query: RepositoryListQueryState,
+  activeViewPresetKeys: Set<keyof RepositoryListQueryState>,
 ): ActiveFilterChip[] {
   const chips: ActiveFilterChip[] = [];
 
@@ -697,6 +789,7 @@ function buildActiveFilterChips(
     chips.push({
       key: `view:${query.view}`,
       label: `当前视角 · ${getRepositoryViewMeta(query.view).label}`,
+      scope: 'view',
     });
   }
 
@@ -704,6 +797,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'keyword',
       label: `搜索 · ${query.keyword}`,
+      scope: 'manual',
     });
   }
 
@@ -711,6 +805,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'finalVerdict',
       label: `最终结论 · ${formatFinalVerdict(query.finalVerdict)}`,
+      scope: activeViewPresetKeys.has('finalVerdict') ? 'view' : 'manual',
     });
   }
 
@@ -718,6 +813,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'recommendedAction',
       label: `建议动作 · ${formatRecommendedAction(query.recommendedAction)}`,
+      scope: 'manual',
     });
   }
 
@@ -725,6 +821,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'moneyPriority',
       label: `挣钱优先级 · ${query.moneyPriority}`,
+      scope: 'manual',
     });
   }
 
@@ -732,6 +829,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'language',
       label: `语言 · ${query.language}`,
+      scope: 'manual',
     });
   }
 
@@ -739,6 +837,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'opportunityLevel',
       label: `创业等级 · ${formatOpportunityLevel(query.opportunityLevel)}`,
+      scope: activeViewPresetKeys.has('opportunityLevel') ? 'view' : 'manual',
     });
   }
 
@@ -746,6 +845,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'isFavorited',
       label: `收藏 · ${query.isFavorited ? '仅已收藏' : '仅未收藏'}`,
+      scope: activeViewPresetKeys.has('isFavorited') ? 'view' : 'manual',
     });
   }
 
@@ -753,6 +853,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'roughPass',
       label: `粗筛结果 · ${query.roughPass ? '仅已通过' : '仅未通过'}`,
+      scope: 'manual',
     });
   }
 
@@ -760,6 +861,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasCompletenessAnalysis',
       label: `完整性分析 · ${query.hasCompletenessAnalysis ? '已完成' : '未完成'}`,
+      scope: 'manual',
     });
   }
 
@@ -767,6 +869,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasIdeaFitAnalysis',
       label: `Idea Fit · ${query.hasIdeaFitAnalysis ? '已完成' : '未完成'}`,
+      scope: activeViewPresetKeys.has('hasIdeaFitAnalysis') ? 'view' : 'manual',
     });
   }
 
@@ -774,6 +877,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasExtractedIdea',
       label: `点子提取 · ${query.hasExtractedIdea ? '已完成' : '未完成'}`,
+      scope: activeViewPresetKeys.has('hasExtractedIdea') ? 'view' : 'manual',
     });
   }
 
@@ -781,7 +885,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasPromisingIdeaSnapshot',
       label: `候选快照 · ${query.hasPromisingIdeaSnapshot ? '仅保留 promising' : '排除 promising'}`,
-      hidden: true,
+      scope: 'view',
     });
   }
 
@@ -789,6 +893,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasGoodInsight',
       label: `好点子结论 · ${query.hasGoodInsight ? '只看好点子' : '排除好点子'}`,
+      scope: activeViewPresetKeys.has('hasGoodInsight') ? 'view' : 'manual',
     });
   }
 
@@ -796,7 +901,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasManualInsight',
       label: `人工判断 · ${query.hasManualInsight ? '只看我判断过的' : '排除人工判断'}`,
-      hidden: true,
+      scope: 'manual',
     });
   }
 
@@ -804,6 +909,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'finalCategory',
       label: `最终分类 · ${query.finalCategory}`,
+      scope: 'manual',
     });
   }
 
@@ -811,6 +917,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'decisionSource',
       label: `判断来源 · ${formatDecisionSource(query.decisionSource)}`,
+      scope: 'manual',
     });
   }
 
@@ -818,6 +925,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasConflict',
       label: `冲突状态 · ${query.hasConflict ? '只看有冲突' : '只看无冲突'}`,
+      scope: 'manual',
     });
   }
 
@@ -825,6 +933,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'needsRecheck',
       label: `复查状态 · ${query.needsRecheck ? '只看待复查' : '只看已收敛'}`,
+      scope: 'manual',
     });
   }
 
@@ -832,6 +941,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'hasTrainingHints',
       label: `训练提示 · ${query.hasTrainingHints ? '只看可教学样本' : '排除训练提示'}`,
+      scope: 'manual',
     });
   }
 
@@ -839,7 +949,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'createdAfterDays',
       label: `创建时间 · 最近 ${query.createdAfterDays} 天`,
-      hidden: true,
+      scope: activeViewPresetKeys.has('createdAfterDays') ? 'view' : 'manual',
     });
   }
 
@@ -847,6 +957,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'minStars',
       label: `Stars ≥ ${query.minStars}`,
+      scope: 'manual',
     });
   }
 
@@ -854,6 +965,7 @@ function buildActiveFilterChips(
     chips.push({
       key: 'minFinalScore',
       label: `总分 ≥ ${query.minFinalScore}`,
+      scope: 'manual',
     });
   }
 

@@ -1290,98 +1290,121 @@ export function buildRepositoryListSearchParams(
   return params.toString();
 }
 
-export function applyRepositoryViewQuery(
-  query: RepositoryListQueryState,
+function getRepositoryViewPreset(
   view: RepositoryRecommendedView,
-) {
+): Partial<RepositoryListQueryState> {
   switch (view) {
     case 'moneyFirst':
       return {
-        ...query,
         view,
-        sortBy: 'moneyPriority' as const,
-        order: 'desc' as const,
+        sortBy: 'moneyPriority',
+        order: 'desc',
       };
     case 'bestIdeas':
       return {
-        ...query,
         view,
         hasGoodInsight: true,
-        finalVerdict: 'GOOD' as const,
-        sortBy: 'insightPriority' as const,
-        order: 'desc' as const,
+        finalVerdict: 'GOOD',
+        sortBy: 'insightPriority',
+        order: 'desc',
       };
     case 'all':
       return {
-        ...query,
         view,
       };
     case 'highOpportunity':
       return {
-        ...query,
         view,
-        opportunityLevel: 'HIGH' as const,
+        opportunityLevel: 'HIGH',
       };
     case 'highOpportunityUnfavorited':
       return {
-        ...query,
         view,
-        opportunityLevel: 'HIGH' as const,
+        opportunityLevel: 'HIGH',
         isFavorited: false,
-        sortBy: 'ideaFitScore' as const,
-        order: 'desc' as const,
+        sortBy: 'ideaFitScore',
+        order: 'desc',
       };
     case 'extractedIdea':
       return {
-        ...query,
         view,
         hasExtractedIdea: true,
       };
     case 'ideaExtractionPending':
       return {
-        ...query,
         view,
         hasIdeaFitAnalysis: true,
         hasExtractedIdea: false,
-        sortBy: 'ideaFitScore' as const,
-        order: 'desc' as const,
+        sortBy: 'ideaFitScore',
+        order: 'desc',
       };
     case 'pendingAnalysis':
       return {
-        ...query,
         view,
         hasIdeaFitAnalysis: false,
       };
     case 'favoritedPendingAnalysis':
       return {
-        ...query,
         view,
         isFavorited: true,
         hasIdeaFitAnalysis: false,
       };
     case 'newRadar':
       return {
-        ...query,
         view,
         createdAfterDays: 30,
-        sortBy: 'createdAtGithub' as const,
-        order: 'desc' as const,
+        sortBy: 'createdAtGithub',
+        order: 'desc',
       };
     case 'backfilledPromising':
       return {
-        ...query,
         view,
         createdAfterDays: 365,
         hasPromisingIdeaSnapshot: true,
-        sortBy: 'createdAtGithub' as const,
-        order: 'desc' as const,
+        sortBy: 'createdAtGithub',
+        order: 'desc',
       };
     default:
       return {
-        ...query,
         view,
       };
   }
+}
+
+export function getActiveRepositoryViewPresetKeys(
+  query: RepositoryListQueryState,
+) {
+  const preset = getRepositoryViewPreset(query.view);
+
+  return (Object.entries(preset) as Array<
+    [keyof RepositoryListQueryState, RepositoryListQueryState[keyof RepositoryListQueryState]]
+  >)
+    .filter(([key, value]) => key !== 'view' && query[key] === value)
+    .map(([key]) => key);
+}
+
+export function stripActiveRepositoryViewPresetFilters(
+  query: RepositoryListQueryState,
+) {
+  const nextQuery: RepositoryListQueryState = {
+    ...query,
+  };
+
+  getActiveRepositoryViewPresetKeys(query).forEach((key) => {
+    (nextQuery as Partial<RepositoryListQueryState>)[key] = undefined;
+  });
+
+  return nextQuery;
+}
+
+export function applyRepositoryViewQuery(
+  query: RepositoryListQueryState,
+  view: RepositoryRecommendedView,
+) {
+  return {
+    ...query,
+    ...getRepositoryViewPreset(view),
+  };
 }
 
 export function normalizeFavoriteListQuery(
