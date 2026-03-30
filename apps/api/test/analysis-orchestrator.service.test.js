@@ -30,15 +30,20 @@ function createRepository(overrides = {}) {
   };
 }
 
-function createService() {
+function createService(options = {}) {
   const refreshCalls = [];
   const completenessCalls = [];
   const ideaFitCalls = [];
   const ideaExtractCalls = [];
+  let repositoryFindUniqueCount = 0;
+  let ensureMissingDeepCallCount = 0;
 
   const prisma = {
     repository: {
-      findUnique: async () => createRepository(),
+      findUnique: async () => {
+        repositoryFindUniqueCount += 1;
+        return createRepository(options.repositoryOverrides);
+      },
     },
     systemConfig: {
       findUnique: async () => null,
@@ -143,7 +148,18 @@ function createService() {
     effectiveStrength: 'STRONG',
   });
   service.recordDeepRuntimeStats = async () => {};
-  service.ensureMissingDeepAnalysisQueued = async () => {};
+  if (options.stubEnsureMissingDeep !== false) {
+    service.ensureMissingDeepAnalysisQueued = async () => {
+      ensureMissingDeepCallCount += 1;
+    };
+  } else {
+    const originalEnsureMissingDeep =
+      service.ensureMissingDeepAnalysisQueued.bind(service);
+    service.ensureMissingDeepAnalysisQueued = async (...args) => {
+      ensureMissingDeepCallCount += 1;
+      return originalEnsureMissingDeep(...args);
+    };
+  }
 
   return {
     service,
@@ -151,6 +167,8 @@ function createService() {
     completenessCalls,
     ideaFitCalls,
     ideaExtractCalls,
+    getRepositoryFindUniqueCount: () => repositoryFindUniqueCount,
+    getEnsureMissingDeepCallCount: () => ensureMissingDeepCallCount,
   };
 }
 
@@ -229,6 +247,51 @@ test('single repository orchestration defers intermediate insight refreshes to t
       recentDroppedReasons: ['weak distribution'],
     },
   });
+});
+
+test('refresh-only orchestration uses direct insight refresh path without deep backstop checks', async () => {
+  const {
+    service,
+    refreshCalls,
+    getRepositoryFindUniqueCount,
+    getEnsureMissingDeepCallCount,
+  } = createService({
+    stubEnsureMissingDeep: false,
+  });
+
+  const result = await service.runRepositoryAnalysisDirect('repo-1', {
+    runFastFilter: false,
+    runCompleteness: false,
+    runIdeaFit: false,
+    runIdeaExtract: false,
+    forceRerun: true,
+    userSuccessPatterns: ['b2b'],
+    userFailurePatterns: [],
+    preferredCategories: [],
+    avoidedCategories: [],
+    recentValidatedWins: [],
+    recentDroppedReasons: [],
+  });
+
+  assert.equal(result.repositoryId, 'repo-1');
+  assert.equal(refreshCalls.length, 1);
+  assert.deepEqual(refreshCalls[0], {
+    repositoryId: 'repo-1',
+    behaviorContext: {
+      userSuccessPatterns: ['b2b'],
+      userFailurePatterns: [],
+      preferredCategories: [],
+      avoidedCategories: [],
+      recentValidatedWins: [],
+      recentDroppedReasons: [],
+    },
+  });
+  assert.equal(getRepositoryFindUniqueCount(), 0);
+  assert.equal(getEnsureMissingDeepCallCount(), 0);
+  assert.equal(result.steps.fastFilter.status, 'skipped');
+  assert.equal(result.steps.completeness.status, 'skipped');
+  assert.equal(result.steps.ideaFit.status, 'skipped');
+  assert.equal(result.steps.ideaExtract.status, 'skipped');
 });
 
 test('batch orchestration respects concurrency caps while preserving item order', async () => {

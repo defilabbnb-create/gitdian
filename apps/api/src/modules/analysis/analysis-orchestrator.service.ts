@@ -185,18 +185,6 @@ export class AnalysisOrchestratorService {
     repositoryId: string,
     dto: RunAnalysisDto,
   ): Promise<AnalysisRunResult> {
-    const repository = await this.prisma.repository.findUnique({
-      where: { id: repositoryId },
-      include: {
-        analysis: true,
-        content: true,
-      },
-    });
-
-    if (!repository) {
-      throw new NotFoundException(`Repository with id "${repositoryId}" was not found.`);
-    }
-
     const steps: AnalysisRunSteps = {
       fastFilter: {
         status: 'skipped',
@@ -217,6 +205,42 @@ export class AnalysisOrchestratorService {
     };
 
     const insightBehaviorContext = this.buildInsightBehaviorContext(dto);
+    if (this.shouldUseInsightRefreshOnlyPath(dto)) {
+      await this.repositoryInsightService.refreshInsight(
+        repositoryId,
+        insightBehaviorContext,
+      );
+      await this.recordDeepRuntimeStats({
+        deepEnteredCount: 0,
+        deepSkippedCount: 0,
+        ideaExtractExecutedCount: 0,
+        ideaExtractSkippedCount: 0,
+        ideaExtractSkippedByStrengthCount: 0,
+        ideaExtractDeferredCount: 0,
+        ideaExtractTimeoutCount: 0,
+        lastIdeaExtractInflight:
+          this.ideaExtractService.getIdeaExtractLimiterState().inflight,
+        ideaExtractMaxInflight:
+          this.ideaExtractService.getIdeaExtractLimiterState().maxInflight,
+      });
+
+      return {
+        repositoryId,
+        steps,
+      };
+    }
+
+    const repository = await this.prisma.repository.findUnique({
+      where: { id: repositoryId },
+      include: {
+        analysis: true,
+        content: true,
+      },
+    });
+
+    if (!repository) {
+      throw new NotFoundException(`Repository with id "${repositoryId}" was not found.`);
+    }
 
     if (dto.runFastFilter) {
       steps.fastFilter = await this.executeFastFilter(repository.id);
@@ -342,6 +366,15 @@ export class AnalysisOrchestratorService {
       repositoryId: repository.id,
       steps,
     };
+  }
+
+  private shouldUseInsightRefreshOnlyPath(dto: RunAnalysisDto) {
+    return (
+      !dto.runFastFilter &&
+      !dto.runCompleteness &&
+      !dto.runIdeaFit &&
+      !dto.runIdeaExtract
+    );
   }
 
   async runBatchAnalysis(dto: BatchRunAnalysisDto) {

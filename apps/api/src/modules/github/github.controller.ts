@@ -10,6 +10,9 @@ import { RadarDailySummaryService } from './radar-daily-summary.service';
 import { GitHubService } from './github.service';
 
 type EnqueuedAnalysisJob = Awaited<ReturnType<QueueService['enqueueSingleAnalysis']>>;
+type SingleAnalysisBulkEntries = Parameters<
+  QueueService['enqueueSingleAnalysesBulk']
+>[0];
 
 @Controller('github')
 export class GitHubController {
@@ -163,30 +166,10 @@ export class GitHubController {
       };
     }
 
-    const jobs = await Promise.allSettled(
-      repositoryIds.map((repositoryId) =>
-        this.queueService.enqueueSingleAnalysis(
-          repositoryId,
-          {
-            runFastFilter: true,
-            runCompleteness: true,
-            runIdeaFit: true,
-            runIdeaExtract: true,
-            forceRerun: true,
-          },
-          'legacy_claude_review_redirect',
-          {
-            metadata: {
-              redirectedFrom: 'github/radar/claude-review/run-latest',
-              legacyClaudeEntry: true,
-              routerTaskIntent: 'review',
-              routerReasonSummary:
-                'Legacy radar Claude review endpoint now reruns the primary API analysis pipeline.',
-            },
-          },
-        ),
-      ),
+    const queueEntries = repositoryIds.map((repositoryId) =>
+      this.buildLatestClaudeReviewQueueEntry(repositoryId),
     );
+    const jobs = await this.enqueueLatestClaudeReviewJobs(queueEntries);
 
     const queuedJobs = jobs
       .filter(
@@ -254,5 +237,68 @@ export class GitHubController {
       data,
       message: 'Latest historical Claude audit fetched.',
     };
+  }
+
+  private buildLatestClaudeReviewQueueEntry(
+    repositoryId: string,
+  ): SingleAnalysisBulkEntries[number] {
+    return {
+      repositoryId,
+      dto: {
+        runFastFilter: true,
+        runCompleteness: true,
+        runIdeaFit: true,
+        runIdeaExtract: true,
+        forceRerun: true,
+      },
+      metadata: {
+        redirectedFrom: 'github/radar/claude-review/run-latest',
+        legacyClaudeEntry: true,
+        routerTaskIntent: 'review',
+        routerReasonSummary:
+          'Legacy radar Claude review endpoint now reruns the primary API analysis pipeline.',
+      },
+    };
+  }
+
+  private async enqueueLatestClaudeReviewJobs(
+    entries: SingleAnalysisBulkEntries,
+  ) {
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
+
+    if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+      try {
+        const jobs = await bulkQueueService.enqueueSingleAnalysesBulk(
+          entries,
+          'legacy_claude_review_redirect',
+        );
+        return jobs.map(
+          (value) =>
+            ({
+              status: 'fulfilled',
+              value,
+            }) satisfies PromiseFulfilledResult<EnqueuedAnalysisJob>,
+        );
+      } catch {
+        // Fall through to per-item enqueue so partial success/failure remains visible.
+      }
+    }
+
+    return Promise.allSettled(
+      entries.map((entry) =>
+        this.queueService.enqueueSingleAnalysis(
+          entry.repositoryId,
+          entry.dto,
+          entry.triggeredBy ?? 'legacy_claude_review_redirect',
+          {
+            parentJobId: entry.parentJobId,
+            metadata: entry.metadata,
+            jobOptionsOverride: entry.jobOptionsOverride,
+          },
+        ),
+      ),
+    );
   }
 }

@@ -1105,9 +1105,11 @@ export class GitHubService {
       }
     }
 
-    await Promise.all(
-      entries.map((entry) =>
-        this.queueService.enqueueSingleAnalysis(
+    await this.runWithConcurrency(
+      entries,
+      this.resolveDeepAnalysisFallbackEnqueueConcurrency(entries.length),
+      async (entry) => {
+        await this.queueService.enqueueSingleAnalysis(
           entry.repositoryId,
           entry.dto,
           entry.triggeredBy ?? triggeredBy,
@@ -1116,8 +1118,8 @@ export class GitHubService {
             metadata: entry.metadata,
             jobOptionsOverride: entry.jobOptionsOverride,
           },
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -2113,6 +2115,13 @@ export class GitHubService {
     }
 
     return parsed;
+  }
+
+  private resolveDeepAnalysisFallbackEnqueueConcurrency(entryCount: number) {
+    return Math.min(
+      entryCount,
+      this.readPositiveNumberEnv('DEEP_ANALYSIS_CONCURRENCY', 6),
+    );
   }
 
   private toTimestamp(value: Date | string | null) {

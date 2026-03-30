@@ -29,6 +29,7 @@ import {
   IDEA_MAIN_CATEGORIES,
   IdeaMainCategory,
 } from '../analysis/idea-snapshot-taxonomy';
+import { runWithConcurrency } from '../analysis/helpers/run-with-concurrency.helper';
 import { BackfillCreatedRepositoriesDto } from './dto/backfill-created-repositories.dto';
 import { GitHubClient } from './github.client';
 import { RadarOperationsService } from './radar-operations.service';
@@ -1103,36 +1104,10 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `radar deep backlog bulk enqueue failed batchSize=${queueEntries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
         );
-        await Promise.all(
-          queueEntries.map((entry) =>
-            this.queueService.enqueueSingleAnalysis(
-              entry.repositoryId,
-              entry.dto,
-              entry.triggeredBy ?? 'radar',
-              {
-                parentJobId: entry.parentJobId,
-                metadata: entry.metadata,
-                jobOptionsOverride: entry.jobOptionsOverride,
-              },
-            ),
-          ),
-        );
+        await this.enqueueDeepBacklogEntriesIndividually(queueEntries, 'radar');
       }
     } else {
-      await Promise.all(
-        queueEntries.map((entry) =>
-          this.queueService.enqueueSingleAnalysis(
-            entry.repositoryId,
-            entry.dto,
-            entry.triggeredBy ?? 'radar',
-            {
-              parentJobId: entry.parentJobId,
-              metadata: entry.metadata,
-              jobOptionsOverride: entry.jobOptionsOverride,
-            },
-          ),
-        ),
-      );
+      await this.enqueueDeepBacklogEntriesIndividually(queueEntries, 'radar');
     }
 
     await this.recordSchedulerEvent('top_up_deep_analysis', {
@@ -1141,6 +1116,35 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
     });
 
     return eligibleCandidates.length;
+  }
+
+  private async enqueueDeepBacklogEntriesIndividually(
+    entries: SingleAnalysisBulkEntries,
+    triggeredBy: string,
+  ) {
+    await runWithConcurrency(
+      entries,
+      this.resolveDeepFallbackEnqueueConcurrency(entries.length),
+      async (entry) => {
+        await this.queueService.enqueueSingleAnalysis(
+          entry.repositoryId,
+          entry.dto,
+          entry.triggeredBy ?? triggeredBy,
+          {
+            parentJobId: entry.parentJobId,
+            metadata: entry.metadata,
+            jobOptionsOverride: entry.jobOptionsOverride,
+          },
+        );
+      },
+    );
+  }
+
+  private resolveDeepFallbackEnqueueConcurrency(entryCount: number) {
+    return Math.min(
+      entryCount,
+      this.readInt('DEEP_ANALYSIS_CONCURRENCY', 6),
+    );
   }
 
   private buildBackfillDtoForWindow(
