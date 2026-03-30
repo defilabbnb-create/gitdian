@@ -17,6 +17,7 @@ import {
 } from './helpers/stale-job-log-reconcile.helper';
 
 type AllowedQueueName =
+  | typeof QUEUE_NAMES.GITHUB_CREATED_BACKFILL
   | typeof QUEUE_NAMES.ANALYSIS_SINGLE
   | typeof QUEUE_NAMES.ANALYSIS_SNAPSHOT;
 
@@ -150,7 +151,11 @@ function parseArgs(argv: string[]): CliOptions {
     staleMinutes: 60,
     limit: 500,
     concurrency: 20,
-    queueNames: [QUEUE_NAMES.ANALYSIS_SINGLE, QUEUE_NAMES.ANALYSIS_SNAPSHOT],
+    queueNames: [
+      QUEUE_NAMES.GITHUB_CREATED_BACKFILL,
+      QUEUE_NAMES.ANALYSIS_SINGLE,
+      QUEUE_NAMES.ANALYSIS_SNAPSHOT,
+    ],
   };
 
   for (const rawArg of argv) {
@@ -195,6 +200,7 @@ function parseArgs(argv: string[]): CliOptions {
         .map((item) => item.trim())
         .filter(
           (item): item is AllowedQueueName =>
+            item === QUEUE_NAMES.GITHUB_CREATED_BACKFILL ||
             item === QUEUE_NAMES.ANALYSIS_SINGLE ||
             item === QUEUE_NAMES.ANALYSIS_SNAPSHOT,
         );
