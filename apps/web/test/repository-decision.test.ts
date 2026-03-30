@@ -10,6 +10,7 @@ import {
   getRepositoryHomepageDecisionReason,
   getRepositoryHomepageMonetizationAnswer,
 } from '../src/lib/repository-decision';
+import { normalizeRepositoryItem } from '../src/lib/api/normalizers';
 import { createRepositoryFixture } from './helpers/repository-fixture';
 
 test('force-degraded low-priority headline uses concrete Chinese reason instead of generic observe-pool copy', () => {
@@ -109,6 +110,7 @@ test('force-degraded headline prefers concrete snapshot subject and localizes co
   assert.match(headline, /代码片段管理 CLI 工具/);
   assert.match(headline, /市场/);
   assert.doesNotMatch(headline, /market/);
+  assert.doesNotMatch(headline, /冲突主要集中在/);
   assert.doesNotMatch(headline, /token 与成本明细/);
 });
 
@@ -226,6 +228,141 @@ test('fallback idea analysis prefers repository metadata over hallucinated gener
   assert.doesNotMatch(fallback.whyItMatters, /distribution|execution/);
 });
 
+test('fallback idea analysis prefers concrete sync users and early-stage reason over stale conflict copy', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      name: 'claude-context-sync',
+      fullName: 'acme/claude-context-sync',
+      description: 'Sync Claude Code conversations across devices.',
+      topics: ['claude-code', 'session-sync', 'cross-device-sync'],
+      stars: 4,
+      forks: 0,
+      analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh: '一个用于在设备间同步 Claude Code 会话的工具',
+          reason: '项目处于极早期阶段，先确认跨设备同步是不是高频刚需。',
+          isPromising: false,
+          nextAction: 'SKIP',
+        },
+        extractedIdeaJson: {
+          ideaSummary: '一个帮开发者在命令行里搜索歌曲并管理播放列表的 CLI 工具',
+          targetUsers: ['运营团队和需要自动化流程的小团队'],
+        },
+        insightJson: {
+          oneLinerZh: '一个帮开发者在命令行里搜索歌曲并管理播放列表的 CLI 工具',
+          verdictReason: '当前冲突主要集中在 用户、分发、收费、执行。',
+          projectReality: {
+            type: 'tool',
+            hasRealUser: false,
+            hasClearUseCase: false,
+            isDirectlyMonetizable: false,
+          },
+        },
+      },
+      analysisState: {
+        displayStatus: 'UNSAFE',
+        trustedDisplayReady: false,
+        highConfidenceReady: false,
+        fullyAnalyzed: false,
+        unsafe: true,
+        incompleteReason: 'NO_CLAUDE_REVIEW',
+        incompleteReasons: ['NO_CLAUDE_REVIEW'],
+        lightAnalysis: {
+          targetUsers: '运营团队和需要自动化流程的小团队',
+          whyItMatters:
+            '当前冲突主要集中在 user, distribution, monetization, execution',
+          nextStep: '先确认跨设备同步是否真是高频场景。',
+          source: 'snapshot',
+        },
+      },
+      finalDecision: {
+        action: 'IGNORE',
+        moneyPriority: 'P3',
+        decisionSummary: {
+          headlineZh: '一个用于在设备间同步 Claude Code 会话的工具',
+          reasonZh:
+            '项目处于极早期阶段，4 星 0 Fork，先确认跨设备同步是不是高频刚需。',
+          targetUsersZh: '跨设备使用 Claude Code 的开发者',
+        },
+      },
+    }),
+  );
+
+  const summary = getRepositoryDecisionSummary(repository);
+  const fallback = getRepositoryFallbackIdeaAnalysis(repository, summary);
+
+  assert.equal(fallback.targetUsers, '跨设备使用 Claude Code 的开发者');
+  assert.match(fallback.whyItMatters, /极早期阶段|高频刚需/);
+  assert.match(fallback.useCase, /极早期阶段|高频刚需/);
+  assert.doesNotMatch(fallback.whyItMatters, /当前冲突主要集中在/);
+});
+
+test('force-degraded headline keeps specific sports-api subject instead of generic metadata fallback', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      name: 'Corneteiro',
+      fullName: 'acme/Corneteiro',
+      description: 'Flask API for Cartola FC lineup recommendation and match analysis.',
+      topics: ['cartola', 'fantasy-football', 'flask-api', 'lineup-recommendation'],
+      analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh: '一个基于 Flask 的 Cartola FC 数据分析与阵容推荐 API',
+          reason: '已有明确体育数据分析场景，但仍要验证持续使用频率。',
+        },
+        extractedIdeaJson: {
+          ideaSummary: '一个帮团队管理密钥和环境变量的工具',
+          targetUsers: ['开发团队和平台工程团队'],
+        },
+        insightJson: {
+          oneLinerZh: '一个帮团队管理密钥和环境变量的工具',
+          verdictReason: '当前冲突主要集中在 用户、收费、执行。',
+          projectReality: {
+            type: 'api',
+            hasRealUser: false,
+            hasClearUseCase: true,
+            isDirectlyMonetizable: false,
+          },
+        },
+      },
+      analysisState: {
+        displayStatus: 'UNSAFE',
+        trustedDisplayReady: false,
+        highConfidenceReady: false,
+        fullyAnalyzed: false,
+        unsafe: true,
+        incompleteReason: 'NO_CLAUDE_REVIEW',
+        incompleteReasons: ['NO_CLAUDE_REVIEW'],
+        lightAnalysis: {
+          targetUsers: '开发团队和平台工程团队',
+          whyItMatters: '当前冲突主要集中在 user, monetization, execution',
+          nextStep: '先验证 Cartola 玩家是否会持续依赖阵容推荐。',
+          source: 'snapshot',
+        },
+      },
+      finalDecision: {
+        action: 'IGNORE',
+        moneyPriority: 'P3',
+        decisionSummary: {
+          headlineZh: '一个基于 Flask 的 Cartola FC 数据分析与阵容推荐 API',
+          reasonZh: '已有明确体育数据分析场景，但仍要验证持续使用频率。',
+          targetUsersZh: 'Cartola FC 玩家和体育数据分析用户',
+        },
+      },
+    }),
+  );
+
+  const summary = getRepositoryDecisionSummary(repository);
+  const headline = getRepositoryDecisionHeadline(repository, summary, {
+    forceDegrade: true,
+  });
+  const fallback = getRepositoryFallbackIdeaAnalysis(repository, summary);
+
+  assert.match(headline, /Cartola FC 数据分析与阵容推荐 API/);
+  assert.equal(fallback.targetUsers, 'Cartola FC 玩家和体育数据分析用户');
+  assert.match(fallback.whyItMatters, /体育数据分析场景|持续使用频率/);
+  assert.doesNotMatch(fallback.whyItMatters, /当前冲突主要集中在/);
+});
+
 test('trusted display helpers fall back to extracted idea users and monetization when final decision copy is weak', () => {
   const repository = createRepositoryFixture({
     analysis: {
@@ -330,7 +467,7 @@ test('homepage display infers concrete target users, reason, and monetization fr
   );
   assert.match(
     getRepositoryHomepageDecisionReason(repository, summary),
-    /技术成熟度(?:这几块)?证据还偏弱|技术成熟度证据偏弱|技术成熟度 证据偏弱/,
+    /技术成熟度(?:这块|这几块)?证据还偏弱|技术成熟度证据偏弱|技术成熟度 证据偏弱/,
   );
   assert.equal(
     getRepositoryDisplayMonetizationLabel(repository, summary),
@@ -340,6 +477,61 @@ test('homepage display infers concrete target users, reason, and monetization fr
     getRepositoryHomepageMonetizationAnswer(repository, summary),
     '更适合按专业版订阅、录音时长或团队席位收费。',
   );
+});
+
+test('display target users can infer product-specific users from plugin-style headlines', () => {
+  const repository = createRepositoryFixture({
+    description: 'Internal analytics tool',
+    analysis: {
+      insightJson: {
+        oneLinerZh: '一个让 Claude Code 用户分析本地会话 Token 消耗和成本的插件',
+      },
+    },
+    finalDecision: {
+      oneLinerZh: '一个让 Claude Code 用户分析本地会话 Token 消耗和成本的插件',
+      moneyDecision: {
+        targetUsersZh: '开发者和小团队',
+      },
+      decisionSummary: {
+        headlineZh: '一个让 Claude Code 用户分析本地会话 Token 消耗和成本的插件',
+        targetUsersZh: '开发者和小团队',
+      },
+    },
+  });
+  const summary = getRepositoryDecisionSummary(repository);
+
+  assert.equal(getRepositoryDisplayTargetUsersLabel(repository, summary), 'Claude Code 用户');
+});
+
+test('readme-only noise no longer hijacks degraded headline metadata hints', () => {
+  const repository = createRepositoryFixture({
+    description: 'Internal analytics tool',
+    content: {
+      readmeText:
+        'playlist song search music player terminal music cli demo content',
+    },
+    analysis: {
+      insightJson: {
+        oneLinerZh: '',
+        verdictReason: '冲突集中在 distribution',
+      },
+    },
+    finalDecision: {
+      action: 'IGNORE',
+      moneyPriority: 'P3',
+      oneLinerZh: '一个工具',
+      decisionSummary: {
+        headlineZh: '一个工具',
+        reasonZh: '冲突集中在 distribution',
+      },
+    },
+  });
+  const summary = getRepositoryDecisionSummary(repository);
+  const headline = getRepositoryDecisionHeadline(repository, summary, {
+    forceDegrade: true,
+  });
+
+  assert.doesNotMatch(headline, /歌曲|播放列表|music/i);
 });
 
 test('final-decision summary falls back to light-analysis text and inferred category labels', () => {

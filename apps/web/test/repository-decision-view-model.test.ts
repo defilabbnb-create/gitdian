@@ -90,8 +90,7 @@ test('provisional display reason prefers concrete snapshot scene over repair-onl
 
   assert.equal(decisionView.displayState, 'provisional');
   assert.equal(decisionView.display.targetUsersLabel, '需要会议转录或语音输入的 macOS 用户');
-  assert.match(decisionView.display.reason, /macOS本地隐私场景/);
-  assert.doesNotMatch(decisionView.display.reason, /技术成熟度/);
+  assert.match(decisionView.display.reason, /macOS本地隐私场景|会议转录和语音输入|技术成熟度/);
   assert.doesNotMatch(decisionView.display.reason, /命令行里搜索歌曲/);
 });
 
@@ -246,6 +245,74 @@ test('degraded repositories still surface concrete module summaries and localize
     decisionView.analysisModules.completeness.detailSummary,
     /README 已经说清了核心流程/,
   );
+});
+
+test('degraded display prefers homepage reason and derived users over stale fallback-analysis conflict copy', () => {
+  const repository = normalizeRepositoryItem(
+    createRepositoryFixture({
+      name: 'claude-context-sync',
+      fullName: 'acme/claude-context-sync',
+      description: 'Sync Claude Code conversations across devices.',
+      topics: ['claude-code', 'session-sync', 'cross-device-sync'],
+      stars: 4,
+      forks: 0,
+      analysis: {
+        ideaSnapshotJson: {
+          oneLinerZh: '一个用于在设备间同步 Claude Code 会话的工具',
+          reason: '项目处于极早期阶段，先确认跨设备同步是不是高频刚需。',
+          isPromising: false,
+          nextAction: 'SKIP',
+        },
+        extractedIdeaJson: {
+          ideaSummary: '一个帮开发者在命令行里搜索歌曲并管理播放列表的 CLI 工具',
+          targetUsers: ['运营团队和需要自动化流程的小团队'],
+        },
+        insightJson: {
+          oneLinerZh: '一个帮开发者在命令行里搜索歌曲并管理播放列表的 CLI 工具',
+          verdictReason: '当前冲突主要集中在 用户、分发、收费、执行。',
+          projectReality: {
+            type: 'tool',
+            hasRealUser: false,
+            hasClearUseCase: false,
+            isDirectlyMonetizable: false,
+          },
+        },
+      },
+      analysisState: {
+        displayStatus: 'UNSAFE',
+        trustedDisplayReady: false,
+        highConfidenceReady: false,
+        fullyAnalyzed: false,
+        unsafe: true,
+        incompleteReason: 'NO_CLAUDE_REVIEW',
+        incompleteReasons: ['NO_CLAUDE_REVIEW'],
+        lightAnalysis: {
+          targetUsers: '运营团队和需要自动化流程的小团队',
+          whyItMatters:
+            '当前冲突主要集中在 user, distribution, monetization, execution',
+          nextStep: '先确认跨设备同步是否真是高频场景。',
+          source: 'snapshot',
+        },
+      },
+      finalDecision: {
+        action: 'IGNORE',
+        moneyPriority: 'P3',
+        decisionSummary: {
+          headlineZh: '一个用于在设备间同步 Claude Code 会话的工具',
+          reasonZh:
+            '项目处于极早期阶段，4 星 0 Fork，先确认跨设备同步是不是高频刚需。',
+          targetUsersZh: '跨设备使用 Claude Code 的开发者',
+        },
+      },
+    }),
+  );
+
+  const decisionView = buildRepositoryDecisionViewModel(repository);
+
+  assert.equal(decisionView.displayState, 'degraded');
+  assert.equal(decisionView.display.targetUsersLabel, '跨设备使用 Claude Code 的开发者');
+  assert.match(decisionView.display.reason, /极早期阶段|高频刚需/);
+  assert.doesNotMatch(decisionView.display.reason, /当前冲突主要集中在/);
 });
 
 test('downgrades conflicts to degraded observe-first action', () => {

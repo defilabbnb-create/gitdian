@@ -423,6 +423,50 @@ function normalizeFallbackDisplayValue(value: string | null | undefined) {
   return normalized ? normalized : null;
 }
 
+function isGenericDecisionReason(value: string | null | undefined) {
+  return Boolean(
+    value &&
+      /^(有明确用户和付费路径|有明确付费路径|需求明确，值得优先验证)[。！]?$/u.test(
+        value,
+      ),
+  );
+}
+
+function preferMoreSpecificReason(
+  primary: string | null,
+  secondary: string | null,
+) {
+  if (!primary) {
+    return secondary;
+  }
+
+  if (!secondary) {
+    return primary;
+  }
+
+  if (isGenericDecisionReason(primary) && !isGenericDecisionReason(secondary)) {
+    return secondary;
+  }
+
+  if (secondary.includes(primary) && secondary.length > primary.length) {
+    return secondary;
+  }
+
+  return primary;
+}
+
+function isGenericDisplayTargetUsers(value: string | null | undefined) {
+  return (
+    !value ||
+    value === '独立开发者和小团队' ||
+    value === '开发者和小团队' ||
+    value === '开发者' ||
+    value === '小团队' ||
+    value === '先确认谁会持续使用它，再决定要不要继续投入。' ||
+    value === '目标用户还需要继续确认。'
+  );
+}
+
 function appendConservativeSuffix(
   base: string | null,
   suffix: string,
@@ -444,46 +488,50 @@ function buildDisplayReason(args: {
   hasFinalDecisionWithoutDeep: boolean;
   missingKeyAnalysis: boolean;
 }) {
-  if (args.displayState === 'trusted') {
-    return getRepositoryHomepageDecisionReason(
+  const homepageReason = normalizeFallbackDisplayValue(
+    getRepositoryHomepageDecisionReason(
       args.repository as RepositoryDecisionSourceTarget,
       args.summary,
-    );
+    ),
+  );
+  if (args.displayState === 'trusted') {
+    return homepageReason ?? '当前结论还不够稳定，先按保守动作处理。';
   }
 
   const fallbackReason =
     normalizeFallbackDisplayValue(args.fallbackAnalysis.whyItMatters) ??
     normalizeFallbackDisplayValue(args.fallbackAnalysis.useCase);
+  const baseReason = preferMoreSpecificReason(homepageReason, fallbackReason);
 
   if (args.fallback) {
     return appendConservativeSuffix(
-      fallbackReason,
+      baseReason,
       '当前仍是 fallback 或兜底判断，先别把它当成已经稳定的产品结论。',
     );
   }
 
   if (args.conflict) {
     return appendConservativeSuffix(
-      fallbackReason,
+      baseReason,
       '当前信号存在冲突，先按保守口径处理，等关键证据补齐后再决定。',
     );
   }
 
   if (args.hasFinalDecisionWithoutDeep) {
     return appendConservativeSuffix(
-      fallbackReason,
+      baseReason,
       '深分析还没补齐，先别把它当成已验证机会。',
     );
   }
 
   if (args.missingKeyAnalysis) {
     return appendConservativeSuffix(
-      fallbackReason,
+      baseReason,
       '关键分析还没补齐，先补分析后再决定要不要继续投入。',
     );
   }
 
-  return fallbackReason ?? '当前结论还不够稳定，先按保守动作处理。';
+  return baseReason ?? '当前结论还不够稳定，先按保守动作处理。';
 }
 
 function buildDisplayCaution(displayState: RepositoryDecisionDisplayState) {
@@ -509,15 +557,43 @@ function buildDisplayTargetUsers(args: {
   summary: RepositoryDecisionSummary;
   fallbackAnalysis: ReturnType<typeof getRepositoryFallbackIdeaAnalysis>;
 }) {
+  const displayTargetUsers = normalizeFallbackDisplayValue(
+    getRepositoryDisplayTargetUsersLabel(
+      args.repository as RepositoryDecisionSourceTarget,
+      args.summary,
+    ),
+  );
   const fallbackTargetUsers =
     normalizeFallbackDisplayValue(args.fallbackAnalysis.targetUsers) ??
     SAFE_TARGET_USERS_LABEL;
 
-  return args.displayState === 'trusted'
-    ? getRepositoryDisplayTargetUsersLabel(
-        args.repository as RepositoryDecisionSourceTarget,
-        args.summary,
-      )
+  if (
+    fallbackTargetUsers &&
+    !/^先/u.test(fallbackTargetUsers) &&
+    displayTargetUsers &&
+    fallbackTargetUsers.includes(displayTargetUsers) &&
+    fallbackTargetUsers.length > displayTargetUsers.length
+  ) {
+    return fallbackTargetUsers;
+  }
+
+  if (
+    args.displayState !== 'trusted' &&
+    /^先/u.test(fallbackTargetUsers) &&
+    isGenericDisplayTargetUsers(displayTargetUsers)
+  ) {
+    return fallbackTargetUsers;
+  }
+
+  if (
+    displayTargetUsers &&
+    !isGenericDisplayTargetUsers(displayTargetUsers)
+  ) {
+    return displayTargetUsers;
+  }
+
+  return args.displayState === 'trusted' && displayTargetUsers
+    ? displayTargetUsers
     : fallbackTargetUsers;
 }
 
