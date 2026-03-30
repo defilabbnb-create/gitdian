@@ -3,9 +3,17 @@ node_modules
 
 # build outputs
 .next
+apps/web/.next-dev
 dist
 coverage
 *.tsbuildinfo
+test-results
+tmp/
+tmp-*.js
+tmp-*.spec.js
+apps/api/apps/
+apps/api/reports/
+backups/
 
 # env
 .env
