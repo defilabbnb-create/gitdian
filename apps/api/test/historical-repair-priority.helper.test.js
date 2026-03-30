@@ -182,6 +182,41 @@ test('detail-only stale-watch conflicts with missing gaps still prefer evidence 
   assert.equal(item.historicalRepairAction, 'evidence_repair');
 });
 
+test('detail-only stale-watch deep-missing final decisions prefer downgrade only', () => {
+  const item = priorityItem({
+    isVisibleOnHome: false,
+    isVisibleOnFavorites: false,
+    appearedInDailySummary: false,
+    appearedInTelegram: false,
+    hasDetailPageExposure: true,
+    hasDeep: false,
+    incompleteFlag: true,
+    missingReasons: ['NO_DEEP_ANALYSIS'],
+    displayStatus: 'UNSAFE',
+    moneyPriority: 'P2',
+    repositoryValueTier: 'MEDIUM',
+    collectionTier: 'WATCH',
+    keyEvidenceMissingCount: 4,
+    evidenceMissingDimensions: [
+      'distribution',
+      'execution',
+      'market',
+      'technical_maturity',
+    ],
+    evidenceWeakCount: 0,
+    keyEvidenceWeakCount: 0,
+    evidenceWeakDimensions: [],
+    qualityReasonSummary: 'detail-only watch final decision lacks deep coverage and should downgrade first',
+  });
+
+  assert.equal(item.historicalRepairBucket, 'stale_watch');
+  assert.equal(item.strictVisibilityLevel, 'DETAIL_ONLY');
+  assert.equal(item.hasFinalDecision, true);
+  assert.equal(item.hasDeep, false);
+  assert.equal(item.needsFrontendDowngrade, true);
+  assert.equal(item.historicalRepairAction, 'downgrade_only');
+});
+
 test('high value weak repo prefers evidence or deep repair instead of archive', () => {
   const evidenceRepair = priorityItem({
     moneyPriority: 'P0',
