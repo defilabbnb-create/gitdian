@@ -156,7 +156,7 @@ async function main() {
   const changedActionCounts: Record<string, number> = {};
 
   try {
-    while (true) {
+    for (;;) {
       if (options.limit && processed >= options.limit) {
         break;
       }

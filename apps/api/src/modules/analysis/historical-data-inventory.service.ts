@@ -320,7 +320,7 @@ export class HistoricalDataInventoryService {
     const repositories: InventoryRepositoryRecord[] = [];
     let cursorId: string | null = null;
 
-    while (true) {
+    for (;;) {
       const remaining =
         typeof limit === 'number' && limit > 0 ? limit - repositories.length : null;
       if (remaining !== null && remaining <= 0) {

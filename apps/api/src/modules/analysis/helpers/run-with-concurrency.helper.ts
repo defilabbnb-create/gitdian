@@ -12,7 +12,7 @@ export async function runWithConcurrency<T, TResult>(
   let nextIndex = 0;
 
   const worker = async () => {
-    while (true) {
+    for (;;) {
       const currentIndex = nextIndex;
       if (currentIndex >= items.length) {
         break;

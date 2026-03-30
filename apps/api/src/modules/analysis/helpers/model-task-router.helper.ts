@@ -1,22 +1,10 @@
 import {
-  type ModelRouterCostSensitivity,
-  type ModelRouterDecisionBasis,
-  type ModelRouterVisibilityLevel,
   type ModelTaskCapabilityTier,
   type ModelTaskCapabilityTierName,
-  type ModelTaskComplexity,
-  type ModelTaskCostClass,
-  type ModelTaskCriticality,
-  type ModelTaskDeterminismNeed,
-  type ModelTaskEvidenceDependency,
-  type ModelTaskFailureEscalation,
-  type ModelTaskFallbackPolicy,
   type ModelTaskIntent,
-  type ModelTaskLatencyClass,
   type ModelTaskRouterNormalizationInput,
   type ModelTaskRouterObservedSource,
   type ModelTaskRouterTaskDefinition,
-  type ModelTaskUserVisibility,
   type NormalizedModelTaskType,
 } from './model-task-router.types';
 

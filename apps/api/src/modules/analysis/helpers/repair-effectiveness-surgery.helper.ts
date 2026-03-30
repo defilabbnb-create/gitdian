@@ -1,6 +1,5 @@
 import type {
   AnalysisOutcomeAfterContext,
-  AnalysisOutcomeLog,
 } from './analysis-outcome.types';
 import {
   buildDecisionRecalcFingerprint as buildGateDecisionRecalcFingerprint,
@@ -80,10 +79,9 @@ export function resolveHistoricalAfterItem(args: {
     beforeAction,
     afterAction: normalizeNullableString(fallback?.historicalRepairAction),
     resolutionType: fallback ? 'repo_fallback' : 'missing',
-    actionChanged: Boolean(
-      fallback &&
-        normalizeNullableString(fallback.historicalRepairAction) !== beforeAction,
-    ),
+    actionChanged:
+      fallback !== null &&
+      normalizeNullableString(fallback.historicalRepairAction) !== beforeAction,
     afterItem: fallback,
   };
 }
@@ -150,8 +148,8 @@ export function buildAfterContextFromPriorityItem(
       | null,
     trustedEligibilityAfter:
       item.frontendDecisionState === 'trusted' &&
-      Boolean(item.trustedFlowEligible) &&
-      !Boolean(item.cleanupBlocksTrusted),
+      item.trustedFlowEligible &&
+      !item.cleanupBlocksTrusted,
     keyEvidenceGapsAfter: normalizeStringArray(item.keyEvidenceGaps),
     trustedBlockingGapsAfter: normalizeStringArray(item.trustedBlockingGaps),
     evidenceCoverageRateAfter: clampRate(item.evidenceCoverageRate),

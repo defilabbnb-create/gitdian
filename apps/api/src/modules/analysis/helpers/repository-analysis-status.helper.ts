@@ -203,7 +203,6 @@ export function deriveRepositoryAnalysisState(
     weakDimensions: evidenceWeakDimensions,
     conflictDimensions: evidenceConflictDimensions,
   });
-  const keyEvidenceGaps = normalizeEvidenceGapTaxonomy(input.keyEvidenceGaps);
   const conflictDrivenGaps = normalizeEvidenceGapTaxonomy(
     input.conflictDrivenGaps,
   );
@@ -843,10 +842,6 @@ function resolveLightCaution(
   }
 
   return null;
-}
-
-function isWeakHeadline(value: AnalysisStatusInput['oneLinerStrength']) {
-  return value === 'WEAK';
 }
 
 function normalizeEvidenceCoverageRate(value: unknown) {

@@ -910,10 +910,6 @@ function roundScore(value: number) {
   return Number(value.toFixed(2));
 }
 
-function clampScore(value: number) {
-  return Math.max(0, Math.min(100, roundScore(value)));
-}
-
 function takeUnique(values: string[]) {
   return Array.from(
     new Set(

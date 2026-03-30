@@ -292,7 +292,7 @@ export class CalibrationSeedBatchService {
       routerDecision.fallbackPolicy === 'LIGHT_DERIVATION' ||
       routerDecision.fallbackPolicy === 'DETERMINISTIC_ONLY' ||
       routerDecision.fallbackPolicy === 'DOWNGRADE_ONLY';
-    let executionUsedReview = routerDecision.requiresReview;
+    const executionUsedReview = routerDecision.requiresReview;
 
     if (item.cleanupState !== 'active') {
       return {

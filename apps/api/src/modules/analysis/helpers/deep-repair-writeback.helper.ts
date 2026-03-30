@@ -8,10 +8,8 @@ import type {
   AnalysisOutcomeBeforeContext,
 } from './analysis-outcome.types';
 import {
-  buildAfterContextFromPriorityItem,
   diffAfterContexts,
 } from './repair-effectiveness-surgery.helper';
-import type { HistoricalRepairPriorityItem } from './historical-repair-priority.helper';
 import type {
   DeepRepairAfterStateResolution,
   DeepRepairAfterStateSource,

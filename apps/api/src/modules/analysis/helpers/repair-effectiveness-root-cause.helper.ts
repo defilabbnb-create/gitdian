@@ -1,6 +1,5 @@
 import {
   ANALYSIS_OUTCOME_STATUSES,
-  type ANALYSIS_OUTCOME_ACTIONS,
 } from './analysis-outcome.helper';
 import type {
   AnalysisOutcomeActionKey,
@@ -146,15 +145,6 @@ const DEEP_MISSING_GAPS: KeyEvidenceGapTaxonomy[] = [
   'execution_missing',
   'market_missing',
   'distribution_missing',
-];
-const WEAK_ONLY_GAPS: KeyEvidenceGapTaxonomy[] = [
-  'distribution_weak',
-  'market_weak',
-  'execution_weak',
-  'technical_maturity_weak',
-  'problem_weak',
-  'user_weak',
-  'monetization_weak',
 ];
 const FOCUSED_OUTCOME_STATUSES: AnalysisOutcomeStatus[] = [
   'partial',

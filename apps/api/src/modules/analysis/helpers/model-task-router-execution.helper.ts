@@ -6,7 +6,6 @@ import type {
   ModelTaskFallbackPolicy,
   ModelTaskRouterCapabilityBreakdown,
   ModelTaskRouterDecisionOutput,
-  ModelTaskRouterExecutionMetadata,
   ModelTaskRouterFallbackBreakdown,
   NormalizedModelTaskType,
 } from './model-task-router.types';

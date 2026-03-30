@@ -2,7 +2,6 @@ import {
   type HistoricalRepairBucket,
   type HistoricalRepairBucketedItem,
   type HistoricalRepairBucketingReport,
-  type HistoricalRepairDowngradeSeverity,
   type HistoricalRepairRecommendedAction,
   type HistoricalRepairVisibilityLevel,
 } from './historical-repair-bucketing.helper';
