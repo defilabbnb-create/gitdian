@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FrozenAnalysisPoolService } from '../modules/analysis/frozen-analysis-pool.service';
+import { runWithConcurrency } from '../modules/analysis/helpers/run-with-concurrency.helper';
 import { QueueService } from '../modules/queue/queue.service';
 
 type CliOptions = {
@@ -344,6 +345,24 @@ type EnqueueCandidate = {
 
 type EnqueueSummary = LegacyLocalAnalysisReport['enqueueResult'];
 type FrozenPoolPromotionSummary = LegacyLocalAnalysisReport['frozenPoolPromotion'];
+type EnqueueCandidateResult =
+  | {
+      status: 'queued';
+      item: EnqueueCandidate;
+    }
+  | {
+      status: 'retry_after_frozen_promotion';
+      item: EnqueueCandidate;
+    }
+  | {
+      status: 'skipped';
+      item: EnqueueCandidate;
+      reason: string;
+    };
+
+const LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY_ENV_NAME =
+  'LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY';
+const LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY_FALLBACK = 8;
 
 function createEnqueueSummary(): EnqueueSummary {
   return {
@@ -352,6 +371,30 @@ function createEnqueueSummary(): EnqueueSummary {
     queuedByPriority: {},
     skippedByReason: {},
   };
+}
+
+function resolveLegacyLocalAnalysisEnqueueConcurrency(candidateCount: number) {
+  return Math.min(
+    candidateCount,
+    Math.max(
+      1,
+      parsePositiveInt(
+        process.env[LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY_ENV_NAME],
+        LEGACY_LOCAL_ANALYSIS_ENQUEUE_CONCURRENCY_FALLBACK,
+      ),
+    ),
+  );
+}
+
+function recordQueuedCandidate(summary: EnqueueSummary, item: EnqueueCandidate) {
+  summary.queuedCount += 1;
+  summary.queuedByPriority[item.moneyPriority] =
+    (summary.queuedByPriority[item.moneyPriority] ?? 0) + 1;
+}
+
+function recordSkippedCandidate(summary: EnqueueSummary, reason: string) {
+  summary.skippedCount += 1;
+  summary.skippedByReason[reason] = (summary.skippedByReason[reason] ?? 0) + 1;
 }
 
 function mergeFrozenPoolPromotion(
@@ -498,47 +541,70 @@ async function enqueueCandidates(args: {
   const retryAfterFrozenPromotion: EnqueueCandidate[] = [];
   let frozenPoolPromotion = args.frozenPoolPromotion;
 
-  for (const item of args.candidates) {
-    try {
-      await args.queueService.enqueueSingleAnalysis(
-        item.repoId,
-        {
-          runFastFilter: true,
-          runCompleteness: true,
-          runIdeaFit: true,
-          runIdeaExtract: true,
-          forceRerun: true,
-        },
-        args.remediationMode,
-        {
-          metadata: {
-            remediationMode: args.remediationMode,
-            previousProvider: item.provider,
-            previousModel: item.modelName,
-            remediationReason: item.remediationReason,
-            ...(item.extraMetadata ?? {}),
+  const firstPassResults = await runWithConcurrency(
+    args.candidates,
+    resolveLegacyLocalAnalysisEnqueueConcurrency(args.candidates.length),
+    async (item): Promise<EnqueueCandidateResult> => {
+      try {
+        await args.queueService.enqueueSingleAnalysis(
+          item.repoId,
+          {
+            runFastFilter: true,
+            runCompleteness: true,
+            runIdeaFit: true,
+            runIdeaExtract: true,
+            forceRerun: true,
           },
-          jobOptionsOverride: {
-            priority: toQueuePriority(item.moneyPriority),
+          args.remediationMode,
+          {
+            metadata: {
+              remediationMode: args.remediationMode,
+              previousProvider: item.provider,
+              previousModel: item.modelName,
+              remediationReason: item.remediationReason,
+              ...(item.extraMetadata ?? {}),
+            },
+            jobOptionsOverride: {
+              priority: toQueuePriority(item.moneyPriority),
+            },
           },
-        },
-      );
-      args.enqueueResult.queuedCount += 1;
-      args.enqueueResult.queuedByPriority[item.moneyPriority] =
-        (args.enqueueResult.queuedByPriority[item.moneyPriority] ?? 0) + 1;
-    } catch (error) {
-      const reason =
-        error instanceof Error ? error.message : 'queue_enqueue_failed';
+        );
+        return {
+          status: 'queued',
+          item,
+        };
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : 'queue_enqueue_failed';
 
-      if (reason.includes('analysis_pool_frozen_non_member:analysis_single')) {
-        retryAfterFrozenPromotion.push(item);
-        continue;
+        if (reason.includes('analysis_pool_frozen_non_member:analysis_single')) {
+          return {
+            status: 'retry_after_frozen_promotion',
+            item,
+          };
+        }
+
+        return {
+          status: 'skipped',
+          item,
+          reason,
+        };
       }
+    },
+  );
 
-      args.enqueueResult.skippedCount += 1;
-      args.enqueueResult.skippedByReason[reason] =
-        (args.enqueueResult.skippedByReason[reason] ?? 0) + 1;
+  for (const result of firstPassResults) {
+    if (result.status === 'queued') {
+      recordQueuedCandidate(args.enqueueResult, result.item);
+      continue;
     }
+
+    if (result.status === 'retry_after_frozen_promotion') {
+      retryAfterFrozenPromotion.push(result.item);
+      continue;
+    }
+
+    recordSkippedCandidate(args.enqueueResult, result.reason);
   }
 
   if (!retryAfterFrozenPromotion.length) {
@@ -557,42 +623,59 @@ async function enqueueCandidates(args: {
     buildFrozenPoolPromotionSummary(promotionResult),
   );
 
-  for (const item of retryAfterFrozenPromotion) {
-    try {
-      await args.queueService.enqueueSingleAnalysis(
-        item.repoId,
-        {
-          runFastFilter: true,
-          runCompleteness: true,
-          runIdeaFit: true,
-          runIdeaExtract: true,
-          forceRerun: true,
-        },
-        args.remediationMode,
-        {
-          metadata: {
-            remediationMode: args.remediationMode,
-            previousProvider: item.provider,
-            previousModel: item.modelName,
-            remediationReason: item.remediationReason,
-            frozenPoolPromotionApplied: true,
-            ...(item.extraMetadata ?? {}),
+  const retryResults = await runWithConcurrency(
+    retryAfterFrozenPromotion,
+    resolveLegacyLocalAnalysisEnqueueConcurrency(
+      retryAfterFrozenPromotion.length,
+    ),
+    async (item): Promise<EnqueueCandidateResult> => {
+      try {
+        await args.queueService.enqueueSingleAnalysis(
+          item.repoId,
+          {
+            runFastFilter: true,
+            runCompleteness: true,
+            runIdeaFit: true,
+            runIdeaExtract: true,
+            forceRerun: true,
           },
-          jobOptionsOverride: {
-            priority: toQueuePriority(item.moneyPriority),
+          args.remediationMode,
+          {
+            metadata: {
+              remediationMode: args.remediationMode,
+              previousProvider: item.provider,
+              previousModel: item.modelName,
+              remediationReason: item.remediationReason,
+              frozenPoolPromotionApplied: true,
+              ...(item.extraMetadata ?? {}),
+            },
+            jobOptionsOverride: {
+              priority: toQueuePriority(item.moneyPriority),
+            },
           },
-        },
-      );
-      args.enqueueResult.queuedCount += 1;
-      args.enqueueResult.queuedByPriority[item.moneyPriority] =
-        (args.enqueueResult.queuedByPriority[item.moneyPriority] ?? 0) + 1;
-    } catch (error) {
-      args.enqueueResult.skippedCount += 1;
-      const reason =
-        error instanceof Error ? error.message : 'queue_enqueue_failed';
-      args.enqueueResult.skippedByReason[reason] =
-        (args.enqueueResult.skippedByReason[reason] ?? 0) + 1;
+        );
+        return {
+          status: 'queued',
+          item,
+        };
+      } catch (error) {
+        return {
+          status: 'skipped',
+          item,
+          reason:
+            error instanceof Error ? error.message : 'queue_enqueue_failed',
+        };
+      }
+    },
+  );
+
+  for (const result of retryResults) {
+    if (result.status === 'queued') {
+      recordQueuedCandidate(args.enqueueResult, result.item);
+      continue;
     }
+
+    recordSkippedCandidate(args.enqueueResult, result.reason);
   }
 
   return {

@@ -313,19 +313,21 @@ test('runRecovery supports dry-run and limit without executing heavy stages', as
   assert.equal(savedValue.selectedCount, 2);
 });
 
-test('rerunDeepAnalysis enqueues missing deep work instead of running it inline', async () => {
+test('rerunDeepAnalysis enqueues missing deep work in bulk when available', async () => {
+  const bulkCalls = [];
   const queueCalls = [];
   const service = new HistoricalDataRecoveryService(
     {
       repository: {
-        findUnique: async () => ({
-          id: 'repo-1',
-          analysis: {
-            completenessJson: null,
-            ideaFitJson: null,
-            extractedIdeaJson: null,
-          },
-        }),
+        findMany: async ({ where }) =>
+          (where?.id?.in ?? []).map((id) => ({
+            id,
+            analysis: {
+              completenessJson: null,
+              ideaFitJson: null,
+              extractedIdeaJson: null,
+            },
+          })),
       },
     },
     {},
@@ -336,6 +338,15 @@ test('rerunDeepAnalysis enqueues missing deep work instead of running it inline'
       prioritizeRecoveryAssessments: async (items) => items,
     },
     {
+      enqueueSingleAnalysesBulk: async (entries, triggeredBy) => {
+        bulkCalls.push({ entries, triggeredBy });
+        return entries.map((_entry, index) => ({
+          jobId: `job-${index + 1}`,
+          queueName: 'analysis.single',
+          queueJobId: `queue-job-${index + 1}`,
+          jobStatus: 'PENDING',
+        }));
+      },
       enqueueSingleAnalysis: async (repositoryId, dto, triggeredBy, options) => {
         queueCalls.push({ repositoryId, dto, triggeredBy, options });
       },
@@ -351,14 +362,74 @@ test('rerunDeepAnalysis enqueues missing deep work instead of running it inline'
   const count = await service.rerunDeepAnalysis(['repo-1']);
 
   assert.equal(count, 1);
-  assert.equal(queueCalls.length, 1);
+  assert.equal(bulkCalls.length, 1);
+  assert.equal(queueCalls.length, 0);
+  assert.equal(bulkCalls[0].triggeredBy, 'health_recovery');
+  assert.equal(bulkCalls[0].entries.length, 1);
+  assert.equal(bulkCalls[0].entries[0].repositoryId, 'repo-1');
+  assert.equal(bulkCalls[0].entries[0].dto.runCompleteness, true);
+  assert.equal(bulkCalls[0].entries[0].dto.runIdeaFit, true);
+  assert.equal(bulkCalls[0].entries[0].dto.runIdeaExtract, true);
+  assert.equal(
+    bulkCalls[0].entries[0].jobOptionsOverride.priority,
+    service.toSingleAnalysisQueuePriority('deep_repair', 160, 'P0'),
+  );
+});
+
+test('queueClaudeReview falls back to single enqueue when bulk enqueue fails', async () => {
+  const bulkCalls = [];
+  const queueCalls = [];
+  const logs = [];
+  const service = new HistoricalDataRecoveryService(
+    {},
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueSingleAnalysesBulk: async (entries, triggeredBy) => {
+        bulkCalls.push({ entries, triggeredBy });
+        throw new Error('bulk failed');
+      },
+      enqueueSingleAnalysis: async (repositoryId, dto, triggeredBy, options) => {
+        queueCalls.push({ repositoryId, dto, triggeredBy, options });
+      },
+    },
+    {
+      runPriorityReport: async () => ({
+        summary: {},
+        items: [],
+      }),
+    },
+  );
+
+  service.logger.warn = (message) => {
+    logs.push(message);
+  };
+
+  const count = await service.queueClaudeReview(['repo-1', 'repo-2']);
+
+  assert.equal(count, 2);
+  assert.equal(bulkCalls.length, 1);
+  assert.equal(bulkCalls[0].triggeredBy, 'legacy_claude_review_redirect');
+  assert.equal(queueCalls.length, 2);
   assert.equal(queueCalls[0].repositoryId, 'repo-1');
-  assert.equal(queueCalls[0].dto.runCompleteness, true);
-  assert.equal(queueCalls[0].dto.runIdeaFit, true);
-  assert.equal(queueCalls[0].dto.runIdeaExtract, true);
+  assert.equal(queueCalls[0].triggeredBy, 'legacy_claude_review_redirect');
+  assert.equal(queueCalls[0].dto.forceRerun, true);
+  assert.equal(queueCalls[0].options.metadata.legacyClaudeEntry, true);
   assert.equal(
     queueCalls[0].options.jobOptionsOverride.priority,
-    service.toSingleAnalysisQueuePriority('deep_repair', 160, 'P0'),
+    service.toSingleAnalysisQueuePriority('deep_repair', 150, 'P0'),
+  );
+  assert.ok(
+    logs.some((entry) =>
+      entry.includes(
+        'historical_recovery bulk single-analysis enqueue failed',
+      ),
+    ),
   );
 });
 

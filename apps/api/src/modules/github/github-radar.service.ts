@@ -38,6 +38,9 @@ import { GitHubSearchConcurrencyService } from './github-search-concurrency.serv
 
 type RadarMode = 'bootstrap' | 'live' | 'paused';
 type RadarWindowStrategy = 'fast-start' | 'steady' | 'live';
+type SingleAnalysisBulkEntries = Parameters<
+  QueueService['enqueueSingleAnalysesBulk']
+>[0];
 
 type RadarBackfillDefaults = {
   language: string | null;
@@ -1077,21 +1080,60 @@ export class GitHubRadarService implements OnModuleInit, OnModuleDestroy {
       return 0;
     }
 
-    await Promise.all(
-      eligibleCandidates.map((repository) =>
-        this.queueService.enqueueSingleAnalysis(
-          repository.id,
-          {
-            runFastFilter: !repository.roughLevel,
-            runCompleteness: true,
-            runIdeaFit: true,
-            runIdeaExtract: true,
-            forceRerun: false,
-          },
-          'radar',
-        ),
-      ),
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
+    const queueEntries: SingleAnalysisBulkEntries = eligibleCandidates.map(
+      (repository) => ({
+        repositoryId: repository.id,
+        dto: {
+          runFastFilter: !repository.roughLevel,
+          runCompleteness: true,
+          runIdeaFit: true,
+          runIdeaExtract: true,
+          forceRerun: false,
+        },
+      }),
     );
+
+    if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+      try {
+        await bulkQueueService.enqueueSingleAnalysesBulk(queueEntries, 'radar');
+      } catch (error) {
+        this.logger.warn(
+          `radar deep backlog bulk enqueue failed batchSize=${queueEntries.length} reason=${error instanceof Error ? error.message : 'unknown'} fallback=single_enqueue`,
+        );
+        await Promise.all(
+          queueEntries.map((entry) =>
+            this.queueService.enqueueSingleAnalysis(
+              entry.repositoryId,
+              entry.dto,
+              entry.triggeredBy ?? 'radar',
+              {
+                parentJobId: entry.parentJobId,
+                metadata: entry.metadata,
+                jobOptionsOverride: entry.jobOptionsOverride,
+              },
+            ),
+          ),
+        );
+      }
+    } else {
+      await Promise.all(
+        queueEntries.map((entry) =>
+          this.queueService.enqueueSingleAnalysis(
+            entry.repositoryId,
+            entry.dto,
+            entry.triggeredBy ?? 'radar',
+            {
+              parentJobId: entry.parentJobId,
+              metadata: entry.metadata,
+              jobOptionsOverride: entry.jobOptionsOverride,
+            },
+          ),
+        ),
+      );
+    }
 
     await this.recordSchedulerEvent('top_up_deep_analysis', {
       queued: eligibleCandidates.length,

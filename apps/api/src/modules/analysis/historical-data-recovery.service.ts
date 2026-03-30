@@ -143,6 +143,11 @@ type RecoverySummarySample = {
   source: string | null;
 };
 
+type SingleAnalysisBulkEntries = Parameters<
+  QueueService['enqueueSingleAnalysesBulk']
+>[0];
+type SingleAnalysisBulkEntry = SingleAnalysisBulkEntries[number];
+
 export type HistoricalRecoveryScanOptions = {
   limit?: number;
   priority?: HistoricalRecoveryPriority | null;
@@ -465,15 +470,13 @@ export class HistoricalDataRecoveryService {
   }
 
   async rerunDeepAnalysis(repositoryIds: string[]) {
-    let count = 0;
-    for (const repositoryId of repositoryIds) {
-      const repository = await this.prisma.repository.findUnique({
-        where: { id: repositoryId },
-        include: {
-          analysis: true,
-        },
-      });
+    const repositoryMap = await this.loadHistoricalRecoveryDeepAnalysisRepositoryMap(
+      repositoryIds,
+    );
+    const entries: SingleAnalysisBulkEntries = [];
 
+    for (const repositoryId of repositoryIds) {
+      const repository = repositoryMap.get(repositoryId);
       if (!repository) {
         continue;
       }
@@ -483,29 +486,28 @@ export class HistoricalDataRecoveryService {
         continue;
       }
 
-      await this.queueService.enqueueSingleAnalysis(
+      entries.push({
         repositoryId,
         dto,
-        'health_recovery',
-        {
-          metadata: {
-            recoveryMode: 'rerun_full_deep',
-            missingDeep: true,
-            repoId: repositoryId,
-          },
-          jobOptionsOverride: {
-            priority: this.toSingleAnalysisQueuePriority(
-              'deep_repair',
-              160,
-              'P0',
-            ),
-          },
+        metadata: {
+          recoveryMode: 'rerun_full_deep',
+          missingDeep: true,
+          repoId: repositoryId,
         },
-      );
-      count += 1;
+        jobOptionsOverride: {
+          priority: this.toSingleAnalysisQueuePriority(
+            'deep_repair',
+            160,
+            'P0',
+          ),
+        },
+      });
     }
 
-    return count;
+    return this.enqueueHistoricalRecoverySingleAnalysisEntries(
+      entries,
+      'health_recovery',
+    );
   }
 
   async queueClaudeReview(repositoryIds: string[]) {
@@ -513,42 +515,35 @@ export class HistoricalDataRecoveryService {
       return 0;
     }
 
-    let queuedCount = 0;
-
-    for (const repositoryId of repositoryIds) {
-      await this.queueService.enqueueSingleAnalysis(
+    return this.enqueueHistoricalRecoverySingleAnalysisEntries(
+      repositoryIds.map((repositoryId) => ({
         repositoryId,
-        {
+        dto: {
           runFastFilter: true,
           runCompleteness: true,
           runIdeaFit: true,
           runIdeaExtract: true,
           forceRerun: true,
         },
-        'legacy_claude_review_redirect',
-        {
-          metadata: {
-            recoveryMode: 'legacy_claude_redirect',
-            missingDeep: false,
-            repoId: repositoryId,
-            legacyClaudeEntry: true,
-            routerTaskIntent: 'review',
-            routerReasonSummary:
-              'Historical recovery L3 now redirects into the primary API analysis pipeline.',
-          },
-          jobOptionsOverride: {
-            priority: this.toSingleAnalysisQueuePriority(
-              'deep_repair',
-              150,
-              'P0',
-            ),
-          },
+        metadata: {
+          recoveryMode: 'legacy_claude_redirect',
+          missingDeep: false,
+          repoId: repositoryId,
+          legacyClaudeEntry: true,
+          routerTaskIntent: 'review',
+          routerReasonSummary:
+            'Historical recovery L3 now redirects into the primary API analysis pipeline.',
         },
-      );
-      queuedCount += 1;
-    }
-
-    return queuedCount;
+        jobOptionsOverride: {
+          priority: this.toSingleAnalysisQueuePriority(
+            'deep_repair',
+            150,
+            'P0',
+          ),
+        },
+      })),
+      'legacy_claude_review_redirect',
+    );
   }
 
   async exportTrainingSamples(options?: {
@@ -1305,6 +1300,117 @@ export class HistoricalDataRecoveryService {
       runIdeaExtract: !repository.analysis?.extractedIdeaJson,
       forceRerun: false,
     };
+  }
+
+  private async loadHistoricalRecoveryDeepAnalysisRepositoryMap(
+    repositoryIds: string[],
+  ) {
+    const uniqueRepositoryIds = [...new Set(repositoryIds.filter(Boolean))];
+    if (!uniqueRepositoryIds.length) {
+      return new Map<
+        string,
+        Repository & {
+          analysis: RepositoryAnalysis | null;
+        }
+      >();
+    }
+
+    const repositoryIdChunks = this.chunkItems(
+      uniqueRepositoryIds,
+      HISTORICAL_REPAIR_DEEP_LOOKUP_CHUNK_SIZE,
+    );
+    const repositoriesByChunk = await runWithConcurrency(
+      repositoryIdChunks,
+      Math.min(
+        HISTORICAL_REPAIR_DEEP_LOOKUP_CONCURRENCY,
+        repositoryIdChunks.length,
+      ),
+      (repositoryIdChunk) =>
+        this.prisma.repository.findMany({
+          where: {
+            id: {
+              in: repositoryIdChunk,
+            },
+          },
+          include: {
+            analysis: true,
+          },
+        }),
+    );
+
+    return new Map(
+      repositoriesByChunk
+        .flat()
+        .map((repository) => [repository.id, repository]),
+    );
+  }
+
+  private async enqueueHistoricalRecoverySingleAnalysisEntries(
+    entries: SingleAnalysisBulkEntries,
+    triggeredBy: string,
+  ) {
+    if (!entries.length) {
+      return 0;
+    }
+
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
+    let queuedCount = 0;
+    const entryBatches = this.chunkItems(
+      entries,
+      HISTORICAL_REPAIR_SINGLE_ANALYSIS_BULK_BATCH_SIZE,
+    );
+
+    for (const entryBatch of entryBatches) {
+      if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+        try {
+          const results = await bulkQueueService.enqueueSingleAnalysesBulk(
+            entryBatch,
+            triggeredBy,
+          );
+          queuedCount += results.length;
+          continue;
+        } catch (error) {
+          this.logger.warn(
+            `historical_recovery bulk single-analysis enqueue failed triggeredBy=${triggeredBy} batchSize=${entryBatch.length} reason=${this.readErrorMessage(error) || 'unknown'} fallback=single_enqueue`,
+          );
+        }
+      }
+
+      const fallbackResults = await runWithConcurrency(
+        entryBatch,
+        this.resolveHistoricalRecoverySingleAnalysisFallbackConcurrency(
+          entryBatch.length,
+        ),
+        async (entry) => {
+          await this.enqueueHistoricalRecoverySingleAnalysisEntry(
+            entry,
+            triggeredBy,
+          );
+          return 1;
+        },
+      );
+      queuedCount += fallbackResults.length;
+    }
+
+    return queuedCount;
+  }
+
+  private async enqueueHistoricalRecoverySingleAnalysisEntry(
+    entry: SingleAnalysisBulkEntry,
+    triggeredBy: string,
+  ) {
+    return this.queueService.enqueueSingleAnalysis(
+      entry.repositoryId,
+      entry.dto,
+      entry.triggeredBy ?? triggeredBy,
+      {
+        parentJobId: entry.parentJobId,
+        metadata: entry.metadata,
+        jobOptionsOverride: entry.jobOptionsOverride,
+      },
+    );
   }
 
   private selectRepositoryIdsByMode(
@@ -3143,6 +3249,18 @@ export class HistoricalDataRecoveryService {
     return this.readClampedConcurrency(
       HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_ENV_NAME,
       HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_FALLBACK,
+    );
+  }
+
+  private resolveHistoricalRecoverySingleAnalysisFallbackConcurrency(
+    entryCount: number,
+  ) {
+    return Math.min(
+      entryCount,
+      this.readClampedConcurrency(
+        HISTORICAL_REPAIR_LANE_CONCURRENCY.deep_repair.envName,
+        HISTORICAL_REPAIR_LANE_CONCURRENCY.deep_repair.fallback,
+      ),
     );
   }
 
