@@ -3508,47 +3508,38 @@ export class HistoricalDataRecoveryService {
       };
     }
 
-    const latest =
-      args.recentOutcomes.find((record) => {
-        if (
-          record.historicalRepairAction !== item.historicalRepairAction ||
-          record.historicalRepairBucket !== item.historicalRepairBucket
-        ) {
-          return false;
-        }
-
-        if (record.outcomeReason === 'recent_snapshot_replay_cooldown') {
-          return true;
-        }
-
-        return (
-          record.outcomeStatus === 'partial' &&
-          record.outcomeReason ===
-            this.toHistoricalRepairQueuedSnapshotOutcomeReason(
-              snapshotAction,
-            )
-        );
+    const queuedOutcomeReason =
+      this.toHistoricalRepairQueuedSnapshotOutcomeReason(snapshotAction);
+    const latestReplayMarker =
+      this.findLatestHistoricalRepairReplayMarker({
+        recentOutcomes: args.recentOutcomes,
+        action: item.historicalRepairAction,
+        bucket: item.historicalRepairBucket,
+        queuedOutcomeReasons: [queuedOutcomeReason],
+        cooldownOutcomeReason: 'recent_snapshot_replay_cooldown',
       }) ?? null;
-    if (!latest) {
+    if (!latestReplayMarker) {
       return {
         suppressed: false,
         reason: null,
       };
     }
 
-    if (
-      latest.outcomeReason !== 'recent_snapshot_replay_cooldown' &&
-      (latest.outcomeStatus !== 'partial' ||
-        latest.outcomeReason !==
-          this.toHistoricalRepairQueuedSnapshotOutcomeReason(snapshotAction))
-    ) {
+    const latestQueuedReplay =
+      this.findLatestHistoricalRepairQueuedReplay({
+        recentOutcomes: args.recentOutcomes,
+        action: item.historicalRepairAction,
+        bucket: item.historicalRepairBucket,
+        queuedOutcomeReasons: [queuedOutcomeReason],
+      }) ?? null;
+    if (!latestQueuedReplay) {
       return {
         suppressed: false,
         reason: null,
       };
     }
 
-    const loggedAtMs = Date.parse(latest.loggedAt);
+    const loggedAtMs = Date.parse(latestQueuedReplay.loggedAt);
     if (!Number.isFinite(loggedAtMs)) {
       return {
         suppressed: false,
@@ -3566,7 +3557,7 @@ export class HistoricalDataRecoveryService {
       };
     }
 
-    if (latest.decisionStateBefore !== item.frontendDecisionState) {
+    if (latestReplayMarker.decisionStateBefore !== item.frontendDecisionState) {
       return {
         suppressed: false,
         reason: null,
@@ -3574,12 +3565,18 @@ export class HistoricalDataRecoveryService {
     }
 
     if (
-      !this.areStringArraysEqual(latest.keyEvidenceGapsBefore, item.keyEvidenceGaps) ||
       !this.areStringArraysEqual(
-        latest.trustedBlockingGapsBefore,
+        latestReplayMarker.keyEvidenceGapsBefore,
+        item.keyEvidenceGaps,
+      ) ||
+      !this.areStringArraysEqual(
+        latestReplayMarker.trustedBlockingGapsBefore,
         item.trustedBlockingGaps,
       ) ||
-      Math.abs(latest.evidenceCoverageRateBefore - item.evidenceCoverageRate) >=
+      Math.abs(
+        latestReplayMarker.evidenceCoverageRateBefore -
+          item.evidenceCoverageRate,
+      ) >=
         HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD
     ) {
       return {
@@ -3612,30 +3609,40 @@ export class HistoricalDataRecoveryService {
       };
     }
 
-    const latest =
-      args.recentOutcomes.find((record) => {
-        if (
-          record.historicalRepairAction !== 'decision_recalc' ||
-          record.historicalRepairBucket !== item.historicalRepairBucket
-        ) {
-          return false;
-        }
-
-        return (
-          record.outcomeReason ===
-            'queued_decision_recalc_execution_low_expected_value' ||
-          record.outcomeReason === 'queued_decision_recalc_execution' ||
-          record.outcomeReason === 'recent_decision_recalc_replay_cooldown'
-        );
+    const queuedOutcomeReasons = [
+      'queued_decision_recalc_execution_low_expected_value',
+      'queued_decision_recalc_execution',
+    ];
+    const latestReplayMarker =
+      this.findLatestHistoricalRepairReplayMarker({
+        recentOutcomes: args.recentOutcomes,
+        action: 'decision_recalc',
+        bucket: item.historicalRepairBucket,
+        queuedOutcomeReasons,
+        cooldownOutcomeReason: 'recent_decision_recalc_replay_cooldown',
       }) ?? null;
-    if (!latest) {
+    if (!latestReplayMarker) {
       return {
         suppressed: false,
         reason: null,
       };
     }
 
-    const loggedAtMs = Date.parse(latest.loggedAt);
+    const latestQueuedReplay =
+      this.findLatestHistoricalRepairQueuedReplay({
+        recentOutcomes: args.recentOutcomes,
+        action: 'decision_recalc',
+        bucket: item.historicalRepairBucket,
+        queuedOutcomeReasons,
+      }) ?? null;
+    if (!latestQueuedReplay) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    const loggedAtMs = Date.parse(latestQueuedReplay.loggedAt);
     if (!Number.isFinite(loggedAtMs)) {
       return {
         suppressed: false,
@@ -3653,7 +3660,7 @@ export class HistoricalDataRecoveryService {
       };
     }
 
-    if (latest.decisionStateBefore !== item.frontendDecisionState) {
+    if (latestReplayMarker.decisionStateBefore !== item.frontendDecisionState) {
       return {
         suppressed: false,
         reason: null,
@@ -3661,12 +3668,18 @@ export class HistoricalDataRecoveryService {
     }
 
     if (
-      !this.areStringArraysEqual(latest.keyEvidenceGapsBefore, item.keyEvidenceGaps) ||
       !this.areStringArraysEqual(
-        latest.trustedBlockingGapsBefore,
+        latestReplayMarker.keyEvidenceGapsBefore,
+        item.keyEvidenceGaps,
+      ) ||
+      !this.areStringArraysEqual(
+        latestReplayMarker.trustedBlockingGapsBefore,
         item.trustedBlockingGaps,
       ) ||
-      Math.abs(latest.evidenceCoverageRateBefore - item.evidenceCoverageRate) >=
+      Math.abs(
+        latestReplayMarker.evidenceCoverageRateBefore -
+          item.evidenceCoverageRate,
+      ) >=
         HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD
     ) {
       return {
@@ -3679,6 +3692,57 @@ export class HistoricalDataRecoveryService {
       suppressed: true,
       reason: 'recent_decision_recalc_replay_cooldown',
     };
+  }
+
+  private findLatestHistoricalRepairReplayMarker(args: {
+    recentOutcomes: HistoricalRepairRecentOutcomeRecord[];
+    action: HistoricalRepairPriorityItem['historicalRepairAction'];
+    bucket: HistoricalRepairPriorityItem['historicalRepairBucket'];
+    queuedOutcomeReasons: string[];
+    cooldownOutcomeReason: string;
+  }) {
+    return (
+      args.recentOutcomes.find((record) => {
+        if (
+          record.historicalRepairAction !== args.action ||
+          record.historicalRepairBucket !== args.bucket
+        ) {
+          return false;
+        }
+
+        if (record.outcomeReason === args.cooldownOutcomeReason) {
+          return true;
+        }
+
+        return (
+          record.outcomeStatus === 'partial' &&
+          args.queuedOutcomeReasons.includes(record.outcomeReason)
+        );
+      }) ?? null
+    );
+  }
+
+  private findLatestHistoricalRepairQueuedReplay(args: {
+    recentOutcomes: HistoricalRepairRecentOutcomeRecord[];
+    action: HistoricalRepairPriorityItem['historicalRepairAction'];
+    bucket: HistoricalRepairPriorityItem['historicalRepairBucket'];
+    queuedOutcomeReasons: string[];
+  }) {
+    return (
+      args.recentOutcomes.find((record) => {
+        if (
+          record.historicalRepairAction !== args.action ||
+          record.historicalRepairBucket !== args.bucket
+        ) {
+          return false;
+        }
+
+        return (
+          record.outcomeStatus === 'partial' &&
+          args.queuedOutcomeReasons.includes(record.outcomeReason)
+        );
+      }) ?? null
+    );
   }
 
   private hasHistoricalRepairPrioritySignal(args: {
