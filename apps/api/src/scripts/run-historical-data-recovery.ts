@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
@@ -15,6 +15,7 @@ type CliOptions = {
   minPriorityScore?: number;
   repositoryIds?: string[];
   repositoryIdsFile?: string;
+  selectedRepositoryIdsFile?: string;
   onlyConflicts?: boolean;
   onlyFeatured?: boolean;
   onlyFallback?: boolean;
@@ -122,6 +123,9 @@ function parseArgs(argv: string[]): CliOptions {
     if (flag === 'repositoryIdsFile' && value) {
       options.repositoryIdsFile = value;
     }
+    if (flag === 'selectedRepositoryIdsFile' && value) {
+      options.selectedRepositoryIdsFile = value;
+    }
     if (flag === 'onlyConflicts') {
       options.onlyConflicts = parseBoolean(value);
     }
@@ -180,6 +184,20 @@ async function resolveRepositoryIdsFromFile(filePath: string | undefined) {
     .filter(Boolean);
 }
 
+async function maybeWriteSelectedRepositoryIds(
+  filePath: string | undefined,
+  repositoryIds: string[] | undefined,
+) {
+  if (!filePath) {
+    return null;
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  await mkdir(path.dirname(resolvedPath), { recursive: true });
+  await writeFile(resolvedPath, `${(repositoryIds ?? []).join('\n')}\n`, 'utf8');
+  return resolvedPath;
+}
+
 async function bootstrap() {
   const options = parseArgs(process.argv.slice(2));
   const repositoryIdsFromFile = await resolveRepositoryIdsFromFile(
@@ -224,7 +242,19 @@ async function bootstrap() {
         minPriorityScore: options.minPriorityScore,
         repositoryIds: options.repositoryIds,
       });
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      const selectedRepositoryIdsFile = await maybeWriteSelectedRepositoryIds(
+        options.selectedRepositoryIdsFile,
+        result.selectedRepositoryIds,
+      );
+      process.stdout.write(
+        `${JSON.stringify(
+          selectedRepositoryIdsFile
+            ? { ...result, selectedRepositoryIdsFile }
+            : result,
+          null,
+          2,
+        )}\n`,
+      );
       return;
     }
 

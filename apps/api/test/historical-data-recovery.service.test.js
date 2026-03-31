@@ -621,6 +621,8 @@ test('runHistoricalRepairLoop dispatches downgrade, evidence, deep, and recalc a
   assert.equal(result.execution.evidenceRepair, 1);
   assert.equal(result.execution.deepRepair, 1);
   assert.equal(result.execution.decisionRecalc, 1);
+  assert.equal(result.selectedRepositoryIds.length, 4);
+  assert.ok(result.selectedRepositoryIds.includes('repo-recalc'));
   assert.equal(result.analysisOutcomeSummary.totalCount, 4);
   assert.ok(
     result.analysisOutcomeSummary.coveredActions.includes('decision_recalc'),
@@ -2565,6 +2567,7 @@ test('runHistoricalRepairLoop suppresses stale-watch detail-only evidence_repair
   assert.equal(snapshotCalls.length, 0);
   assert.equal(result.execution.evidenceRepair, 0);
   assert.equal(result.loopTelemetry.loopLowYieldSkipCount, 1);
+  assert.deepEqual(result.selectedRepositoryIds, ['repo-evidence-low-yield']);
   assert.equal(
     result.analysisOutcomeSummary.actionOutcomeStatusBreakdown.evidence_repair
       .skipped,
@@ -2736,6 +2739,189 @@ test('runHistoricalRepairLoop does not low-yield suppress repos when a new decis
   assert.deepEqual(analysisCalls, ['repo-recalc-signal']);
   assert.equal(result.execution.decisionRecalc, 1);
   assert.equal(result.loopTelemetry.loopLowYieldSkipCount, 0);
+});
+
+test('runHistoricalRepairLoop still low-yield suppresses detail-only medium-value replay repairs', async () => {
+  const analysisCalls = [];
+  const recalcItem = buildPriorityReportItem({
+    repoId: 'repo-recalc-priority-replay',
+    action: 'decision_recalc',
+    bucket: 'high_value_weak',
+    reason: 'detail-only replay repair',
+    priorityScore: 149,
+    conflictDrivenDecisionRecalc: false,
+    conflictFlag: true,
+    decisionRecalcGaps: ['user_conflict'],
+    keyEvidenceGaps: ['user_conflict'],
+    trustedBlockingGaps: ['user_conflict'],
+    conflictDrivenGaps: ['user_conflict'],
+    evidenceConflictCount: 1,
+    evidenceCoverageRate: 0.18,
+    strictVisibilityLevel: 'DETAIL_ONLY',
+    repositoryValueTier: 'MEDIUM',
+    moneyPriority: 'P2',
+    isVisibleOnHome: false,
+    isVisibleOnFavorites: false,
+    appearedInDailySummary: false,
+    appearedInTelegram: false,
+  });
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async ({ where }) => {
+          if (
+            where.configKey ===
+            'analysis.historical_repair.recent_outcomes.latest'
+          ) {
+            return {
+              configValue: {
+                schemaVersion: 'historical_repair_recent_outcomes_v1',
+                generatedAt: '2026-03-29T03:00:00.000Z',
+                maxItemsPerRepository: 6,
+                items: [
+                  buildRecentOutcomeRecord({
+                    repoId: recalcItem.repoId,
+                    loggedAt: '2026-03-29T03:00:00.000Z',
+                    action: 'decision_recalc',
+                    bucket: 'high_value_weak',
+                    outcomeStatus: 'no_change',
+                    outcomeReason: 'queued_decision_recalc_execution_low_expected_value',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.18,
+                  }),
+                  buildRecentOutcomeRecord({
+                    repoId: recalcItem.repoId,
+                    loggedAt: '2026-03-28T03:00:00.000Z',
+                    action: 'decision_recalc',
+                    bucket: 'high_value_weak',
+                    outcomeStatus: 'no_change',
+                    outcomeReason: 'no_change_detected',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.18,
+                  }),
+                  buildRecentOutcomeRecord({
+                    repoId: recalcItem.repoId,
+                    loggedAt: '2026-03-27T03:00:00.000Z',
+                    action: 'decision_recalc',
+                    bucket: 'high_value_weak',
+                    outcomeStatus: 'skipped',
+                    outcomeReason: 'low_yield_suppressed_consecutive_low_value_outcomes',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.18,
+                  }),
+                ],
+              },
+            };
+          }
+
+          if (where.configKey === 'analysis.decision_recalc_gate.latest') {
+            return {
+              configValue: buildDecisionRecalcGateSnapshot({
+                items: [recalcItem],
+                generatedAt: '2026-03-29T00:00:00.000Z',
+              }),
+            };
+          }
+
+          return null;
+        },
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueSingleAnalysis: async (repositoryId) => {
+        analysisCalls.push(repositoryId);
+      },
+    },
+    {
+      runPriorityReport: async () => ({
+        generatedAt: '2026-03-30T00:00:00.000Z',
+        summary: {
+          visibleBrokenCount: 0,
+          highValueWeakCount: 1,
+          staleWatchCount: 0,
+          archiveOrNoiseCount: 0,
+          historicalTrustedButWeakCount: 0,
+          immediateFrontendDowngradeCount: 0,
+          evidenceCoverageRate: 0.18,
+          keyEvidenceMissingCount: 0,
+          evidenceConflictCount: 1,
+          evidenceWeakButVisibleCount: 0,
+          conflictDrivenDecisionRecalcCount: 0,
+          actionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 1,
+            archive: 0,
+          },
+          visibleBrokenActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          highValueWeakActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 1,
+            archive: 0,
+          },
+        },
+        items: [recalcItem],
+        samples: {},
+      }),
+    },
+  );
+
+  service.saveSystemConfig = async () => {};
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 1,
+    globalPendingCount: 1,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 1,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: false,
+    minPriorityScore: 0,
+  });
+
+  assert.deepEqual(analysisCalls, []);
+  assert.equal(result.execution.decisionRecalc, 0);
+  assert.equal(result.loopTelemetry.loopLowYieldSkipCount, 0);
+  assert.equal(
+    result.analysisOutcomeSummary.outcomeStatusBreakdown.skipped,
+    1,
+  );
+  assert.equal(result.routerExecutionSummary.recalcReplaySuppressedCount, 1);
 });
 
 test('runHistoricalRepairLoop bypasses low-yield suppression for explicit repository ids', async () => {
@@ -3051,7 +3237,7 @@ test('runHistoricalRepairLoop skips freeze and archive repos in queue competitio
   assert.equal(result.analysisOutcomeSummary.skippedByCleanupCount, 2);
 });
 
-test('runHistoricalRepairLoop suppresses replayed decision_recalc before queueing execution', async () => {
+test('runHistoricalRepairLoop queues priority replayed decision_recalc for high-value visible repos', async () => {
   const analysisCalls = [];
   const recalcItem = {
     repoId: 'repo-recalc',
@@ -3208,19 +3394,339 @@ test('runHistoricalRepairLoop suppresses replayed decision_recalc before queuein
     minPriorityScore: 0,
   });
 
-  assert.equal(analysisCalls.length, 0);
-  assert.equal(result.execution.decisionRecalc, 0);
+  assert.deepEqual(analysisCalls, ['repo-recalc']);
+  assert.equal(result.execution.decisionRecalc, 1);
+  assert.deepEqual(result.selectedRepositoryIds, ['repo-recalc']);
   assert.equal(
     result.routerExecutionSummary.recalcReplaySuppressedCount,
-    1,
+    0,
   );
   assert.equal(result.routerExecutionSummary.recalcAllowedCount, 0);
   assert.equal(
-    result.analysisOutcomeSummary.outcomeStatusBreakdown.skipped,
+    result.routerExecutionSummary.recalcAllowedButNoChangeExpectedCount,
+    1,
+  );
+  assert.equal(
+    result.analysisOutcomeSummary.outcomeStatusBreakdown.partial,
     1,
   );
   assert.equal(
     result.analysisOutcomeSummary.coveredActions.includes('decision_recalc'),
     true,
   );
+});
+
+test('runHistoricalRepairLoop does not low-yield suppress stable high-priority replay candidates', async () => {
+  const analysisCalls = [];
+  const recalcItem = buildPriorityReportItem({
+    repoId: 'repo-priority-replay',
+    action: 'decision_recalc',
+    bucket: 'high_value_weak',
+    reason: 'high-value stable replay',
+    priorityScore: 151,
+    strictVisibilityLevel: 'FAVORITES',
+    isVisibleOnFavorites: false,
+    repositoryValueTier: 'HIGH',
+    moneyPriority: 'P1',
+    conflictFlag: false,
+    conflictDrivenDecisionRecalc: false,
+    decisionRecalcGaps: ['user_conflict'],
+    keyEvidenceGaps: ['user_conflict'],
+    trustedBlockingGaps: ['user_conflict'],
+    conflictDrivenGaps: ['user_conflict'],
+    evidenceConflictCount: 1,
+    evidenceCoverageRate: 0.18,
+    analysisQualityScore: 24,
+    analysisQualityState: 'LOW',
+    hasDeep: false,
+  });
+  const previousFingerprint = buildDecisionRecalcFingerprint(recalcItem);
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async ({ where }) => {
+          if (
+            where.configKey ===
+            'analysis.historical_repair.recent_outcomes.latest'
+          ) {
+            return {
+              configValue: {
+                schemaVersion: 'historical_repair_recent_outcomes_v1',
+                generatedAt: '2026-03-30T00:00:00.000Z',
+                maxItemsPerRepository: 6,
+                items: [
+                  buildRecentOutcomeRecord({
+                    repoId: recalcItem.repoId,
+                    loggedAt: '2026-03-30T00:00:00.000Z',
+                    action: 'decision_recalc',
+                    bucket: 'high_value_weak',
+                    outcomeStatus: 'no_change',
+                    outcomeReason:
+                      'queued_decision_recalc_execution_low_expected_value',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.18,
+                  }),
+                  buildRecentOutcomeRecord({
+                    repoId: recalcItem.repoId,
+                    loggedAt: '2026-03-29T00:00:00.000Z',
+                    action: 'decision_recalc',
+                    bucket: 'high_value_weak',
+                    outcomeStatus: 'no_change',
+                    outcomeReason: 'no_change_detected',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.18,
+                  }),
+                  buildRecentOutcomeRecord({
+                    repoId: recalcItem.repoId,
+                    loggedAt: '2026-03-28T00:00:00.000Z',
+                    action: 'decision_recalc',
+                    bucket: 'high_value_weak',
+                    outcomeStatus: 'skipped',
+                    outcomeReason: 'decision_recalc_already_inflight',
+                    keyEvidenceGapsBefore: ['user_conflict'],
+                    trustedBlockingGapsBefore: ['user_conflict'],
+                    evidenceCoverageRateBefore: 0.18,
+                  }),
+                ],
+              },
+            };
+          }
+
+          if (where.configKey === 'analysis.decision_recalc_gate.latest') {
+            return {
+              configValue: {
+                schemaVersion: 'decision_recalc_gate_v1',
+                generatedAt: '2026-03-29T00:00:00.000Z',
+                totalCandidates: 1,
+                items: [
+                  {
+                    repositoryId: recalcItem.repoId,
+                    fullName: recalcItem.fullName,
+                    historicalRepairBucket: recalcItem.historicalRepairBucket,
+                    historicalRepairAction: recalcItem.historicalRepairAction,
+                    cleanupState: recalcItem.cleanupState,
+                    strictVisibilityLevel: recalcItem.strictVisibilityLevel,
+                    repositoryValueTier: recalcItem.repositoryValueTier,
+                    moneyPriority: recalcItem.moneyPriority,
+                    recalcFingerprint: previousFingerprint,
+                    recalcFingerprintHash: previousFingerprint.recalcFingerprintHash,
+                    previousFingerprintHash: null,
+                    recalcGateDecision: 'allow_recalc',
+                    recalcGateReason: 'recalc_first_structured_baseline',
+                    recalcSignalChanged: true,
+                    recalcSignalDiffSummary: 'bootstrap',
+                    recalcGateConfidence: 'LOW',
+                    changedFields: ['bootstrap'],
+                    replayedConflictSignals: [],
+                  },
+                ],
+              },
+            };
+          }
+
+          return null;
+        },
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {
+      enqueueSingleAnalysis: async (repositoryId) => {
+        analysisCalls.push(repositoryId);
+      },
+    },
+    {
+      runPriorityReport: async () => ({
+        generatedAt: '2026-03-31T00:00:00.000Z',
+        summary: {
+          visibleBrokenCount: 0,
+          highValueWeakCount: 1,
+          staleWatchCount: 0,
+          archiveOrNoiseCount: 0,
+          historicalTrustedButWeakCount: 0,
+          immediateFrontendDowngradeCount: 0,
+          evidenceCoverageRate: 0.18,
+          keyEvidenceMissingCount: 0,
+          evidenceConflictCount: 1,
+          evidenceWeakButVisibleCount: 0,
+          conflictDrivenDecisionRecalcCount: 0,
+          actionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 1,
+            archive: 0,
+          },
+          visibleBrokenActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          highValueWeakActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 1,
+            archive: 0,
+          },
+        },
+        items: [recalcItem],
+        samples: {},
+      }),
+    },
+  );
+
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 1,
+    globalPendingCount: 1,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 1,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: false,
+    minPriorityScore: 0,
+  });
+
+  assert.deepEqual(analysisCalls, ['repo-priority-replay']);
+  assert.equal(result.execution.decisionRecalc, 1);
+  assert.equal(result.loopTelemetry.loopLowYieldSkipCount, 0);
+  assert.deepEqual(result.selectedRepositoryIds, ['repo-priority-replay']);
+  assert.equal(
+    result.routerExecutionSummary.recalcAllowedButNoChangeExpectedCount,
+    1,
+  );
+  assert.equal(result.routerExecutionSummary.recalcReplaySuppressedCount, 0);
+});
+
+test('runHistoricalRepairLoop returns full selectedRepositoryIds beyond sample truncation', async () => {
+  const items = Array.from({ length: 45 }, (_entry, index) =>
+    buildPriorityReportItem({
+      repoId: `repo-${index + 1}`,
+      fullName: `acme/repo-${index + 1}`,
+      action: 'refresh_only',
+      bucket: 'high_value_weak',
+      reason: `batch item ${index + 1}`,
+      priorityScore: 200 - index,
+    }),
+  );
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async () => null,
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (entries) => entries,
+    },
+    {},
+    {
+      runPriorityReport: async () => ({
+        generatedAt: '2026-03-31T00:00:00.000Z',
+        summary: {
+          visibleBrokenCount: 0,
+          highValueWeakCount: items.length,
+          staleWatchCount: 0,
+          archiveOrNoiseCount: 0,
+          historicalTrustedButWeakCount: 0,
+          immediateFrontendDowngradeCount: 0,
+          evidenceCoverageRate: 0.42,
+          keyEvidenceMissingCount: 0,
+          evidenceConflictCount: 0,
+          evidenceWeakButVisibleCount: 0,
+          conflictDrivenDecisionRecalcCount: 0,
+          actionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: items.length,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          visibleBrokenActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: 0,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+          highValueWeakActionBreakdown: {
+            downgrade_only: 0,
+            refresh_only: items.length,
+            evidence_repair: 0,
+            deep_repair: 0,
+            decision_recalc: 0,
+            archive: 0,
+          },
+        },
+        items,
+        samples: {},
+      }),
+    },
+  );
+
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 0,
+    globalPendingCount: 0,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 0,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: true,
+    minPriorityScore: 0,
+  });
+
+  assert.equal(result.selectedCount, 45);
+  assert.equal(result.selected.length, 40);
+  assert.equal(result.selectedRepositoryIds.length, 45);
+  assert.deepEqual(result.selectedRepositoryIds.slice(0, 3), [
+    'repo-1',
+    'repo-2',
+    'repo-3',
+  ]);
+  assert.equal(result.selectedRepositoryIds.at(-1), 'repo-45');
 });

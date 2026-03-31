@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import {
@@ -9,6 +11,7 @@ type HistoricalRepairBucket = NonNullable<HistoricalRepairRunOptions['buckets']>
 
 type CliOptions = HistoricalRepairRunOptions & {
   pretty?: boolean;
+  selectedRepositoryIdsFile?: string;
 };
 
 const ALLOWED_BUCKETS: HistoricalRepairBucket[] = [
@@ -97,9 +100,26 @@ function parseArgs(argv: string[]): CliOptions {
         options.repositoryIds = parsed;
       }
     }
+    if (flag === 'selectedRepositoryIdsFile' && value) {
+      options.selectedRepositoryIdsFile = value;
+    }
   }
 
   return options;
+}
+
+async function maybeWriteSelectedRepositoryIds(
+  filePath: string | undefined,
+  repositoryIds: string[] | undefined,
+) {
+  if (!filePath) {
+    return null;
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  await mkdir(path.dirname(resolvedPath), { recursive: true });
+  await writeFile(resolvedPath, `${(repositoryIds ?? []).join('\n')}\n`, 'utf8');
+  return resolvedPath;
 }
 
 async function bootstrap() {
@@ -118,8 +138,18 @@ async function bootstrap() {
       minPriorityScore: options.minPriorityScore,
       repositoryIds: options.repositoryIds,
     });
+    const selectedRepositoryIdsFile = await maybeWriteSelectedRepositoryIds(
+      options.selectedRepositoryIdsFile,
+      result.selectedRepositoryIds,
+    );
     process.stdout.write(
-      `${JSON.stringify(result, null, options.pretty ? 2 : 0)}\n`,
+      `${JSON.stringify(
+        selectedRepositoryIdsFile
+          ? { ...result, selectedRepositoryIdsFile }
+          : result,
+        null,
+        options.pretty ? 2 : 0,
+      )}\n`,
     );
   } finally {
     await app.close();

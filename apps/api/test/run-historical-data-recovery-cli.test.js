@@ -35,6 +35,7 @@ test('parseHistoricalDataRecoveryArgs supports historical repair loop filters', 
     '--limit=160',
     '--repositoryIds=repo-1, repo-2 ,,repo-3',
     '--repositoryIdsFile=./tmp/repo-ids.txt',
+    '--selectedRepositoryIdsFile=./tmp/selected-repo-ids.txt',
   ]);
 
   assert.deepEqual(options, {
@@ -45,5 +46,6 @@ test('parseHistoricalDataRecoveryArgs supports historical repair loop filters', 
     limit: 160,
     repositoryIds: ['repo-1', 'repo-2', 'repo-3'],
     repositoryIdsFile: './tmp/repo-ids.txt',
+    selectedRepositoryIdsFile: './tmp/selected-repo-ids.txt',
   });
 });

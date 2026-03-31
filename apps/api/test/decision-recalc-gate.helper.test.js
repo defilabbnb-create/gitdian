@@ -42,7 +42,11 @@ function createItem(overrides = {}) {
 }
 
 test('fingerprint equality suppresses replay and cleanup suppresses immediately', () => {
-  const item = createItem();
+  const item = createItem({
+    strictVisibilityLevel: 'BACKGROUND',
+    repositoryValueTier: 'LOW',
+    moneyPriority: 'P3',
+  });
   const previous = buildDecisionRecalcGateResult({ item });
   const replay = buildDecisionRecalcGateResult({
     item,
@@ -59,6 +63,63 @@ test('fingerprint equality suppresses replay and cleanup suppresses immediately'
   assert.equal(replay.recalcSignalChanged, false);
   assert.equal(cleanup.recalcGateDecision, 'suppress_cleanup');
   assert.match(cleanup.recalcGateReason, /recalc_cleanup_suppressed/);
+});
+
+test('fingerprint equality still allows replay for priority visible or high-value repairs', () => {
+  const highValueWeak = createItem();
+  const highValueWeakPrevious = buildDecisionRecalcGateResult({
+    item: highValueWeak,
+  });
+  const highValueWeakReplay = buildDecisionRecalcGateResult({
+    item: highValueWeak,
+    previous: highValueWeakPrevious,
+  });
+  const visibleBroken = createItem({
+    repoId: 'repo-visible',
+    fullName: 'acme/repo-visible',
+    historicalRepairBucket: 'visible_broken',
+    strictVisibilityLevel: 'DETAIL_ONLY',
+    repositoryValueTier: 'LOW',
+    moneyPriority: 'P3',
+  });
+  const visibleBrokenPrevious = buildDecisionRecalcGateResult({
+    item: visibleBroken,
+  });
+  const visibleBrokenReplay = buildDecisionRecalcGateResult({
+    item: visibleBroken,
+    previous: visibleBrokenPrevious,
+  });
+
+  assert.equal(
+    highValueWeakReplay.recalcGateDecision,
+    'allow_recalc_but_expect_no_change',
+  );
+  assert.equal(
+    highValueWeakReplay.recalcGateReason,
+    'recalc_replay_allowed_priority_repair',
+  );
+  assert.equal(
+    visibleBrokenReplay.recalcGateDecision,
+    'allow_recalc_but_expect_no_change',
+  );
+  assert.equal(visibleBrokenReplay.recalcSignalChanged, false);
+
+  const hiddenHighValueWeak = createItem({
+    repoId: 'repo-hidden',
+    fullName: 'acme/repo-hidden',
+    strictVisibilityLevel: 'BACKGROUND',
+    repositoryValueTier: 'MEDIUM',
+    moneyPriority: 'P3',
+  });
+  const hiddenHighValueWeakPrevious = buildDecisionRecalcGateResult({
+    item: hiddenHighValueWeak,
+  });
+  const hiddenHighValueWeakReplay = buildDecisionRecalcGateResult({
+    item: hiddenHighValueWeak,
+    previous: hiddenHighValueWeakPrevious,
+  });
+
+  assert.equal(hiddenHighValueWeakReplay.recalcGateDecision, 'suppress_replay');
 });
 
 test('fingerprint changes allow recalc and low-signal-only changes downgrade confidence', () => {
@@ -109,7 +170,11 @@ test('fingerprint changes allow recalc and low-signal-only changes downgrade con
 });
 
 test('gate report renders markdown and aggregates suppression counts', () => {
-  const baselineItem = createItem();
+  const baselineItem = createItem({
+    strictVisibilityLevel: 'BACKGROUND',
+    repositoryValueTier: 'LOW',
+    moneyPriority: 'P3',
+  });
   const currentSnapshot = buildDecisionRecalcGateSnapshot({
     items: [
       baselineItem,

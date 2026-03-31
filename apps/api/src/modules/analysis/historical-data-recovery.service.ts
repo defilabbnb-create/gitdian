@@ -101,6 +101,13 @@ const HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD = 0.05;
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_ENV_NAME =
   'HISTORICAL_REPAIR_GLOBAL_CONCURRENCY';
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_FALLBACK = 20;
+const HISTORICAL_REPAIR_PRIORITY_VISIBILITY_LEVELS = new Set([
+  'HOME',
+  'FAVORITES',
+  'DAILY_SUMMARY',
+  'TELEGRAM',
+]);
+const HISTORICAL_REPAIR_PRIORITY_MONEY_PRIORITIES = new Set(['P0', 'P1']);
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CHUNK_SIZE = 100;
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CONCURRENCY = 2;
 const HISTORICAL_RECOVERY_SCAN_BATCH_SIZE = 200;
@@ -281,6 +288,7 @@ export type HistoricalRepairRunResult = {
   generatedAt: string;
   dryRun: boolean;
   selectedCount: number;
+  selectedRepositoryIds: string[];
   visibleBrokenCount: number;
   highValueWeakCount: number;
   staleWatchCount: number;
@@ -934,6 +942,7 @@ export class HistoricalDataRecoveryService {
         generatedAt,
         dryRun: true,
         selectedCount: selected.length,
+        selectedRepositoryIds: selected.map((item) => item.repoId),
         visibleBrokenCount: report.summary.visibleBrokenCount,
         highValueWeakCount: report.summary.highValueWeakCount,
         staleWatchCount: report.summary.staleWatchCount,
@@ -1099,6 +1108,7 @@ export class HistoricalDataRecoveryService {
       generatedAt,
       dryRun: false,
       selectedCount: selected.length,
+      selectedRepositoryIds: selected.map((item) => item.repoId),
       visibleBrokenCount: report.summary.visibleBrokenCount,
       highValueWeakCount: report.summary.highValueWeakCount,
       staleWatchCount: report.summary.staleWatchCount,
@@ -2991,7 +3001,8 @@ export class HistoricalDataRecoveryService {
       item.isVisibleOnFavorites ||
       item.appearedInDailySummary ||
       item.appearedInTelegram ||
-      item.historicalRepairBucket === 'visible_broken'
+      item.historicalRepairBucket === 'visible_broken' ||
+      this.isHighPriorityHistoricalRepairReplayCandidate(args.plan)
     ) {
       return true;
     }
@@ -3032,6 +3043,42 @@ export class HistoricalDataRecoveryService {
     return (
       Math.abs(latest.evidenceCoverageRateBefore - item.evidenceCoverageRate) >=
       HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD
+    );
+  }
+
+  private isHighPriorityHistoricalRepairReplayCandidate(
+    plan: Pick<HistoricalRepairDispatchPlan, 'item' | 'recalcGate'>,
+  ) {
+    const item = plan.item;
+
+    if (item.historicalRepairBucket !== 'high_value_weak') {
+      return false;
+    }
+
+    if (
+      item.historicalRepairAction !== 'decision_recalc' ||
+      plan.recalcGate?.recalcGateDecision !==
+        'allow_recalc_but_expect_no_change' ||
+      plan.recalcGate.recalcSignalChanged
+    ) {
+      return false;
+    }
+
+    if (item.repositoryValueTier === 'HIGH') {
+      return true;
+    }
+
+    return Boolean(
+      HISTORICAL_REPAIR_PRIORITY_MONEY_PRIORITIES.has(
+        item.moneyPriority ?? '',
+      ) ||
+        HISTORICAL_REPAIR_PRIORITY_VISIBILITY_LEVELS.has(
+          item.strictVisibilityLevel,
+        ) ||
+        item.isVisibleOnHome ||
+        item.isVisibleOnFavorites ||
+        item.appearedInDailySummary ||
+        item.appearedInTelegram,
     );
   }
 
@@ -3086,7 +3133,11 @@ export class HistoricalDataRecoveryService {
         fragments.push('recalc_new_signal');
         break;
       case 'allow_recalc_but_expect_no_change':
-        fragments.push('recalc_new_signal_low_expected_value');
+        fragments.push(
+          recalcGate.recalcGateReason === 'recalc_replay_allowed_priority_repair'
+            ? 'recalc_priority_repair_replay'
+            : 'recalc_new_signal_low_expected_value',
+        );
         break;
       case 'suppress_replay':
         fragments.push('recalc_replay_suppressed');

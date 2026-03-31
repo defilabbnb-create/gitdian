@@ -20,6 +20,13 @@ const LOW_SIGNAL_FIELDS = new Set([
   'analysisQualityState',
   'frontendDecisionState',
 ]);
+const PRIORITY_REPLAY_VISIBILITY_LEVELS = new Set([
+  'HOME',
+  'FAVORITES',
+  'DAILY_SUMMARY',
+  'TELEGRAM',
+]);
+const PRIORITY_REPLAY_MONEY_PRIORITIES = new Set(['P0', 'P1']);
 
 export const DECISION_RECALC_GATE_DECISIONS: DecisionRecalcGateDecision[] = [
   'allow_recalc',
@@ -183,9 +190,15 @@ export function buildDecisionRecalcGateResult(args: {
     recalcGateReason = `recalc_cleanup_suppressed:${cleanupState}`;
     recalcGateConfidence = 'HIGH';
   } else if (!signalDiff.recalcSignalChanged) {
-    recalcGateDecision = 'suppress_replay';
-    recalcGateReason = 'recalc_replay_suppressed';
-    recalcGateConfidence = 'HIGH';
+    if (shouldAllowPriorityReplayRepair(item)) {
+      recalcGateDecision = 'allow_recalc_but_expect_no_change';
+      recalcGateReason = 'recalc_replay_allowed_priority_repair';
+      recalcGateConfidence = 'MEDIUM';
+    } else {
+      recalcGateDecision = 'suppress_replay';
+      recalcGateReason = 'recalc_replay_suppressed';
+      recalcGateConfidence = 'HIGH';
+    }
   } else if (lowSignalOnly) {
     recalcGateDecision = 'allow_recalc_but_expect_no_change';
     recalcGateReason = 'recalc_new_signal_low_expected_value';
@@ -350,6 +363,9 @@ export function buildDecisionRecalcGateReport(args: {
   const allowedButExpectedNoChange = currentItems.filter(
     (item) => item.recalcGateDecision === 'allow_recalc_but_expect_no_change',
   );
+  const changedButExpectedNoChange = allowedButExpectedNoChange.filter(
+    (item) => item.recalcSignalChanged,
+  );
   const suppressedReplay = currentItems.filter(
     (item) => item.recalcGateDecision === 'suppress_replay',
   );
@@ -449,9 +465,9 @@ export function buildDecisionRecalcGateReport(args: {
     },
     signalSummary: {
       changedFieldBreakdown,
-      changedButStillExpectedNoChangeCount: allowedButExpectedNoChange.length,
+      changedButStillExpectedNoChangeCount: changedButExpectedNoChange.length,
       changedAndAllowedCount: allowed.length,
-      changedButDecisionStillLikelyStaticRepos: allowedButExpectedNoChange
+      changedButDecisionStillLikelyStaticRepos: changedButExpectedNoChange
         .slice(0, 12)
         .map((item) => ({
           repositoryId: item.repositoryId,
@@ -466,9 +482,9 @@ export function buildDecisionRecalcGateReport(args: {
         ? 'current gate compares against the last persisted decision recalc gate snapshot'
         : 'no previous snapshot existed; first run establishes the structured baseline',
       replayInterpretation:
-        'suppress_replay means the structured fingerprint is unchanged and the recalc would only replay old conflict inputs',
+        'suppress_replay means the structured fingerprint is unchanged and the repo is not in the priority replay exception set',
       newSignalInterpretation:
-        'allow_recalc requires changed structured signal; allow_recalc_but_expect_no_change means only low-signal fields changed',
+        'allow_recalc requires changed structured signal; allow_recalc_but_expect_no_change means either only low-signal fields changed or a priority replay was forced through',
     },
     samples: {
       suppressedReplay: suppressedReplay.slice(0, 12),
@@ -620,6 +636,44 @@ function clampRate(value: unknown) {
     return 0;
   }
   return Math.max(0, Math.min(1, Number(numeric.toFixed(4))));
+}
+
+function shouldAllowPriorityReplayRepair(
+  item: DecisionRecalcGateEvaluableItem,
+) {
+  if (normalizeNullableString(item.historicalRepairAction) !== 'decision_recalc') {
+    return false;
+  }
+
+  const bucket = normalizeNullableString(item.historicalRepairBucket);
+  if (bucket === 'visible_broken') {
+    return true;
+  }
+  if (bucket !== 'high_value_weak') {
+    return false;
+  }
+
+  const repositoryValueTier = normalizeNullableString(item.repositoryValueTier);
+  if (repositoryValueTier === 'HIGH') {
+    return true;
+  }
+
+  const moneyPriority = normalizeNullableString(item.moneyPriority);
+  if (moneyPriority && PRIORITY_REPLAY_MONEY_PRIORITIES.has(moneyPriority)) {
+    return true;
+  }
+
+  const strictVisibilityLevel = normalizeNullableString(
+    item.strictVisibilityLevel,
+  );
+  if (
+    strictVisibilityLevel &&
+    PRIORITY_REPLAY_VISIBILITY_LEVELS.has(strictVisibilityLevel)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function normalizeString(value: unknown) {
