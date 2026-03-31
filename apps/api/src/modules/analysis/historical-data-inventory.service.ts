@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -231,6 +231,8 @@ export type HistoricalDataInventoryOptions = {
 
 @Injectable()
 export class HistoricalDataInventoryService {
+  private readonly logger = new Logger(HistoricalDataInventoryService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly repositoryDecisionService: RepositoryDecisionService,
@@ -364,17 +366,69 @@ export class HistoricalDataInventoryService {
       return [] as InventoryRepositoryRecord[];
     }
 
-    return this.prisma.repository.findMany({
-      where: {
-        id: {
-          in: repositoryIds,
+    const chunks = this.chunkRepositoryIds(repositoryIds, 100);
+    const repositories = await Promise.all(
+      chunks.map((chunk) => this.loadRepositoryIdBatchSafely(chunk)),
+    );
+
+    return repositories
+      .flat()
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private chunkRepositoryIds(repositoryIds: string[], chunkSize: number) {
+    const chunks: string[][] = [];
+
+    for (let index = 0; index < repositoryIds.length; index += chunkSize) {
+      chunks.push(repositoryIds.slice(index, index + chunkSize));
+    }
+
+    return chunks;
+  }
+
+  private async loadRepositoryIdBatchSafely(
+    repositoryIds: string[],
+  ): Promise<InventoryRepositoryRecord[]> {
+    if (!repositoryIds.length) {
+      return [];
+    }
+
+    try {
+      return await this.prisma.repository.findMany({
+        where: {
+          id: {
+            in: repositoryIds,
+          },
         },
-      },
-      orderBy: {
-        id: 'asc',
-      },
-      select: INVENTORY_REPOSITORY_SELECT,
-    });
+        orderBy: {
+          id: 'asc',
+        },
+        select: INVENTORY_REPOSITORY_SELECT,
+      });
+    } catch (error) {
+      if (repositoryIds.length === 1) {
+        this.logger.warn(
+          `historical_inventory skip repositoryId=${repositoryIds[0]} reason=${this.readErrorMessage(error)}`,
+        );
+        return [];
+      }
+
+      const midpoint = Math.ceil(repositoryIds.length / 2);
+      const [left, right] = await Promise.all([
+        this.loadRepositoryIdBatchSafely(repositoryIds.slice(0, midpoint)),
+        this.loadRepositoryIdBatchSafely(repositoryIds.slice(midpoint)),
+      ]);
+
+      return [...left, ...right];
+    }
+  }
+
+  private readErrorMessage(error: unknown) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error ?? 'unknown_error');
   }
 
   private async buildInventoryItems(args: {
