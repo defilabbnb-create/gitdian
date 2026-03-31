@@ -98,12 +98,15 @@ function cleanText(value: unknown, maxLength = 160) {
 }
 
 function buildHaystack(input: OneLinerCondenserInput) {
+  const readmePreview = cleanText(input.repository.readmeText, 900);
   return [
     input.repository.name,
     input.repository.fullName,
     input.repository.description,
     ...(input.repository.topics ?? []),
-    input.repository.readmeText ?? '',
+    input.candidate ?? '',
+    input.fallback ?? '',
+    readmePreview,
   ]
     .map((item) => String(item ?? '').toLowerCase())
     .join('\n');
@@ -127,6 +130,8 @@ function resolveExplicitUser(haystack: string) {
     [/(job seekers?|求职者)/i, '求职者'],
     [/(lawyers?|律师|法务)/i, '律师团队'],
     [/(product managers?|产品经理)/i, '产品团队'],
+    [/(students?|teachers?|classroom|course staff|师生|学生|教师)/i, '师生'],
+    [/(terminal users?|end users?|终端用户)/i, '终端用户'],
   ];
 
   for (const [pattern, label] of userRules) {
@@ -157,8 +162,11 @@ function resolveConcreteAction(haystack: string, projectType: OneLinerProjectTyp
   const actionRules: Array<[RegExp, string]> = [
     [/(spotify web api|playlist|recommend)/i, '在命令行里搜索歌曲并管理播放列表'],
     [/(certificate|tls|dns-01|签发|续期)/i, '签发和续期 TLS 证书'],
-    [/(secret|dotenv|credential|环境变量)/i, '管理环境变量和密钥'],
-    [/(token|usage|cost|计费)/i, '记录 token 与成本明细'],
+    [/(secret manager|secrets management|dotenv|environment variables?|env vars?|密钥管理|环境变量)/i, '管理环境变量和密钥'],
+    [
+      /(token (usage|cost)|usage (tracking|dashboard)|cost (tracking|dashboard|observability)|api cost|token 成本|token 用量|成本明细|计费)/i,
+      '记录 token 与成本明细',
+    ],
     [/(api call log|api request log|request log|调用日志|请求日志)/i, '记录 API 调用日志'],
     [/(review comment|pull request|pr review|diff|审阅|审查)/i, '审阅代码 diff 和变更说明'],
     [/(approval|audit|审批|审计链)/i, '发起审批并记录审计链路'],
@@ -173,9 +181,12 @@ function resolveConcreteAction(haystack: string, projectType: OneLinerProjectTyp
     [/(claims|billing|理赔|账单)/i, '审核理赔账单并标记异常'],
     [/(search api|serp|retrieval|检索接口)/i, '提供搜索与检索接口'],
     [/(scrap|crawl|extract data|网页采集)/i, '采集网页与结构化数据'],
-    [/(deploy|deployment|release|delivery)/i, '部署和交付应用'],
+    [
+      /(deployment pipeline|deploy pipeline|release pipeline|release management|deploy orchestration|application delivery|app delivery|发布流水线|交付流程)/i,
+      '部署和交付应用',
+    ],
     [/(auth|authentication|login|sso|identity)/i, '接入登录与权限能力'],
-    [/(observability|monitor|alert|监控|告警)/i, '监控系统运行状态'],
+    [/(observability|monitoring dashboard|monitoring stack|alert routing|系统监控|运行指标|告警)/i, '监控系统运行状态'],
     [/(workflow|automation|orchestration|zapier|n8n)/i, '串联和执行多步流程'],
     [/(memory|context window|long-term memory|上下文|记忆)/i, '管理长期上下文与记忆'],
   ];
@@ -350,7 +361,7 @@ function looksRepoNameFallback(line: string, repository: OneLinerCondenserInput[
 }
 
 function hasExplicitUserInLine(line: string) {
-  return /(开发者|工程师|团队|运维|管理员|求职者|站长|剪辑师|设计师|律师|产品团队)/.test(
+  return /(开发者|工程师|团队|运维|管理员|求职者|站长|剪辑师|设计师|律师|产品团队|师生|学生|教师|终端用户)/.test(
     line,
   );
 }
@@ -358,6 +369,24 @@ function hasExplicitUserInLine(line: string) {
 function hasConcreteActionInLine(line: string) {
   return /(管理|监控|生成|审阅|记录|签发|续期|发起|查看|追踪|改写|分离|审批|回收|编辑|处理|部署|采集|提供|接入|串联|执行|支撑)/.test(
     line,
+  );
+}
+
+function looksSpecificNarrativeSentence(line: string) {
+  const normalized = cleanText(line, 180);
+
+  if (!normalized || GENERIC_RE.test(normalized) || looksEnglishOrHalfEnglish(normalized)) {
+    return false;
+  }
+
+  return (
+    /^(面向|为|帮助|支持|供).+/u.test(normalized) ||
+    /.+(?:提供|支持).+(?:工具|平台|系统|服务|扩展|客户端|后端|应用|项目)$/u.test(
+      normalized,
+    ) ||
+    /.+(?:练习平台|命令启动器|测验平台|浏览器扩展|工作台|后台系统|后端系统)$/u.test(
+      normalized,
+    )
   );
 }
 
@@ -493,7 +522,16 @@ function isAcceptedCandidate(
       );
     }
 
-    return MEDIUM_SENTENCE_RE.test(line) && hasConcreteActionInLine(line);
+    if (MEDIUM_SENTENCE_RE.test(line) && hasConcreteActionInLine(line)) {
+      return true;
+    }
+
+    return (
+      looksSpecificNarrativeSentence(line) &&
+      (facts.hasClearUseCase ||
+        hasConcreteActionInLine(line) ||
+        hasExplicitUserInLine(line))
+    );
   }
 
   return LOW_SENTENCE_RE.test(line) || MEDIUM_SENTENCE_RE.test(line);
@@ -610,6 +648,12 @@ export function condenseRepositoryOneLiner(
   const facts = buildDerivedFacts(input);
   const candidate = cleanText(input.candidate, 160);
   const fallback = cleanText(input.fallback, 160);
+  const acceptedCandidate = isAcceptedCandidate(candidate, input.projectType, facts)
+    ? candidate
+    : '';
+  const acceptedFallback = isAcceptedCandidate(fallback, input.projectType, facts)
+    ? fallback
+    : '';
 
   let mode: OneLinerConfidenceLevel = 'low';
   let oneLinerZh = '';
@@ -630,9 +674,7 @@ export function condenseRepositoryOneLiner(
 
   if (canUseHighConfidenceProductSentence) {
     mode = 'high';
-    oneLinerZh =
-      (isAcceptedCandidate(candidate, input.projectType, facts) ? candidate : '') ||
-      buildHighConfidenceLine(facts);
+    oneLinerZh = acceptedCandidate || acceptedFallback || buildHighConfidenceLine(facts);
   } else if (
     input.projectType === 'infra' &&
     facts.concreteAction &&
@@ -640,24 +682,17 @@ export function condenseRepositoryOneLiner(
     (facts.hasClearUseCase || Boolean(facts.explicitUser))
   ) {
     mode = 'medium';
-    oneLinerZh =
-      (isAcceptedCandidate(candidate, input.projectType, facts) ? candidate : '') ||
-      buildMediumConfidenceLine(facts);
+    oneLinerZh = acceptedCandidate || acceptedFallback || buildMediumConfidenceLine(facts);
   } else if (
     (input.projectType === 'product' || input.projectType === 'tool') &&
     canUseMediumConfidenceSentence &&
     facts.hasClearUseCase
   ) {
     mode = 'medium';
-    oneLinerZh =
-      (isAcceptedCandidate(candidate, input.projectType, facts) ? candidate : '') ||
-      buildMediumConfidenceLine(facts);
+    oneLinerZh = acceptedCandidate || acceptedFallback || buildMediumConfidenceLine(facts);
   } else {
     mode = 'low';
-    oneLinerZh =
-      (isAcceptedCandidate(candidate, input.projectType, facts) ? candidate : '') ||
-      (isAcceptedCandidate(fallback, input.projectType, facts) ? fallback : '') ||
-      buildLowConfidenceLine(input, facts);
+    oneLinerZh = acceptedCandidate || acceptedFallback || buildLowConfidenceLine(input, facts);
   }
 
   let riskFlags = detectRiskFlags(input, facts, oneLinerZh, candidate, fallback);

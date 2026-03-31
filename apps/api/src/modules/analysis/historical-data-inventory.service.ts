@@ -252,18 +252,20 @@ export class HistoricalDataInventoryService {
         : {}),
     };
     const repositoryIds = [...new Set(options?.repositoryIds?.filter(Boolean) ?? [])];
-    const [repositories, exposureSets] = await Promise.all([
-      repositoryIds.length
-        ? this.loadRepositoriesByIds(repositoryIds)
-        : this.loadRepositories(options?.limit),
-      this.loadExposureSets(),
-    ]);
-    const items = await this.buildInventoryItems({
-      repositories,
-      thresholds,
-      generatedAt,
-      exposureSets,
-    });
+    const exposureSets = await this.loadExposureSets();
+    const items = repositoryIds.length
+      ? await this.buildInventoryItems({
+          repositories: await this.loadRepositoriesByIds(repositoryIds),
+          thresholds,
+          generatedAt,
+          exposureSets,
+        })
+      : await this.buildInventoryItemsFromRepositoryStream({
+          limit: options?.limit,
+          thresholds,
+          generatedAt,
+          exposureSets,
+        });
 
     const orderedItems = repositoryIds.length
       ? repositoryIds
@@ -443,20 +445,110 @@ export class HistoricalDataInventoryService {
   }) {
     const auditSnapshot =
       await this.repositoryDecisionService.getLatestAuditSnapshot();
+    const now = new Date(args.generatedAt);
+
+    return this.buildInventoryItemsFromSerializedRepositories({
+      repositories: args.repositories,
+      auditSnapshot,
+      thresholds: args.thresholds,
+      now,
+      exposureSets: args.exposureSets,
+    });
+  }
+
+  private async buildInventoryItemsFromRepositoryStream(args: {
+    limit?: number;
+    thresholds: HistoricalInventoryThresholds;
+    generatedAt: string;
+    exposureSets: {
+      homepageIds: Set<string>;
+      dailySummaryIds: Set<string>;
+      telegramIds: Set<string>;
+    };
+  }) {
+    const auditSnapshot =
+      await this.repositoryDecisionService.getLatestAuditSnapshot();
+    const now = new Date(args.generatedAt);
+    const items: HistoricalDataInventoryItem[] = [];
+    const batchSize = 200;
+    let cursorId: string | null = null;
+
+    for (;;) {
+      const remaining =
+        typeof args.limit === 'number' && args.limit > 0
+          ? args.limit - items.length
+          : null;
+      if (remaining !== null && remaining <= 0) {
+        break;
+      }
+
+      const batch: InventoryRepositoryRecord[] =
+        await this.prisma.repository.findMany({
+          ...(cursorId
+            ? {
+                cursor: { id: cursorId },
+                skip: 1,
+              }
+            : {}),
+          orderBy: {
+            id: 'asc',
+          },
+          take:
+            remaining === null
+              ? batchSize
+              : Math.max(1, Math.min(batchSize, remaining)),
+          select: INVENTORY_REPOSITORY_SELECT,
+        });
+
+      if (!batch.length) {
+        break;
+      }
+
+      items.push(
+        ...this.buildInventoryItemsFromSerializedRepositories({
+          repositories: batch,
+          auditSnapshot,
+          thresholds: args.thresholds,
+          now,
+          exposureSets: args.exposureSets,
+        }),
+      );
+
+      cursorId = batch[batch.length - 1]?.id ?? null;
+      if (!cursorId) {
+        break;
+      }
+    }
+
+    return items;
+  }
+
+  private buildInventoryItemsFromSerializedRepositories(args: {
+    repositories: InventoryRepositoryRecord[];
+    auditSnapshot: Awaited<
+      ReturnType<RepositoryDecisionService['getLatestAuditSnapshot']>
+    >;
+    thresholds: HistoricalInventoryThresholds;
+    now: Date;
+    exposureSets: {
+      homepageIds: Set<string>;
+      dailySummaryIds: Set<string>;
+      telegramIds: Set<string>;
+    };
+  }) {
     const derivedRepositories =
       this.repositoryDecisionService.attachDerivedAssetsWithAudit(
         args.repositories.map((item) => this.serialize(item)) as Array<
           Record<string, unknown>
         >,
-        auditSnapshot,
+        args.auditSnapshot,
       ) as Array<Record<string, unknown>>;
-    const now = new Date(args.generatedAt);
 
     return derivedRepositories.map((repository) =>
       this.toInventoryItem({
         repository,
         thresholds: args.thresholds,
-        now,
+        now: args.now,
         exposureSets: args.exposureSets,
       }),
     );

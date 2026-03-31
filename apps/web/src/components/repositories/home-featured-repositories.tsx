@@ -409,7 +409,10 @@ function HomepageTopActionStrip({
   const resolveCtaLabel = (
     intent: RepositoryDecisionCtaIntent,
     fallbackLabel: string,
-  ) => (intent === 'follow_up' ? '加入跟进清单' : fallbackLabel);
+  ) =>
+    intent === 'follow_up' || /跟进列表|加入跟进|已加入跟进/u.test(fallbackLabel)
+      ? '加入跟进清单'
+      : fallbackLabel;
   const resolveCtaActiveLabel = (
     intent: RepositoryDecisionCtaIntent,
     fallbackLabel: string,

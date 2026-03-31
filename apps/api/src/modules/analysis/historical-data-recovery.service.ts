@@ -1,11 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
-  Favorite,
   JobStatus,
   Prisma,
   Repository,
   RepositoryAnalysis,
-  RepositoryContent,
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
@@ -105,6 +103,7 @@ const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_ENV_NAME =
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_FALLBACK = 20;
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CHUNK_SIZE = 100;
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CONCURRENCY = 2;
+const HISTORICAL_RECOVERY_SCAN_BATCH_SIZE = 200;
 const HISTORICAL_REPAIR_SNAPSHOT_BULK_BATCH_SIZE = 50;
 const HISTORICAL_REPAIR_SINGLE_ANALYSIS_BULK_BATCH_SIZE = 50;
 const HISTORICAL_REPAIR_RATE_PRECISION = 2;
@@ -127,11 +126,54 @@ const HISTORICAL_REPAIR_LANE_CONCURRENCY = {
   },
 } as const;
 
-type RepositoryRecoveryTarget = Repository & {
-  analysis: RepositoryAnalysis | null;
-  content: RepositoryContent | null;
-  favorite: Favorite | null;
-};
+const HISTORICAL_RECOVERY_REPOSITORY_SELECT = {
+  id: true,
+  fullName: true,
+  name: true,
+  ownerLogin: true,
+  htmlUrl: true,
+  description: true,
+  homepage: true,
+  language: true,
+  stars: true,
+  topics: true,
+  roughPass: true,
+  toolLikeScore: true,
+  ideaFitScore: true,
+  finalScore: true,
+  categoryL1: true,
+  categoryL2: true,
+  isFavorited: true,
+  updatedAtGithub: true,
+  updatedAt: true,
+  analysis: {
+    select: {
+      ideaSnapshotJson: true,
+      insightJson: true,
+      claudeReviewJson: true,
+      claudeReviewStatus: true,
+      claudeReviewReviewedAt: true,
+      manualVerdict: true,
+      manualAction: true,
+      manualNote: true,
+      manualUpdatedAt: true,
+      completenessJson: true,
+      ideaFitJson: true,
+      extractedIdeaJson: true,
+      fallbackUsed: true,
+      analyzedAt: true,
+    },
+  },
+  favorite: {
+    select: {
+      priority: true,
+    },
+  },
+} as const satisfies Prisma.RepositorySelect;
+
+type RepositoryRecoveryTarget = Prisma.RepositoryGetPayload<{
+  select: typeof HISTORICAL_RECOVERY_REPOSITORY_SELECT;
+}>;
 
 type RecoverySummarySample = {
   repoId: string;
@@ -399,17 +441,36 @@ export class HistoricalDataRecoveryService {
   ): Promise<HistoricalRecoveryAuditResult> {
     const scannedAt = new Date().toISOString();
     const exposureSets = await this.loadExposureSets();
-    const repositories = await this.loadRepositories();
     const auditSnapshot =
       await this.repositoryDecisionService.getLatestAuditSnapshot();
-    const derived =
-      this.repositoryDecisionService.attachDerivedAssetsWithAudit(
-        repositories as unknown as Record<string, unknown>[],
-        auditSnapshot,
-      ) as Array<Record<string, unknown>>;
-    const assessments = assessHistoricalRecoveryBatch(
-      derived.map((repository) => this.toRecoverySignal(repository, exposureSets)),
-    );
+    const assessments: HistoricalRecoveryAssessment[] = [];
+    let cursorId: string | null = null;
+
+    for (;;) {
+      const batch = await this.loadRecoveryRepositoryBatch(cursorId);
+      if (!batch.length) {
+        break;
+      }
+
+      const derivedBatch =
+        this.repositoryDecisionService.attachDerivedAssetsWithAudit(
+          batch as unknown as Record<string, unknown>[],
+          auditSnapshot,
+        ) as Array<Record<string, unknown>>;
+      assessments.push(
+        ...assessHistoricalRecoveryBatch(
+          derivedBatch.map((repository) =>
+            this.toRecoverySignal(repository, exposureSets),
+          ),
+        ),
+      );
+
+      cursorId = batch[batch.length - 1]?.id ?? null;
+      if (!cursorId) {
+        break;
+      }
+    }
+
     const filtered = await this.filterAssessments(assessments, options);
     const selected =
       options?.limit && options.limit > 0
@@ -1087,44 +1148,20 @@ export class HistoricalDataRecoveryService {
     return result;
   }
 
-  private async loadRepositories() {
-    const batchSize = 200;
-    const repositories: RepositoryRecoveryTarget[] = [];
-    let cursorId: string | null = null;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch: RepositoryRecoveryTarget[] = await this.prisma.repository.findMany({
-        ...(cursorId
-          ? {
-              cursor: { id: cursorId },
-              skip: 1,
-            }
-          : {}),
-        orderBy: {
-          id: 'asc',
-        },
-        take: batchSize,
-        include: {
-          analysis: true,
-          content: true,
-          favorite: true,
-        },
-      });
-
-      if (!batch.length) {
-        break;
-      }
-
-      repositories.push(...batch);
-
-      cursorId = batch[batch.length - 1]?.id ?? null;
-      if (!cursorId) {
-        hasMore = false;
-      }
-    }
-
-    return repositories;
+  private async loadRecoveryRepositoryBatch(cursorId: string | null) {
+    return this.prisma.repository.findMany({
+      ...(cursorId
+        ? {
+            cursor: { id: cursorId },
+            skip: 1,
+          }
+        : {}),
+      orderBy: {
+        id: 'asc',
+      },
+      take: HISTORICAL_RECOVERY_SCAN_BATCH_SIZE,
+      select: HISTORICAL_RECOVERY_REPOSITORY_SELECT,
+    });
   }
 
   private async loadExposureSets() {

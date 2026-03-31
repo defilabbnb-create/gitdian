@@ -175,3 +175,34 @@ test('downgrades conflicting product narratives and marks conflict risk flags', 
   assert.ok(result.riskFlags.includes('category_mismatch'));
   assert.ok(result.riskFlags.includes('monetization_overclaim'));
 });
+
+test('keeps a concrete snapshot-style fallback sentence when repo metadata is noisy', () => {
+  const result = condenseRepositoryOneLiner({
+    repository: {
+      name: 'ap-csp-mastery',
+      fullName: 'school/ap-csp-mastery',
+      description: 'Mastery for AP CSP',
+      topics: ['education'],
+      readmeText:
+        'Student practice system. Includes token usage example snippets and release notes, but the repo itself is a classroom quiz platform.',
+    },
+    projectType: 'tool',
+    candidate: '',
+    fallback:
+      '面向 AP 计算机原理课程的师生，提供按主题解锁和进度追踪的在线测验练习平台',
+    signals: {
+      hasRealUser: true,
+      hasClearUseCase: true,
+      isDirectlyMonetizable: false,
+      categoryMain: 'content',
+      categorySub: 'content-creation',
+    },
+  });
+
+  assert.equal(result.confidence, 'high');
+  assert.equal(
+    result.oneLinerZh,
+    '面向 AP 计算机原理课程的师生，提供按主题解锁和进度追踪的在线测验练习平台',
+  );
+  assert.doesNotMatch(result.oneLinerZh, /token|成本明细|CLI 工具/);
+});

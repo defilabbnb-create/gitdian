@@ -48,6 +48,14 @@ const GENERIC_COPY_PATTERNS = [
   /^待分类$/,
 ];
 
+const GENERIC_UNTRUSTED_HEADLINE_PATTERNS = [
+  /^一个(?:帮(?:开发者|工程师|运维人员|团队)|用于)?记录 token 与成本明细的(?:CLI 工具|工具|代码项目|浏览器扩展).*/,
+  /^一个(?:帮(?:开发者|工程师|团队)|用于)?管理环境变量和密钥的(?:CLI 工具|工具|代码项目|浏览器扩展).*/,
+  /^一个(?:帮(?:开发者|工程师|运维人员)|用于)?在命令行里搜索歌曲并管理播放列表的(?:CLI 工具|工具).*/,
+  /^一个(?:帮(?:开发者|工程师)|用于)?部署和交付应用的(?:CLI 工具|工具|代码项目|浏览器扩展).*/,
+  /^一个(?:帮(?:开发者|工程师)|用于)?监控系统运行状态的(?:CLI 工具|工具|可观测组件).*/,
+];
+
 const GENERIC_SAFE_TARGET_USER_PATTERNS = [
   /^独立开发者和小团队$/,
   /^开发者和小团队$/,
@@ -75,6 +83,7 @@ const GENERIC_REASON_PATTERNS = [
   /^后端最终判断还在补齐.*$/,
   /^当前先按低优先展示.*$/,
   /^先确认谁会持续使用它，再决定要不要继续投入[。！]?$/,
+  /^这是个典型工具型机会[，,].*$/,
   /^这个方向需求明确[，,].*$/,
   /^这是面向明确.*团队工作流的真工具.*$/,
   /^(技术成熟度|市场|用户|收费|分发|执行|问题|留存|获客)(?:这块|这几块)?\s*(?:证据)?\s*(?:偏弱|不足|缺失|待补|仍缺|还在补|不够稳|不够清楚)[。！]?$/,
@@ -133,6 +142,14 @@ function pickPreferredText(...values: Array<unknown>) {
   return null;
 }
 
+function pickPreferredConservativeHeadline(...values: Array<unknown>) {
+  return pickPreferredSpecificText(
+    values,
+    (value) =>
+      GENERIC_UNTRUSTED_HEADLINE_PATTERNS.some((pattern) => pattern.test(value)),
+  );
+}
+
 function pickPreferredSpecificText(
   values: Array<unknown>,
   isTooGeneric: (value: string) => boolean,
@@ -170,6 +187,7 @@ function inferTargetUsersFromCopy(value: unknown) {
   };
 
   const patterns = [
+    /^面向.+?的(师生|学生|教师)(?:，|。|；|;|并|但|且|$)/u,
     /^面向(.+?)(?:的|将|通过|利用|借助|在)/u,
     /^为(.+?)提供/u,
     /^(.+?用户)(?:利用|使用|通过|借助|在)/u,
@@ -251,12 +269,32 @@ function formatSnapshotCategoryLabel(
   return mainLabel || null;
 }
 
+function shouldPreferConservativeLocalizedCopy(
+  item: Pick<RepositoryListItem, 'analysisState'>,
+) {
+  const analysisState = item.analysisState;
+
+  if (!analysisState) {
+    return false;
+  }
+
+  return (
+    analysisState.frontendDecisionState === 'degraded' ||
+    analysisState.frontendDecisionState === 'provisional' ||
+    analysisState.displayStatus === 'UNSAFE' ||
+    analysisState.displayStatus === 'BASIC_READY' ||
+    analysisState.trustedDisplayReady === false ||
+    analysisState.highConfidenceReady === false
+  );
+}
+
 function resolveLocalizedDecisionCopy(
   item: Pick<RepositoryListItem, 'analysis' | 'analysisState' | 'finalDecision'>,
 ) {
   const analysis = item.analysis;
   const finalDecision = item.finalDecision;
   const lightAnalysis = item.analysisState?.lightAnalysis;
+  const preferConservativeCopy = shouldPreferConservativeLocalizedCopy(item);
   const inferredTargetUsers =
     inferTargetUsersFromCopy(analysis?.ideaSnapshotJson?.oneLinerZh) ??
     inferTargetUsersFromCopy(analysis?.ideaSnapshotJson?.reason) ??
@@ -266,44 +304,80 @@ function resolveLocalizedDecisionCopy(
     inferTargetUsersFromCopy(analysis?.insightJson?.oneLinerZh);
 
   return {
-    headline: pickPreferredText(
-      analysis?.ideaSnapshotJson?.oneLinerZh,
-      analysis?.extractedIdeaJson?.ideaSummary,
-      analysis?.insightJson?.oneLinerZh,
-      finalDecision?.oneLinerZh,
-      finalDecision?.decisionSummary?.headlineZh,
-    ),
+    headline: preferConservativeCopy
+      ? pickPreferredConservativeHeadline(
+          analysis?.ideaSnapshotJson?.oneLinerZh,
+          finalDecision?.decisionSummary?.headlineZh,
+          finalDecision?.oneLinerZh,
+          analysis?.insightJson?.oneLinerZh,
+          analysis?.extractedIdeaJson?.ideaSummary,
+        )
+      : pickPreferredText(
+          analysis?.ideaSnapshotJson?.oneLinerZh,
+          analysis?.extractedIdeaJson?.ideaSummary,
+          analysis?.insightJson?.oneLinerZh,
+          finalDecision?.oneLinerZh,
+          finalDecision?.decisionSummary?.headlineZh,
+        ),
     categoryLabel: pickPreferredText(
       analysis?.insightJson?.categoryDisplay?.label,
       formatSnapshotCategoryLabel(item),
       finalDecision?.decisionSummary?.categoryLabelZh,
       finalDecision?.categoryLabelZh,
     ),
-    targetUsers: pickPreferredTargetUsers(
-      finalDecision?.moneyDecision?.targetUsersZh,
-      finalDecision?.decisionSummary?.targetUsersZh,
-      analysis?.moneyPriority?.targetUsersZh,
-      analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
-      lightAnalysis?.targetUsers,
-      inferredTargetUsers,
-    ),
-    monetization: pickPreferredMonetization(
-      lightAnalysis?.monetization,
-      analysis?.extractedIdeaJson?.monetization,
-      analysis?.moneyPriority?.monetizationSummaryZh,
-      finalDecision?.moneyDecision?.monetizationSummaryZh,
-      finalDecision?.decisionSummary?.monetizationSummaryZh,
-    ),
-    reason: pickPreferredReason(
-      finalDecision?.decisionSummary?.reasonZh,
-      finalDecision?.reasonZh,
-      finalDecision?.moneyDecision?.reasonZh,
-      sanitizeReasonCopy(analysis?.ideaSnapshotJson?.reason),
-      analysis?.insightJson?.verdictReason,
-      analysis?.moneyPriority?.reasonZh,
-      sanitizeReasonCopy(lightAnalysis?.whyItMatters),
-      lightAnalysis?.nextStep,
-    ),
+    targetUsers: preferConservativeCopy
+      ? pickPreferredTargetUsers(
+          finalDecision?.decisionSummary?.targetUsersZh,
+          finalDecision?.moneyDecision?.targetUsersZh,
+          lightAnalysis?.targetUsers,
+          analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+          analysis?.moneyPriority?.targetUsersZh,
+          inferredTargetUsers,
+        )
+      : pickPreferredTargetUsers(
+          finalDecision?.moneyDecision?.targetUsersZh,
+          finalDecision?.decisionSummary?.targetUsersZh,
+          analysis?.moneyPriority?.targetUsersZh,
+          analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+          lightAnalysis?.targetUsers,
+          inferredTargetUsers,
+        ),
+    monetization: preferConservativeCopy
+      ? pickPreferredMonetization(
+          lightAnalysis?.monetization,
+          finalDecision?.moneyDecision?.monetizationSummaryZh,
+          finalDecision?.decisionSummary?.monetizationSummaryZh,
+          analysis?.moneyPriority?.monetizationSummaryZh,
+          analysis?.extractedIdeaJson?.monetization,
+        )
+      : pickPreferredMonetization(
+          lightAnalysis?.monetization,
+          analysis?.extractedIdeaJson?.monetization,
+          analysis?.moneyPriority?.monetizationSummaryZh,
+          finalDecision?.moneyDecision?.monetizationSummaryZh,
+          finalDecision?.decisionSummary?.monetizationSummaryZh,
+        ),
+    reason: preferConservativeCopy
+      ? pickPreferredReason(
+          sanitizeReasonCopy(analysis?.ideaSnapshotJson?.reason),
+          sanitizeReasonCopy(lightAnalysis?.whyItMatters),
+          sanitizeReasonCopy(lightAnalysis?.nextStep),
+          finalDecision?.decisionSummary?.reasonZh,
+          finalDecision?.reasonZh,
+          finalDecision?.moneyDecision?.reasonZh,
+          analysis?.insightJson?.verdictReason,
+          analysis?.moneyPriority?.reasonZh,
+        )
+      : pickPreferredReason(
+          finalDecision?.decisionSummary?.reasonZh,
+          finalDecision?.reasonZh,
+          finalDecision?.moneyDecision?.reasonZh,
+          sanitizeReasonCopy(analysis?.ideaSnapshotJson?.reason),
+          analysis?.insightJson?.verdictReason,
+          analysis?.moneyPriority?.reasonZh,
+          sanitizeReasonCopy(lightAnalysis?.whyItMatters),
+          lightAnalysis?.nextStep,
+        ),
   };
 }
 

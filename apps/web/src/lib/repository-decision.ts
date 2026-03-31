@@ -1657,6 +1657,22 @@ function isGenericSafeMonetizationLabel(label: string) {
   );
 }
 
+function pickSpecificTargetUsersText(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = cleanLocalizedDecisionText(value);
+
+    if (
+      normalized &&
+      !hasUnclearUserLabel(normalized) &&
+      !isGenericSafeTargetUsersLabel(normalized)
+    ) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
 function pickSpecificMonetizationText(...values: Array<unknown>) {
   for (const value of values) {
     const normalized = cleanLocalizedDecisionText(value);
@@ -2501,12 +2517,22 @@ export function getRepositoryFallbackIdeaAnalysis(
     validation.riskFlags.includes('category_mismatch') ||
     validation.riskFlags.includes('snapshot_conflict') ||
     validation.riskFlags.includes('fallback_overclaim');
-  const candidateTargetUsers = pickLocalizedText(
+  const specificCandidateTargetUsers = pickSpecificTargetUsersText(
+    repository.finalDecision?.moneyDecision?.targetUsersZh,
+    repository.finalDecision?.decisionSummary?.targetUsersZh,
     analysisState?.lightAnalysis?.targetUsers,
     repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
     repository.analysis?.moneyPriority?.targetUsersZh,
+    !hasUnclearUserLabel(summary.targetUsersLabel)
+      ? summary.targetUsersLabel
+      : null,
+  );
+  const candidateTargetUsers = pickLocalizedText(
+    analysisState?.lightAnalysis?.targetUsers,
     repository.finalDecision?.moneyDecision?.targetUsersZh,
     repository.finalDecision?.decisionSummary?.targetUsersZh,
+    repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+    repository.analysis?.moneyPriority?.targetUsersZh,
     !hasUnclearUserLabel(summary.targetUsersLabel)
       ? summary.targetUsersLabel
       : null,
@@ -2520,9 +2546,11 @@ export function getRepositoryFallbackIdeaAnalysis(
       : '';
   const safeCandidateTargetUsers =
     !shouldPreferDerivedTargetUsers &&
-    candidateTargetUsers &&
-    !isGenericSafeTargetUsersLabel(candidateTargetUsers)
-      ? candidateTargetUsers
+    (specificCandidateTargetUsers || candidateTargetUsers) &&
+    !isGenericSafeTargetUsersLabel(
+      specificCandidateTargetUsers || candidateTargetUsers,
+    )
+      ? specificCandidateTargetUsers || candidateTargetUsers
       : '';
   const targetUsers =
     preferredDisplayTargetUsers ||
@@ -2782,11 +2810,15 @@ export function getRepositoryDisplayTargetUsersLabel(
   const lightAnalysisTargetUsers = pickLocalizedText(
     repository.analysisState?.lightAnalysis?.targetUsers,
   );
+  const finalDecisionTargetUsers = pickLocalizedText(
+    repository.finalDecision?.decisionSummary?.targetUsersZh,
+    repository.finalDecision?.moneyDecision?.targetUsersZh,
+  );
   const extractedIdeaTargetUsers = pickLocalizedText(
     repository.analysis?.extractedIdeaJson?.targetUsers?.find(Boolean),
+  );
+  const moneyPriorityTargetUsers = pickLocalizedText(
     repository.analysis?.moneyPriority?.targetUsersZh,
-    repository.finalDecision?.moneyDecision?.targetUsersZh,
-    repository.finalDecision?.decisionSummary?.targetUsersZh,
   );
   const inferredTargetUsers =
     inferTargetUsersFromHeadline(
@@ -2801,6 +2833,13 @@ export function getRepositoryDisplayTargetUsersLabel(
     ) ||
     inferRepositoryTargetUsersFromMetadata(repository, summary) ||
     null;
+  const specificFallbackTargetUsers = pickSpecificTargetUsersText(
+    finalDecisionTargetUsers,
+    lightAnalysisTargetUsers,
+    extractedIdeaTargetUsers,
+    moneyPriorityTargetUsers,
+    inferredTargetUsers,
+  );
 
   if (
     !raw ||
@@ -2826,20 +2865,35 @@ export function getRepositoryDisplayTargetUsersLabel(
       return snapshotLedTargetUsers;
     }
 
-    if (lightAnalysisTargetUsers && !hasUnclearUserLabel(lightAnalysisTargetUsers)) {
+    if (specificFallbackTargetUsers) {
+      return specificFallbackTargetUsers;
+    }
+
+    if (
+      lightAnalysisTargetUsers &&
+      !hasUnclearUserLabel(lightAnalysisTargetUsers)
+    ) {
       return !isGenericSafeTargetUsersLabel(lightAnalysisTargetUsers)
         ? lightAnalysisTargetUsers
         : inferredTargetUsers ?? lightAnalysisTargetUsers;
     }
 
-    if (extractedIdeaTargetUsers && !hasUnclearUserLabel(extractedIdeaTargetUsers)) {
-      return !isGenericSafeTargetUsersLabel(extractedIdeaTargetUsers)
-        ? extractedIdeaTargetUsers
-        : inferredTargetUsers ?? extractedIdeaTargetUsers;
-    }
-
     if (inferredTargetUsers && !hasUnclearUserLabel(inferredTargetUsers)) {
       return inferredTargetUsers;
+    }
+
+    const genericFallbackTargetUsers = [
+      finalDecisionTargetUsers,
+      lightAnalysisTargetUsers,
+      extractedIdeaTargetUsers,
+      moneyPriorityTargetUsers,
+    ].find(
+      (value): value is string =>
+        Boolean(value) && !hasUnclearUserLabel(value),
+    );
+
+    if (genericFallbackTargetUsers) {
+      return genericFallbackTargetUsers;
     }
 
     return shouldDegradeHomepageHeadline(repository, summary)

@@ -158,3 +158,64 @@ test('normalizeRepositoryItem extracts concise target users from subject-led sna
   assert.equal(normalized.finalDecision?.moneyDecision.targetUsersZh, '博彩运营方');
   assert.equal(normalized.finalDecision?.decisionSummary.targetUsersZh, '博彩运营方');
 });
+
+test('normalizeRepositoryItem prefers snapshot headline and reason for degraded repositories with repetitive drift copy', () => {
+  const repository = createRepositoryFixture({
+    analysis: {
+      ideaSnapshotJson: {
+        oneLinerZh:
+          '面向 AP 计算机原理课程的师生，提供按主题解锁和进度追踪的在线测验练习平台',
+        reason:
+          '代码量极少，当前更像课程练习系统，缺乏可商业化扩展的通用工具属性。',
+      },
+      insightJson: {
+        oneLinerZh: '一个用于记录 token 与成本明细的 CLI 工具，主要面向开发者',
+        verdictReason: '这是个典型工具型机会，问题明确，也有机会很快包装成收费产品。',
+      },
+    },
+    analysisState: {
+      displayStatus: 'UNSAFE',
+      frontendDecisionState: 'degraded',
+      trustedDisplayReady: false,
+      highConfidenceReady: false,
+      lightAnalysis: {
+        targetUsers: '开发者和小团队',
+        monetization: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+        whyItMatters: '冲突集中在 user / monetization',
+        nextStep: '先重算，再决定要不要继续推进。',
+        source: 'snapshot',
+      },
+    },
+    finalDecision: {
+      oneLinerZh: '一个用于记录 token 与成本明细的 CLI 工具，主要面向开发者',
+      reasonZh: '这是个典型工具型机会，问题明确，也有机会很快包装成收费产品。',
+      moneyDecision: {
+        targetUsersZh: '开发者和小团队',
+        monetizationSummaryZh: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+        reasonZh: '这是个典型工具型机会，问题明确，也有机会很快包装成收费产品。',
+      },
+      decisionSummary: {
+        headlineZh: '一个用于记录 token 与成本明细的 CLI 工具，主要面向开发者',
+        targetUsersZh: '开发者和小团队',
+        monetizationSummaryZh: '收费路径暂时不够清楚，先用访谈或试运行确认是否有人愿意为它付费。',
+        reasonZh: '这是个典型工具型机会，问题明确，也有机会很快包装成收费产品。',
+      },
+    },
+  });
+
+  const normalized = normalizeRepositoryItem(repository);
+
+  assert.equal(
+    normalized.finalDecision?.decisionSummary.headlineZh,
+    '面向 AP 计算机原理课程的师生，提供按主题解锁和进度追踪的在线测验练习平台',
+  );
+  assert.equal(
+    normalized.finalDecision?.decisionSummary.reasonZh,
+    '代码量极少，当前更像课程练习系统，缺乏可商业化扩展的通用工具属性。',
+  );
+  assert.equal(normalized.finalDecision?.decisionSummary.targetUsersZh, '师生');
+  assert.doesNotMatch(
+    normalized.finalDecision?.decisionSummary.headlineZh ?? '',
+    /token|CLI 工具/,
+  );
+});
