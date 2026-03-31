@@ -98,6 +98,9 @@ const HISTORICAL_REPAIR_CONCURRENCY_MAX = 32;
 const HISTORICAL_REPAIR_LOW_YIELD_CONSECUTIVE_THRESHOLD = 3;
 const HISTORICAL_REPAIR_RECENT_OUTCOME_HISTORY_LIMIT = 6;
 const HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD = 0.05;
+const HISTORICAL_REPAIR_RECENT_SNAPSHOT_REPLAY_COOLDOWN_MS = 30 * 60 * 1000;
+const HISTORICAL_REPAIR_DOWNGRADE_ONLY_BUDGET_RATIO = 0.1;
+const HISTORICAL_REPAIR_DOWNGRADE_ONLY_BUDGET_MAX = 200;
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_ENV_NAME =
   'HISTORICAL_REPAIR_GLOBAL_CONCURRENCY';
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_FALLBACK = 20;
@@ -105,13 +108,6 @@ const HISTORICAL_REPAIR_PRIORITY_PREFILTER_BUCKETS = new Set([
   'visible_broken',
   'high_value_weak',
 ]);
-const HISTORICAL_REPAIR_PRIORITY_VISIBILITY_LEVELS = new Set([
-  'HOME',
-  'FAVORITES',
-  'DAILY_SUMMARY',
-  'TELEGRAM',
-]);
-const HISTORICAL_REPAIR_PRIORITY_MONEY_PRIORITIES = new Set(['P0', 'P1']);
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CHUNK_SIZE = 100;
 const HISTORICAL_REPAIR_DEEP_LOOKUP_CONCURRENCY = 2;
 const HISTORICAL_RECOVERY_SCAN_BATCH_SIZE = 200;
@@ -869,16 +865,16 @@ export class HistoricalDataRecoveryService {
         (left, right) =>
           right.historicalRepairPriorityScore - left.historicalRepairPriorityScore,
       );
-    const selected =
+    const selectionLimit =
       typeof options?.limit === 'number' && options.limit > 0
-        ? filtered.slice(0, options.limit)
-        : filtered;
-    const rawDispatchPlans = this.buildHistoricalRepairDispatchPlans(
-      selected,
+        ? options.limit
+        : filtered.length;
+    const candidateDispatchPlans = this.buildHistoricalRepairDispatchPlans(
+      filtered,
       decisionRecalcGateMap,
     );
     const recentOutcomeIndex =
-      !hasExplicitRepositoryIds && rawDispatchPlans.length > 0
+      !hasExplicitRepositoryIds && candidateDispatchPlans.length > 0
         ? await this.loadHistoricalRepairRecentOutcomeIndex()
         : new Map<string, HistoricalRepairRecentOutcomeRecord[]>();
     const {
@@ -886,13 +882,15 @@ export class HistoricalDataRecoveryService {
       suppressedOutcomes: lowYieldSuppressedOutcomes,
     } = hasExplicitRepositoryIds
       ? {
-          allowedPlans: rawDispatchPlans,
+          allowedPlans: candidateDispatchPlans.slice(0, selectionLimit),
           suppressedOutcomes: [] as HistoricalRepairDispatchOutcome[],
         }
       : this.applyHistoricalRepairLowYieldSuppression({
-          plans: rawDispatchPlans,
+          plans: candidateDispatchPlans,
           recentOutcomeIndex,
+          limit: selectionLimit,
         });
+    const selected = dispatchPlans.map((plan) => plan.item);
     const grouped = this.groupHistoricalRepairActions(dispatchPlans);
     const suppressedPlans = this.buildHistoricalRepairDispatchPlans(
       report.items
@@ -2153,8 +2151,36 @@ export class HistoricalDataRecoveryService {
         HistoricalRepairDispatchPlan,
         HistoricalRepairDispatchOutcome
       >(filtered.skippedOutcomeMap);
+      const directSinglePlans = filtered.allowedPlans.filter((plan) =>
+        this.shouldPromoteHistoricalSnapshotPlanToDirectSingleAnalysis(plan),
+      );
+      const snapshotPlans = filtered.allowedPlans.filter(
+        (plan) =>
+          !this.shouldPromoteHistoricalSnapshotPlanToDirectSingleAnalysis(plan),
+      );
+
+      if (directSinglePlans.length) {
+        const directSingleOutcomes =
+          await this.enqueueHistoricalSnapshotPromotedSingleAnalysisBatch({
+            lane: args.lane,
+            plans: directSinglePlans,
+            telemetry,
+            executionUsedFallback: args.executionUsedFallback,
+          });
+
+        for (const outcome of directSingleOutcomes) {
+          outcomeMap.set(outcome.plan, outcome);
+        }
+      }
+
+      if (!snapshotPlans.length) {
+        return args.plans
+          .map((plan) => outcomeMap.get(plan) ?? null)
+          .filter(Boolean) as HistoricalRepairDispatchOutcome[];
+      }
+
       const planBatches = this.chunkItems(
-        filtered.allowedPlans,
+        snapshotPlans,
         HISTORICAL_REPAIR_SNAPSHOT_BULK_BATCH_SIZE,
       );
 
@@ -2295,17 +2321,49 @@ export class HistoricalDataRecoveryService {
     plan: HistoricalRepairDispatchPlan,
     windowDate: string,
   ) {
+    const runDeepAnalysis =
+      this.shouldEnableHistoricalSnapshotDeepAnalysis(plan);
+
     return {
       repositoryId: plan.item.repoId,
       windowDate,
       fromBackfill: true,
       runFastFilter: false,
-      runDeepAnalysis: false,
+      runDeepAnalysis,
+      forceDeepAnalysis: runDeepAnalysis,
+      deepAnalysisOnlyIfPromising: runDeepAnalysis
+        ? this.shouldKeepHistoricalSnapshotPromisingGate(plan)
+        : undefined,
       historicalRepairLane: plan.item.historicalRepairBucket,
       historicalRepairAction: plan.item.historicalRepairAction,
       historicalRepairPriorityScore: plan.item.historicalRepairPriorityScore,
       ...plan.routerMetadata,
     };
+  }
+
+  private shouldEnableHistoricalSnapshotDeepAnalysis(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    const item = plan.item;
+    return (
+      item.historicalRepairBucket === 'visible_broken' ||
+      item.historicalRepairBucket === 'high_value_weak' ||
+      item.needsImmediateFrontendDowngrade === true ||
+      item.historicalTrustedButWeak === true ||
+      item.isVisibleOnHome === true ||
+      item.isVisibleOnFavorites === true ||
+      item.appearedInDailySummary === true ||
+      item.appearedInTelegram === true ||
+      item.repositoryValueTier === 'HIGH' ||
+      item.moneyPriority === 'P0' ||
+      item.moneyPriority === 'P1'
+    );
+  }
+
+  private shouldKeepHistoricalSnapshotPromisingGate(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    return !this.shouldEnableHistoricalSnapshotDeepAnalysis(plan);
   }
 
   private buildHistoricalSnapshotBulkEntry(
@@ -2321,6 +2379,218 @@ export class HistoricalDataRecoveryService {
         ),
       },
     };
+  }
+
+  private shouldPromoteHistoricalSnapshotPlanToDirectSingleAnalysis(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    const item = plan.item;
+
+    if (
+      item.historicalRepairAction !== 'refresh_only' &&
+      item.historicalRepairAction !== 'evidence_repair'
+    ) {
+      return false;
+    }
+
+    if (item.historicalRepairBucket !== 'high_value_weak') {
+      return false;
+    }
+
+    if (
+      plan.routerDecision.allowsDeterministicFallback ||
+      plan.routerDecision.fallbackPolicy === 'DETERMINISTIC_ONLY' ||
+      plan.routerDecision.fallbackPolicy === 'LIGHT_DERIVATION' ||
+      plan.routerDecision.capabilityTier === 'LIGHT'
+    ) {
+      return false;
+    }
+
+    return (
+      item.historicalTrustedButWeak === true ||
+      item.needsImmediateFrontendDowngrade === true ||
+      item.isVisibleOnHome === true ||
+      item.isVisibleOnFavorites === true ||
+      item.appearedInDailySummary === true ||
+      item.appearedInTelegram === true ||
+      item.repositoryValueTier === 'HIGH' ||
+      item.moneyPriority === 'P0' ||
+      item.moneyPriority === 'P1'
+    );
+  }
+
+  private buildHistoricalSnapshotPromotedSingleAnalysisQueueInput(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    const item = plan.item;
+    return {
+      repositoryId: item.repoId,
+      dto: {
+        runFastFilter: false,
+        runCompleteness: true,
+        runIdeaFit: true,
+        runIdeaExtract: true,
+        forceRerun: true,
+        userPreferencePriorityBoost: this.toPriorityBoost(
+          item.historicalRepairPriorityScore,
+          plan.routerDecision.routerPriorityClass,
+          plan.routerDecision.requiresReview,
+        ),
+        userPreferencePriorityReasons: [
+          `historical_repair:${item.historicalRepairBucket}`,
+          `historical_action:${item.historicalRepairAction}`,
+          'historical_snapshot_promoted_to_single_analysis',
+          `router_tier:${plan.routerDecision.capabilityTier}`,
+          `router_priority:${plan.routerDecision.routerPriorityClass}`,
+        ],
+      } satisfies RunAnalysisDto,
+      options: {
+        metadata: {
+          historicalRepairLane: item.historicalRepairBucket,
+          historicalRepairAction: item.historicalRepairAction,
+          historicalRepairPriorityScore: item.historicalRepairPriorityScore,
+          historicalRepairEscalatedFromSnapshot: true,
+          ...plan.routerMetadata,
+        },
+        jobOptionsOverride: {
+          priority: this.toSingleAnalysisQueuePriority(
+            item.historicalRepairAction,
+            item.historicalRepairPriorityScore,
+            plan.routerDecision.routerPriorityClass,
+          ),
+        },
+      },
+    };
+  }
+
+  private async enqueueHistoricalSnapshotPromotedSingleAnalysisBatch(args: {
+    lane: 'refresh_only' | 'evidence_repair';
+    plans: HistoricalRepairDispatchPlan[];
+    telemetry: HistoricalRepairLaneTelemetry;
+    executionUsedFallback: (
+      plan: HistoricalRepairDispatchPlan,
+    ) => boolean | undefined;
+  }) {
+    if (!args.plans.length) {
+      return [];
+    }
+
+    const bulkQueueService = this.queueService as QueueService & {
+      enqueueSingleAnalysesBulk?: QueueService['enqueueSingleAnalysesBulk'];
+    };
+    const concurrency = this.resolveHistoricalRepairLaneConcurrency(
+      args.lane,
+      args.plans.length,
+    );
+    const outcomeMap = new Map<
+      HistoricalRepairDispatchPlan,
+      HistoricalRepairDispatchOutcome
+    >();
+    const planBatches = this.chunkItems(
+      args.plans,
+      HISTORICAL_REPAIR_SINGLE_ANALYSIS_BULK_BATCH_SIZE,
+    );
+
+    for (const planBatch of planBatches) {
+      if (typeof bulkQueueService.enqueueSingleAnalysesBulk === 'function') {
+        args.telemetry.bulkBatchCount += 1;
+        const bulkStartedAt = Date.now();
+
+        try {
+          await this.runWithinHistoricalRepairGlobalGate({
+            telemetry: args.telemetry,
+            handler: () =>
+              bulkQueueService.enqueueSingleAnalysesBulk!(
+                planBatch.map((plan) => {
+                  const queueInput =
+                    this.buildHistoricalSnapshotPromotedSingleAnalysisQueueInput(
+                      plan,
+                    );
+                  return {
+                    repositoryId: queueInput.repositoryId,
+                    dto: queueInput.dto,
+                    metadata: queueInput.options.metadata,
+                    jobOptionsOverride: queueInput.options.jobOptionsOverride,
+                  };
+                }),
+                'historical_repair',
+              ),
+          });
+          const durationMs = Date.now() - bulkStartedAt;
+          for (const plan of planBatch) {
+            outcomeMap.set(plan, {
+              plan,
+              outcomeStatus: 'partial',
+              outcomeReason:
+                args.lane === 'refresh_only'
+                  ? 'queued_refresh_only_execution'
+                  : 'queued_evidence_repair_execution',
+              executionDurationMs: durationMs,
+              executionUsedFallback: args.executionUsedFallback(plan),
+              executionUsedReview: plan.routerDecision.requiresReview,
+            });
+          }
+          continue;
+        } catch (error) {
+          args.telemetry.bulkFallbackCount += 1;
+          this.logger.warn(
+            `historical_repair bulk promoted single-analysis lane failed lane=${args.lane} batchSize=${planBatch.length} reason=${this.readErrorMessage(error) || 'unknown'} fallback=single_enqueue`,
+          );
+        }
+      }
+
+      const fallbackOutcomes = await runWithConcurrency<
+        HistoricalRepairDispatchPlan,
+        HistoricalRepairDispatchOutcome
+      >(planBatch, concurrency, async (plan) => {
+        const startedAt = Date.now();
+        const queueInput =
+          this.buildHistoricalSnapshotPromotedSingleAnalysisQueueInput(plan);
+
+        try {
+          await this.runWithinHistoricalRepairGlobalGate({
+            telemetry: args.telemetry,
+            handler: () =>
+              this.queueService.enqueueSingleAnalysis(
+                queueInput.repositoryId,
+                queueInput.dto,
+                'historical_repair',
+                queueInput.options,
+              ),
+          });
+          return {
+            plan,
+            outcomeStatus: 'partial',
+            outcomeReason:
+              args.lane === 'refresh_only'
+                ? 'queued_refresh_only_execution'
+                : 'queued_evidence_repair_execution',
+            executionDurationMs: Date.now() - startedAt,
+            executionUsedFallback: args.executionUsedFallback(plan),
+            executionUsedReview: plan.routerDecision.requiresReview,
+          };
+        } catch (error) {
+          return this.buildHistoricalRepairDispatchFailureOutcome({
+            plan,
+            lane: args.lane,
+            fallbackReason:
+              args.lane === 'refresh_only'
+                ? 'refresh_enqueue_failed'
+                : 'evidence_repair_enqueue_failed',
+            startedAt,
+            error,
+          });
+        }
+      });
+
+      for (const outcome of fallbackOutcomes) {
+        outcomeMap.set(outcome.plan, outcome);
+      }
+    }
+
+    return args.plans
+      .map((plan) => outcomeMap.get(plan) ?? null)
+      .filter(Boolean) as HistoricalRepairDispatchOutcome[];
   }
 
   private buildHistoricalDecisionRecalcQueueInput(
@@ -3063,17 +3333,47 @@ export class HistoricalDataRecoveryService {
   private applyHistoricalRepairLowYieldSuppression(args: {
     plans: HistoricalRepairDispatchPlan[];
     recentOutcomeIndex: HistoricalRepairRecentOutcomeIndex;
+    limit?: number;
   }) {
     const allowedPlans: HistoricalRepairDispatchPlan[] = [];
     const suppressedOutcomes: HistoricalRepairDispatchOutcome[] = [];
+    const allowedLimit =
+      typeof args.limit === 'number' && args.limit > 0 ? args.limit : null;
+    const downgradeOnlyBudget = this.resolveHistoricalRepairDowngradeOnlyBudget(
+      allowedLimit,
+    );
+    let queueBearingAllowedCount = 0;
+    let downgradeOnlyAllowedCount = 0;
 
     for (const plan of args.plans) {
+      const countsAgainstSelectionLimit =
+        this.shouldCountHistoricalRepairPlanAgainstSelectionLimit(plan);
+      if (
+        allowedLimit !== null &&
+        countsAgainstSelectionLimit &&
+        queueBearingAllowedCount >= allowedLimit
+      ) {
+        break;
+      }
+      if (
+        !countsAgainstSelectionLimit &&
+        downgradeOnlyBudget !== null &&
+        downgradeOnlyAllowedCount >= downgradeOnlyBudget
+      ) {
+        continue;
+      }
+
       const suppression = this.shouldSuppressHistoricalRepairPlanForLowYield({
         plan,
         recentOutcomeIndex: args.recentOutcomeIndex,
       });
       if (!suppression.suppressed) {
         allowedPlans.push(plan);
+        if (countsAgainstSelectionLimit) {
+          queueBearingAllowedCount += 1;
+        } else {
+          downgradeOnlyAllowedCount += 1;
+        }
         continue;
       }
 
@@ -3094,6 +3394,26 @@ export class HistoricalDataRecoveryService {
     };
   }
 
+  private shouldCountHistoricalRepairPlanAgainstSelectionLimit(
+    plan: HistoricalRepairDispatchPlan,
+  ) {
+    return plan.item.historicalRepairAction !== 'downgrade_only';
+  }
+
+  private resolveHistoricalRepairDowngradeOnlyBudget(allowedLimit: number | null) {
+    if (allowedLimit === null) {
+      return null;
+    }
+
+    return Math.min(
+      HISTORICAL_REPAIR_DOWNGRADE_ONLY_BUDGET_MAX,
+      Math.max(
+        1,
+        Math.ceil(allowedLimit * HISTORICAL_REPAIR_DOWNGRADE_ONLY_BUDGET_RATIO),
+      ),
+    );
+  }
+
   private shouldSuppressHistoricalRepairPlanForLowYield(args: {
     plan: HistoricalRepairDispatchPlan;
     recentOutcomeIndex: HistoricalRepairRecentOutcomeIndex;
@@ -3108,6 +3428,15 @@ export class HistoricalDataRecoveryService {
 
     const recentOutcomes =
       args.recentOutcomeIndex.get(args.plan.item.repoId) ?? [];
+    const recentSnapshotReplaySuppression =
+      this.shouldSuppressHistoricalRepairPlanForRecentSnapshotReplay({
+        plan: args.plan,
+        recentOutcomes,
+      });
+    if (recentSnapshotReplaySuppression.suppressed) {
+      return recentSnapshotReplaySuppression;
+    }
+
     if (
       recentOutcomes.length < HISTORICAL_REPAIR_LOW_YIELD_CONSECUTIVE_THRESHOLD
     ) {
@@ -3152,12 +3481,127 @@ export class HistoricalDataRecoveryService {
         };
   }
 
+  private shouldSuppressHistoricalRepairPlanForRecentSnapshotReplay(args: {
+    plan: HistoricalRepairDispatchPlan;
+    recentOutcomes: HistoricalRepairRecentOutcomeRecord[];
+  }): HistoricalRepairLowYieldSuppression {
+    const item = args.plan.item;
+    const snapshotAction = item.historicalRepairAction;
+    if (
+      snapshotAction !== 'refresh_only' &&
+      snapshotAction !== 'evidence_repair'
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    const latest =
+      args.recentOutcomes.find((record) => {
+        if (
+          record.historicalRepairAction !== item.historicalRepairAction ||
+          record.historicalRepairBucket !== item.historicalRepairBucket
+        ) {
+          return false;
+        }
+
+        if (record.outcomeReason === 'recent_snapshot_replay_cooldown') {
+          return true;
+        }
+
+        return (
+          record.outcomeStatus === 'partial' &&
+          record.outcomeReason ===
+            this.toHistoricalRepairQueuedSnapshotOutcomeReason(
+              snapshotAction,
+            )
+        );
+      }) ?? null;
+    if (!latest) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (
+      latest.outcomeReason !== 'recent_snapshot_replay_cooldown' &&
+      (latest.outcomeStatus !== 'partial' ||
+        latest.outcomeReason !==
+          this.toHistoricalRepairQueuedSnapshotOutcomeReason(snapshotAction))
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    const loggedAtMs = Date.parse(latest.loggedAt);
+    if (!Number.isFinite(loggedAtMs)) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (
+      Date.now() - loggedAtMs >
+      HISTORICAL_REPAIR_RECENT_SNAPSHOT_REPLAY_COOLDOWN_MS
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (latest.decisionStateBefore !== item.frontendDecisionState) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (
+      !this.areStringArraysEqual(latest.keyEvidenceGapsBefore, item.keyEvidenceGaps) ||
+      !this.areStringArraysEqual(
+        latest.trustedBlockingGapsBefore,
+        item.trustedBlockingGaps,
+      ) ||
+      Math.abs(latest.evidenceCoverageRateBefore - item.evidenceCoverageRate) >=
+        HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    return {
+      suppressed: true,
+      reason: 'recent_snapshot_replay_cooldown',
+    };
+  }
+
   private hasHistoricalRepairPrioritySignal(args: {
     plan: HistoricalRepairDispatchPlan;
     recentOutcomes: HistoricalRepairRecentOutcomeRecord[];
   }) {
     const item = args.plan.item;
     const latest = args.recentOutcomes[0] ?? null;
+
+    // Stable decision_recalc replays with unchanged structured input should not
+    // bypass low-yield suppression forever, even for user-visible/high-priority
+    // repos. We keep the conservative frontend downgrade, but stop spending
+    // repeated review-budget until the fingerprint changes again.
+    if (
+      item.historicalRepairAction === 'decision_recalc' &&
+      args.plan.recalcGate?.recalcGateDecision ===
+        'allow_recalc_but_expect_no_change' &&
+      !args.plan.recalcGate.recalcSignalChanged
+    ) {
+      return false;
+    }
 
     if (
       item.needsImmediateFrontendDowngrade ||
@@ -3168,8 +3612,7 @@ export class HistoricalDataRecoveryService {
       item.isVisibleOnFavorites ||
       item.appearedInDailySummary ||
       item.appearedInTelegram ||
-      item.historicalRepairBucket === 'visible_broken' ||
-      this.isHighPriorityHistoricalRepairReplayCandidate(args.plan)
+      item.historicalRepairBucket === 'visible_broken'
     ) {
       return true;
     }
@@ -3213,42 +3656,6 @@ export class HistoricalDataRecoveryService {
     );
   }
 
-  private isHighPriorityHistoricalRepairReplayCandidate(
-    plan: Pick<HistoricalRepairDispatchPlan, 'item' | 'recalcGate'>,
-  ) {
-    const item = plan.item;
-
-    if (item.historicalRepairBucket !== 'high_value_weak') {
-      return false;
-    }
-
-    if (
-      item.historicalRepairAction !== 'decision_recalc' ||
-      plan.recalcGate?.recalcGateDecision !==
-        'allow_recalc_but_expect_no_change' ||
-      plan.recalcGate.recalcSignalChanged
-    ) {
-      return false;
-    }
-
-    if (item.repositoryValueTier === 'HIGH') {
-      return true;
-    }
-
-    return Boolean(
-      HISTORICAL_REPAIR_PRIORITY_MONEY_PRIORITIES.has(
-        item.moneyPriority ?? '',
-      ) ||
-        HISTORICAL_REPAIR_PRIORITY_VISIBILITY_LEVELS.has(
-          item.strictVisibilityLevel,
-        ) ||
-        item.isVisibleOnHome ||
-        item.isVisibleOnFavorites ||
-        item.appearedInDailySummary ||
-        item.appearedInTelegram,
-    );
-  }
-
   private isHistoricalRepairLowYieldRecentOutcome(
     record: HistoricalRepairRecentOutcomeRecord,
     treatQueuedEvidenceRepairAsLowYield = false,
@@ -3259,6 +3666,7 @@ export class HistoricalDataRecoveryService {
         record.historicalRepairAction === 'evidence_repair' &&
         record.outcomeStatus === 'partial' &&
         record.outcomeReason === 'queued_evidence_repair_execution') ||
+      record.outcomeReason === 'recent_snapshot_replay_cooldown' ||
       record.outcomeReason ===
         'low_yield_suppressed_consecutive_low_value_outcomes' ||
       record.outcomeReason === 'deep_targets_already_present' ||
@@ -3770,7 +4178,18 @@ export class HistoricalDataRecoveryService {
   }
 
   private isHistoricalRepairLowYieldOutcomeReason(reason: string) {
-    return reason === 'low_yield_suppressed_consecutive_low_value_outcomes';
+    return (
+      reason === 'low_yield_suppressed_consecutive_low_value_outcomes' ||
+      reason === 'recent_snapshot_replay_cooldown'
+    );
+  }
+
+  private toHistoricalRepairQueuedSnapshotOutcomeReason(
+    action: 'refresh_only' | 'evidence_repair',
+  ) {
+    return action === 'refresh_only'
+      ? 'queued_refresh_only_execution'
+      : 'queued_evidence_repair_execution';
   }
 
   private async saveSystemConfig(configKey: string, value: unknown) {

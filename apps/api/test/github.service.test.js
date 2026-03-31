@@ -39,8 +39,17 @@ function buildService(overrides = {}) {
     },
     {},
     {},
-    {
+    overrides.ideaSnapshotService ?? {
       readIdeaSnapshot: () => null,
+      analyzeRepository: async () => ({
+        oneLinerZh: '',
+        isPromising: false,
+        reason: '',
+        category: null,
+        toolLike: false,
+        nextAction: 'SKIP',
+        action: 'skipped',
+      }),
     },
     {},
     {},
@@ -82,6 +91,48 @@ function installQueueRepositoryCandidatesStubs(service, overrides = {}) {
   service.recordDeepSupplyStats =
     overrides.recordDeepSupplyStats ?? (async () => {});
 }
+
+test('processIdeaSnapshotQueueJob forceDeepAnalysis bypasses refresh gating for historical repair snapshots', async () => {
+  const service = buildService({
+    prisma: {
+      repository: {
+        findMany: async () => [],
+        findUnique: async () => createRepository('repo-force-deep'),
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+    },
+    ideaSnapshotService: {
+      analyzeRepository: async () => ({
+        oneLinerZh: '一个正在补全分析的高价值开发者工具',
+        isPromising: false,
+        reason: 'snapshot says skip',
+        category: null,
+        toolLike: false,
+        nextAction: 'SKIP',
+        action: 'skipped',
+      }),
+    },
+  });
+
+  service.shouldRefreshDeepAnalysis = () => false;
+  service.shouldDeepAnalyzeRepository = () => false;
+  service.hasActiveRepositoryJob = async () => false;
+
+  const result = await service.processIdeaSnapshotQueueJob({
+    repositoryId: 'repo-force-deep',
+    windowDate: '2026-03-31',
+    runFastFilter: false,
+    runDeepAnalysis: true,
+    forceDeepAnalysis: true,
+    deepAnalysisOnlyIfPromising: false,
+  });
+
+  assert.equal(result.deepAnalysis.shouldQueue, true);
+  assert.equal(result.deepAnalysis.runFastFilter, false);
+  assert.equal(result.snapshot.nextAction, 'SKIP');
+});
 
 test('queueRepositoryCandidates batches active-job lookup and bulk deep enqueue', async () => {
   const jobFindManyCalls = [];

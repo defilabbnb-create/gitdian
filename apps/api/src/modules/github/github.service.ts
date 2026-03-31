@@ -1650,17 +1650,22 @@ export class GitHubService {
       QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
       payload.repositoryId,
     );
+    const forceDeepAnalysis = payload.forceDeepAnalysis === true;
     const shouldQueueDeepAnalysis =
       repository &&
       !hasActiveDeepJob &&
-      this.shouldRefreshDeepAnalysis(repository) &&
-      this.shouldDeepAnalyzeRepository({
-        repository,
-        snapshot,
-        runDeepAnalysis: payload.runDeepAnalysis ?? true,
-        deepAnalysisOnlyIfPromising: payload.deepAnalysisOnlyIfPromising ?? true,
-        targetCategories: this.normalizeTargetCategories(payload.targetCategories),
-      });
+      (forceDeepAnalysis ||
+        (this.shouldRefreshDeepAnalysis(repository) &&
+          this.shouldDeepAnalyzeRepository({
+            repository,
+            snapshot,
+            runDeepAnalysis: payload.runDeepAnalysis ?? true,
+            deepAnalysisOnlyIfPromising:
+              payload.deepAnalysisOnlyIfPromising ?? true,
+            targetCategories: this.normalizeTargetCategories(
+              payload.targetCategories,
+            ),
+          })));
 
     return {
       repositoryId: payload.repositoryId,

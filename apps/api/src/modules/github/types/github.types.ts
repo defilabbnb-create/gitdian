@@ -89,6 +89,7 @@ export type GitHubIdeaSnapshotJobPayload = {
   fromBackfill?: boolean;
   runFastFilter?: boolean;
   runDeepAnalysis?: boolean;
+  forceDeepAnalysis?: boolean;
   deepAnalysisOnlyIfPromising?: boolean;
   targetCategories?: string[];
   rootJobId?: string | null;
