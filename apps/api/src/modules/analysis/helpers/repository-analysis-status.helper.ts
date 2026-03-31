@@ -148,6 +148,7 @@ type AnalysisStatusInput = {
     | 'FAILED'
     | null;
   deepAnalysisStatusReason?: string | null;
+  reviewRuntimeRetired?: boolean | null;
 };
 
 const UNCLEAR_USER_PATTERN =
@@ -251,7 +252,8 @@ export function deriveRepositoryAnalysisState(
       input.moneyPriority === 'P0' ||
       input.moneyPriority === 'P1',
   );
-  const reviewReady = !reviewEligible || hasClaudeReview;
+  const reviewRequired = reviewEligible && input.reviewRuntimeRetired !== true;
+  const reviewReady = !reviewRequired || hasClaudeReview;
 
   const severeSignalMismatch = Boolean(
     (input.action === 'BUILD' &&
@@ -306,7 +308,7 @@ export function deriveRepositoryAnalysisState(
     hasInsight,
     hasFinalDecision,
     fullDeepReady,
-    reviewEligible,
+    reviewRequired,
     hasClaudeReview,
     fallbackVisible,
     hasConflict,
@@ -321,7 +323,7 @@ export function deriveRepositoryAnalysisState(
       hasInsight,
       hasFinalDecision,
       fullDeepReady,
-      reviewEligible,
+      reviewRequired,
       hasClaudeReview,
       fallbackVisible,
     });
@@ -394,7 +396,7 @@ function resolveAnalysisStatus(
     hasInsight: boolean;
     hasFinalDecision: boolean;
     fullDeepReady: boolean;
-    reviewEligible: boolean;
+    reviewRequired: boolean;
     hasClaudeReview: boolean;
     fallbackVisible: boolean;
   },
@@ -415,7 +417,7 @@ function resolveAnalysisStatus(
     return 'INSIGHT_READY';
   }
 
-  if (input.fullDeepReady && input.reviewEligible && !input.hasClaudeReview) {
+  if (input.fullDeepReady && input.reviewRequired && !input.hasClaudeReview) {
     return 'REVIEW_PENDING';
   }
 
@@ -479,7 +481,7 @@ function deriveIncompleteReasons(
     hasInsight: boolean;
     hasFinalDecision: boolean;
     fullDeepReady: boolean;
-    reviewEligible: boolean;
+    reviewRequired: boolean;
     hasClaudeReview: boolean;
     fallbackVisible: boolean;
     hasConflict: boolean;
@@ -526,7 +528,7 @@ function deriveIncompleteReasons(
     }
   }
 
-  if (input.fullDeepReady && input.reviewEligible && !input.hasClaudeReview) {
+  if (input.fullDeepReady && input.reviewRequired && !input.hasClaudeReview) {
     reasons.push('NO_CLAUDE_REVIEW');
   }
 

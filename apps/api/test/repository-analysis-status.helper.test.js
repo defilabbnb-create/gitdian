@@ -212,3 +212,34 @@ test('weak taxonomy gaps block trusted output even when deep is complete', () =>
   assert.equal(state.displayStatus, 'BASIC_READY');
   assert.equal(state.frontendDecisionState, 'provisional');
 });
+
+test('does not keep review pending when review runtime is retired', () => {
+  const state = deriveRepositoryAnalysisState({
+    source: 'local',
+    action: 'BUILD',
+    moneyPriority: 'P1',
+    hasSnapshot: true,
+    hasInsight: true,
+    hasFinalDecision: true,
+    hasIdeaFit: true,
+    hasIdeaExtract: true,
+    hasCompleteness: true,
+    hasClaudeReview: false,
+    hasRealUser: true,
+    hasClearUseCase: true,
+    isDirectlyMonetizable: true,
+    oneLinerStrength: 'STRONG',
+    evidenceCoverageRate: 0.83,
+    keyEvidenceMissingCount: 0,
+    keyEvidenceWeakCount: 0,
+    keyEvidenceConflictCount: 0,
+    reviewRuntimeRetired: true,
+  });
+
+  assert.equal(state.analysisStatus, 'DEEP_DONE');
+  assert.equal(state.displayStatus, 'HIGH_CONFIDENCE_READY');
+  assert.equal(state.reviewEligible, true);
+  assert.equal(state.reviewReady, true);
+  assert.equal(state.fullyAnalyzed, true);
+  assert.equal(state.incompleteReason, null);
+});

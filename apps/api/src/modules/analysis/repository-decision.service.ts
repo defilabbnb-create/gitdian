@@ -610,6 +610,7 @@ export class RepositoryDecisionService {
           | null,
       deepAnalysisStatusReason:
         this.cleanText(analysis?.deepAnalysisStatusReason, 120) || null,
+      reviewRuntimeRetired: this.isClaudeReviewRuntimeRetired(),
     } as Parameters<typeof deriveRepositoryAnalysisState>[0];
     const preliminaryReadiness = deriveRepositoryAnalysisState(
       baseAnalysisStateInput,
@@ -1225,6 +1226,27 @@ export class RepositoryDecisionService {
     }
 
     return null;
+  }
+
+  private isClaudeReviewRuntimeRetired() {
+    return this.readBooleanEnv('CLAUDE_RUNTIME_RETIRED', true);
+  }
+
+  private readBooleanEnv(envName: string, fallback: boolean) {
+    const rawValue = process.env[envName];
+    if (typeof rawValue !== 'string') {
+      return fallback;
+    }
+
+    const normalized = rawValue.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+
+    return fallback;
   }
 
   private takeUnique<T>(

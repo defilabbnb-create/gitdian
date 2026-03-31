@@ -129,3 +129,88 @@ test('repository decision prefers fresh local insight over stale local fallback 
   );
   assert.equal(result.analysisState.fallbackVisible, false);
 });
+
+test('repository decision treats retired review runtime as non-blocking for fully analyzed state', () => {
+  const previousRetired = process.env.CLAUDE_RUNTIME_RETIRED;
+  process.env.CLAUDE_RUNTIME_RETIRED = 'true';
+
+  try {
+    const service = new RepositoryDecisionService(
+      {},
+      {
+        calculate: () => createMoneyPriority(),
+      },
+    );
+
+    const result = service.buildRepositoryAssets(
+      {
+        id: 'repo-2',
+        fullName: 'acme/repo-2',
+        htmlUrl: 'https://github.com/acme/repo-2',
+        name: 'repo-2',
+        description: 'expense approval workflow',
+        language: 'TypeScript',
+        topics: ['automation', 'finance'],
+        stars: 120,
+        ideaFitScore: 88,
+        finalScore: 90,
+        toolLikeScore: 85,
+        roughPass: true,
+        categoryL1: 'tools',
+        categoryL2: 'workflow',
+        analysis: {
+          ideaSnapshotJson: {
+            isPromising: true,
+            nextAction: 'BUILD',
+            reason: '用户与收费路径较清晰。',
+            projectReality: {
+              type: 'tool',
+              hasRealUser: true,
+              hasClearUseCase: true,
+              isDirectlyMonetizable: true,
+            },
+          },
+          insightJson: {
+            oneLinerZh: '给财务团队做报销审批和风控校验的自动化工具',
+            oneLinerStrength: 'STRONG',
+            verdict: 'GOOD',
+            action: 'BUILD',
+            verdictReason: '本地 insight 已确认用户、场景和收费路径都比较清楚。',
+            projectReality: {
+              type: 'tool',
+              hasRealUser: true,
+              hasClearUseCase: true,
+              isDirectlyMonetizable: true,
+            },
+          },
+          completenessJson: {
+            summaryZh: '信息完整度较高',
+          },
+          ideaFitJson: {
+            score: 88,
+          },
+          extractedIdeaJson: {
+            summary: 'expense approvals',
+          },
+          claudeReviewStatus: null,
+          claudeReviewJson: null,
+        },
+        content: {
+          readmeSummary: 'expense approvals',
+        },
+      },
+      null,
+      null,
+    );
+
+    assert.equal(result.analysisState.analysisStatus, 'DEEP_DONE');
+    assert.equal(result.analysisState.reviewReady, true);
+    assert.notEqual(result.analysisState.incompleteReason, 'NO_CLAUDE_REVIEW');
+  } finally {
+    if (previousRetired === undefined) {
+      delete process.env.CLAUDE_RUNTIME_RETIRED;
+    } else {
+      process.env.CLAUDE_RUNTIME_RETIRED = previousRetired;
+    }
+  }
+});
