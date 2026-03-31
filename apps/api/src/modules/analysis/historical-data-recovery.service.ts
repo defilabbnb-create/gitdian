@@ -99,6 +99,8 @@ const HISTORICAL_REPAIR_LOW_YIELD_CONSECUTIVE_THRESHOLD = 3;
 const HISTORICAL_REPAIR_RECENT_OUTCOME_HISTORY_LIMIT = 6;
 const HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD = 0.05;
 const HISTORICAL_REPAIR_RECENT_SNAPSHOT_REPLAY_COOLDOWN_MS = 30 * 60 * 1000;
+const HISTORICAL_REPAIR_RECENT_DECISION_RECALC_REPLAY_COOLDOWN_MS =
+  30 * 60 * 1000;
 const HISTORICAL_REPAIR_DOWNGRADE_ONLY_BUDGET_RATIO = 0.1;
 const HISTORICAL_REPAIR_DOWNGRADE_ONLY_BUDGET_MAX = 200;
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_ENV_NAME =
@@ -3437,6 +3439,15 @@ export class HistoricalDataRecoveryService {
       return recentSnapshotReplaySuppression;
     }
 
+    const recentDecisionRecalcReplaySuppression =
+      this.shouldSuppressHistoricalRepairPlanForRecentDecisionRecalcReplay({
+        plan: args.plan,
+        recentOutcomes,
+      });
+    if (recentDecisionRecalcReplaySuppression.suppressed) {
+      return recentDecisionRecalcReplaySuppression;
+    }
+
     if (
       recentOutcomes.length < HISTORICAL_REPAIR_LOW_YIELD_CONSECUTIVE_THRESHOLD
     ) {
@@ -3580,6 +3591,93 @@ export class HistoricalDataRecoveryService {
     return {
       suppressed: true,
       reason: 'recent_snapshot_replay_cooldown',
+    };
+  }
+
+  private shouldSuppressHistoricalRepairPlanForRecentDecisionRecalcReplay(args: {
+    plan: HistoricalRepairDispatchPlan;
+    recentOutcomes: HistoricalRepairRecentOutcomeRecord[];
+  }): HistoricalRepairLowYieldSuppression {
+    const item = args.plan.item;
+    const recalcGate = args.plan.recalcGate;
+
+    if (
+      item.historicalRepairAction !== 'decision_recalc' ||
+      recalcGate?.recalcGateDecision !== 'allow_recalc_but_expect_no_change' ||
+      recalcGate.recalcSignalChanged
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    const latest =
+      args.recentOutcomes.find((record) => {
+        if (
+          record.historicalRepairAction !== 'decision_recalc' ||
+          record.historicalRepairBucket !== item.historicalRepairBucket
+        ) {
+          return false;
+        }
+
+        return (
+          record.outcomeReason ===
+            'queued_decision_recalc_execution_low_expected_value' ||
+          record.outcomeReason === 'queued_decision_recalc_execution' ||
+          record.outcomeReason === 'recent_decision_recalc_replay_cooldown'
+        );
+      }) ?? null;
+    if (!latest) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    const loggedAtMs = Date.parse(latest.loggedAt);
+    if (!Number.isFinite(loggedAtMs)) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (
+      Date.now() - loggedAtMs >
+      HISTORICAL_REPAIR_RECENT_DECISION_RECALC_REPLAY_COOLDOWN_MS
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (latest.decisionStateBefore !== item.frontendDecisionState) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    if (
+      !this.areStringArraysEqual(latest.keyEvidenceGapsBefore, item.keyEvidenceGaps) ||
+      !this.areStringArraysEqual(
+        latest.trustedBlockingGapsBefore,
+        item.trustedBlockingGaps,
+      ) ||
+      Math.abs(latest.evidenceCoverageRateBefore - item.evidenceCoverageRate) >=
+        HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD
+    ) {
+      return {
+        suppressed: false,
+        reason: null,
+      };
+    }
+
+    return {
+      suppressed: true,
+      reason: 'recent_decision_recalc_replay_cooldown',
     };
   }
 
@@ -4180,7 +4278,8 @@ export class HistoricalDataRecoveryService {
   private isHistoricalRepairLowYieldOutcomeReason(reason: string) {
     return (
       reason === 'low_yield_suppressed_consecutive_low_value_outcomes' ||
-      reason === 'recent_snapshot_replay_cooldown'
+      reason === 'recent_snapshot_replay_cooldown' ||
+      reason === 'recent_decision_recalc_replay_cooldown'
     );
   }
 
