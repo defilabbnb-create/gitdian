@@ -655,6 +655,425 @@ test('runHistoricalRepairLoop dispatches downgrade, evidence, deep, and recalc a
   assert.ok(savedConfigs.some((entry) => entry.key.includes('analysis.outcome')));
 });
 
+test('runHistoricalRepairLoop prefilters priority buckets before running priority report', async () => {
+  let prefilterQueryArgs = null;
+  const priorityReportCalls = [];
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async (args) => {
+          prefilterQueryArgs = args;
+          return [
+            { id: 'candidate-high-1' },
+            { id: 'candidate-high-2' },
+            { id: 'home-1' },
+            { id: 'daily-1' },
+          ];
+        },
+      },
+      dailyRadarSummary: {
+        findMany: async () => [
+          {
+            topRepositoryIds: ['home-1'],
+            topGoodRepositoryIds: [],
+            topCloneRepositoryIds: [],
+            topIgnoredRepositoryIds: ['daily-1'],
+            telegramSendStatus: 'SENT',
+          },
+        ],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async () => null,
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {},
+    {
+      runPriorityReport: async (options) => {
+        priorityReportCalls.push(options);
+        return {
+          generatedAt: '2026-03-31T00:00:00.000Z',
+          summary: {
+            visibleBrokenCount: 1,
+            highValueWeakCount: 1,
+            staleWatchCount: 0,
+            archiveOrNoiseCount: 0,
+            historicalTrustedButWeakCount: 0,
+            immediateFrontendDowngradeCount: 0,
+            evidenceCoverageRate: 0.4,
+            keyEvidenceMissingCount: 0,
+            evidenceConflictCount: 0,
+            evidenceWeakButVisibleCount: 0,
+            conflictDrivenDecisionRecalcCount: 1,
+            actionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 1,
+              deep_repair: 0,
+              decision_recalc: 1,
+              archive: 0,
+            },
+            visibleBrokenActionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 0,
+              deep_repair: 0,
+              decision_recalc: 1,
+              archive: 0,
+            },
+            highValueWeakActionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 1,
+              deep_repair: 0,
+              decision_recalc: 0,
+              archive: 0,
+            },
+          },
+          items: [
+            buildPriorityReportItem({
+              repoId: 'home-1',
+              action: 'decision_recalc',
+              bucket: 'visible_broken',
+              priorityScore: 220,
+              isVisibleOnHome: true,
+              strictVisibilityLevel: 'HOME',
+              repositoryValueTier: 'HIGH',
+              moneyPriority: 'P1',
+            }),
+            buildPriorityReportItem({
+              repoId: 'candidate-high-1',
+              action: 'evidence_repair',
+              bucket: 'high_value_weak',
+              priorityScore: 210,
+              repositoryValueTier: 'HIGH',
+              moneyPriority: 'P1',
+            }),
+          ],
+          samples: {},
+        };
+      },
+    },
+  );
+
+  service.saveSystemConfig = async () => {};
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 0,
+    globalPendingCount: 0,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 0,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: true,
+    buckets: ['visible_broken', 'high_value_weak'],
+    minPriorityScore: 0,
+  });
+
+  assert.ok(prefilterQueryArgs);
+  assert.equal(priorityReportCalls.length, 1);
+  assert.deepEqual(
+    new Set(priorityReportCalls[0].repositoryIds),
+    new Set(['candidate-high-1', 'candidate-high-2', 'home-1', 'daily-1']),
+  );
+  assert.equal(result.selectedCount, 2);
+});
+
+test('runHistoricalRepairLoop intersects frozen pool scope with priority prefilter candidates', async () => {
+  const priorityReportCalls = [];
+  let findUniqueCallCount = 0;
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => [
+          { id: 'candidate-high-1' },
+          { id: 'candidate-high-2' },
+          { id: 'home-1' },
+          { id: 'outside-frozen' },
+        ],
+      },
+      dailyRadarSummary: {
+        findMany: async () => [
+          {
+            topRepositoryIds: ['home-1'],
+            topGoodRepositoryIds: [],
+            topCloneRepositoryIds: [],
+            topIgnoredRepositoryIds: [],
+            telegramSendStatus: 'SENT',
+          },
+        ],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async () => {
+          findUniqueCallCount += 1;
+          if (findUniqueCallCount === 1) {
+            return {
+              configValue: {
+                analysisPoolFrozen: true,
+                analysisPoolFrozenAt: '2026-03-31T00:00:00.000Z',
+                analysisPoolFrozenScope: 'all_new_entries',
+                frozenAnalysisPoolBatchId:
+                  'frozen-analysis-pool-20260331-000000000',
+                frozenAnalysisPoolSnapshotAt: '2026-03-31T00:00:00.000Z',
+              },
+            };
+          }
+          if (findUniqueCallCount === 2) {
+            return {
+              configValue: {
+                generatedAt: '2026-03-31T00:00:00.000Z',
+                frozenAnalysisPoolBatchId:
+                  'frozen-analysis-pool-20260331-000000000',
+                frozenAnalysisPoolSnapshotAt: '2026-03-31T00:00:00.000Z',
+                analysisPoolFrozenScope: 'all_new_entries',
+                analysisPoolFreezeReason: 'test_scope',
+                repositoryIds: ['candidate-high-1', 'home-1', 'frozen-only'],
+                drainCandidates: [],
+                summary: {},
+                topMembers: [],
+              },
+            };
+          }
+          return null;
+        },
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {},
+    {
+      runPriorityReport: async (options) => {
+        priorityReportCalls.push(options);
+        return {
+          generatedAt: '2026-03-31T00:00:00.000Z',
+          summary: {
+            visibleBrokenCount: 1,
+            highValueWeakCount: 1,
+            staleWatchCount: 0,
+            archiveOrNoiseCount: 0,
+            historicalTrustedButWeakCount: 0,
+            immediateFrontendDowngradeCount: 0,
+            evidenceCoverageRate: 0.5,
+            keyEvidenceMissingCount: 0,
+            evidenceConflictCount: 0,
+            evidenceWeakButVisibleCount: 0,
+            conflictDrivenDecisionRecalcCount: 1,
+            actionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 1,
+              deep_repair: 0,
+              decision_recalc: 1,
+              archive: 0,
+            },
+            visibleBrokenActionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 0,
+              deep_repair: 0,
+              decision_recalc: 1,
+              archive: 0,
+            },
+            highValueWeakActionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 1,
+              deep_repair: 0,
+              decision_recalc: 0,
+              archive: 0,
+            },
+          },
+          items: [
+            buildPriorityReportItem({
+              repoId: 'home-1',
+              action: 'decision_recalc',
+              bucket: 'visible_broken',
+              priorityScore: 220,
+              isVisibleOnHome: true,
+              strictVisibilityLevel: 'HOME',
+              repositoryValueTier: 'HIGH',
+              moneyPriority: 'P1',
+            }),
+            buildPriorityReportItem({
+              repoId: 'candidate-high-1',
+              action: 'evidence_repair',
+              bucket: 'high_value_weak',
+              priorityScore: 210,
+              repositoryValueTier: 'HIGH',
+              moneyPriority: 'P1',
+            }),
+          ],
+          samples: {},
+        };
+      },
+    },
+  );
+
+  service.saveSystemConfig = async () => {};
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 0,
+    globalPendingCount: 0,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 0,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: true,
+    buckets: ['visible_broken', 'high_value_weak'],
+    minPriorityScore: 0,
+  });
+
+  assert.equal(priorityReportCalls.length, 1);
+  assert.deepEqual(
+    new Set(priorityReportCalls[0].repositoryIds),
+    new Set(['candidate-high-1', 'home-1']),
+  );
+  assert.equal(result.selectedCount, 2);
+});
+
+test('runHistoricalRepairLoop skips priority prefilter when stale_watch is included', async () => {
+  let prefilterQueryCount = 0;
+  const priorityReportCalls = [];
+  const service = new HistoricalDataRecoveryService(
+    {
+      repository: {
+        findMany: async () => {
+          prefilterQueryCount += 1;
+          return [];
+        },
+      },
+      dailyRadarSummary: {
+        findMany: async () => [],
+      },
+      jobLog: {
+        findMany: async () => [],
+      },
+      systemConfig: {
+        findUnique: async () => null,
+        upsert: async ({ create }) => create,
+      },
+    },
+    {},
+    {},
+    {},
+    {},
+    {
+      prioritizeRecoveryAssessments: async (items) => items,
+    },
+    {},
+    {
+      runPriorityReport: async (options) => {
+        priorityReportCalls.push(options);
+        return {
+          generatedAt: '2026-03-31T00:00:00.000Z',
+          summary: {
+            visibleBrokenCount: 0,
+            highValueWeakCount: 0,
+            staleWatchCount: 1,
+            archiveOrNoiseCount: 0,
+            historicalTrustedButWeakCount: 0,
+            immediateFrontendDowngradeCount: 0,
+            evidenceCoverageRate: 0.42,
+            keyEvidenceMissingCount: 0,
+            evidenceConflictCount: 0,
+            evidenceWeakButVisibleCount: 0,
+            conflictDrivenDecisionRecalcCount: 0,
+            actionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 1,
+              evidence_repair: 0,
+              deep_repair: 0,
+              decision_recalc: 0,
+              archive: 0,
+            },
+            visibleBrokenActionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 0,
+              deep_repair: 0,
+              decision_recalc: 0,
+              archive: 0,
+            },
+            highValueWeakActionBreakdown: {
+              downgrade_only: 0,
+              refresh_only: 0,
+              evidence_repair: 0,
+              deep_repair: 0,
+              decision_recalc: 0,
+              archive: 0,
+            },
+          },
+          items: [
+            buildPriorityReportItem({
+              repoId: 'stale-1',
+              action: 'refresh_only',
+              bucket: 'stale_watch',
+              priorityScore: 120,
+            }),
+          ],
+          samples: {},
+        };
+      },
+    },
+  );
+
+  service.saveSystemConfig = async () => {};
+  service.getHistoricalRepairQueueSummary = async () => ({
+    totalQueued: 0,
+    globalPendingCount: 0,
+    globalRunningCount: 0,
+    actionCounts: {
+      downgrade_only: 0,
+      refresh_only: 0,
+      evidence_repair: 0,
+      deep_repair: 0,
+      decision_recalc: 0,
+    },
+  });
+
+  const result = await service.runHistoricalRepairLoop({
+    dryRun: true,
+    buckets: ['high_value_weak', 'stale_watch'],
+    minPriorityScore: 0,
+  });
+
+  assert.equal(prefilterQueryCount, 0);
+  assert.equal(priorityReportCalls.length, 1);
+  assert.equal(priorityReportCalls[0].repositoryIds, undefined);
+  assert.equal(result.selectedCount, 1);
+});
+
 test('runHistoricalRepairLoop merges scoped decision recalc gate snapshots instead of clobbering global baseline', async () => {
   const savedConfigs = [];
   const previousSnapshot = buildDecisionRecalcGateSnapshot({

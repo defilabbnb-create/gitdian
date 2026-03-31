@@ -101,6 +101,10 @@ const HISTORICAL_REPAIR_LOW_YIELD_COVERAGE_DELTA_THRESHOLD = 0.05;
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_ENV_NAME =
   'HISTORICAL_REPAIR_GLOBAL_CONCURRENCY';
 const HISTORICAL_REPAIR_GLOBAL_CONCURRENCY_FALLBACK = 20;
+const HISTORICAL_REPAIR_PRIORITY_PREFILTER_BUCKETS = new Set([
+  'visible_broken',
+  'high_value_weak',
+]);
 const HISTORICAL_REPAIR_PRIORITY_VISIBILITY_LEVELS = new Set([
   'HOME',
   'FAVORITES',
@@ -807,11 +811,21 @@ export class HistoricalDataRecoveryService {
     this.logger.log(
       `historical_repair gate_config historicalRepairGlobalConcurrency=${globalConcurrency}`,
     );
+    const hasExplicitRepositoryIds = Boolean(
+      Array.isArray(options?.repositoryIds) &&
+        options.repositoryIds.some((repositoryId) => Boolean(repositoryId)),
+    );
     const repositoryIds = await this.resolveHistoricalRepairRepositoryIds(
       options?.repositoryIds ?? null,
     );
+    const reportRepositoryIds =
+      await this.resolveHistoricalRepairPriorityReportRepositoryIds({
+        options,
+        repositoryIds,
+        hasExplicitRepositoryIds,
+      });
     const report = await this.historicalRepairPriorityService.runPriorityReport({
-      repositoryIds: repositoryIds ?? undefined,
+      repositoryIds: reportRepositoryIds ?? undefined,
     });
     const generatedAt = new Date().toISOString();
     const previousDecisionRecalcGateSnapshot =
@@ -859,10 +873,6 @@ export class HistoricalDataRecoveryService {
       typeof options?.limit === 'number' && options.limit > 0
         ? filtered.slice(0, options.limit)
         : filtered;
-    const hasExplicitRepositoryIds = Boolean(
-      Array.isArray(options?.repositoryIds) &&
-        options.repositoryIds.some((repositoryId) => Boolean(repositoryId)),
-    );
     const rawDispatchPlans = this.buildHistoricalRepairDispatchPlans(
       selected,
       decisionRecalcGateMap,
@@ -1175,23 +1185,25 @@ export class HistoricalDataRecoveryService {
   }
 
   private async loadExposureSets() {
-    const summaries = await this.prisma.dailyRadarSummary.findMany({
-      orderBy: {
-        date: 'desc',
-      },
-      take: 14,
-      select: {
-        topRepositoryIds: true,
-        topGoodRepositoryIds: true,
-        topCloneRepositoryIds: true,
-        topIgnoredRepositoryIds: true,
-        telegramSendStatus: true,
-      },
-    });
-
     const homepageIds = new Set<string>();
     const dailySummaryIds = new Set<string>();
     const telegramIds = new Set<string>();
+    const summaries =
+      typeof this.prisma.dailyRadarSummary?.findMany === 'function'
+        ? await this.prisma.dailyRadarSummary.findMany({
+            orderBy: {
+              date: 'desc',
+            },
+            take: 14,
+            select: {
+              topRepositoryIds: true,
+              topGoodRepositoryIds: true,
+              topCloneRepositoryIds: true,
+              topIgnoredRepositoryIds: true,
+              telegramSendStatus: true,
+            },
+          })
+        : [];
 
     for (const summary of summaries) {
       const topIds = this.readStringArray(summary.topRepositoryIds);
@@ -2557,6 +2569,161 @@ export class HistoricalDataRecoveryService {
     }
 
     return [...new Set(snapshot.repositoryIds.filter(Boolean))];
+  }
+
+  private async resolveHistoricalRepairPriorityReportRepositoryIds(args: {
+    options?: HistoricalRepairRunOptions;
+    repositoryIds: string[] | null;
+    hasExplicitRepositoryIds: boolean;
+  }) {
+    if (args.hasExplicitRepositoryIds) {
+      return args.repositoryIds;
+    }
+
+    if (!this.shouldUseHistoricalRepairPriorityPrefilter(args.options)) {
+      return args.repositoryIds;
+    }
+
+    const candidateRepositoryIds =
+      await this.loadHistoricalRepairPriorityPrefilterRepositoryIds(
+        args.options,
+      );
+
+    if (!candidateRepositoryIds?.length) {
+      this.logger.warn(
+        'historical_repair priority_prefilter produced no candidates; falling back to full priority report scan',
+      );
+      return args.repositoryIds;
+    }
+
+    if (!args.repositoryIds?.length) {
+      this.logger.log(
+        `historical_repair priority_prefilter applied buckets=${(args.options?.buckets ?? []).join(',')} candidateCount=${candidateRepositoryIds.length}`,
+      );
+      return candidateRepositoryIds;
+    }
+
+    const frozenRepositoryIdSet = new Set(args.repositoryIds);
+    const scopedCandidateRepositoryIds = candidateRepositoryIds.filter((repositoryId) =>
+      frozenRepositoryIdSet.has(repositoryId),
+    );
+
+    if (!scopedCandidateRepositoryIds.length) {
+      this.logger.warn(
+        `historical_repair priority_prefilter produced no frozen-pool overlap; falling back to scoped snapshot candidateCount=${candidateRepositoryIds.length} scopedRepositoryCount=${args.repositoryIds.length}`,
+      );
+      return args.repositoryIds;
+    }
+
+    this.logger.log(
+      `historical_repair priority_prefilter applied buckets=${(args.options?.buckets ?? []).join(',')} candidateCount=${candidateRepositoryIds.length} scopedRepositoryCount=${args.repositoryIds.length} scopedCandidateCount=${scopedCandidateRepositoryIds.length}`,
+    );
+    return scopedCandidateRepositoryIds;
+  }
+
+  private shouldUseHistoricalRepairPriorityPrefilter(
+    options?: HistoricalRepairRunOptions,
+  ) {
+    const buckets = options?.buckets?.filter(Boolean) ?? [];
+    if (!buckets.length) {
+      return false;
+    }
+
+    return buckets.every((bucket) =>
+      HISTORICAL_REPAIR_PRIORITY_PREFILTER_BUCKETS.has(bucket),
+    );
+  }
+
+  private async loadHistoricalRepairPriorityPrefilterRepositoryIds(
+    options?: HistoricalRepairRunOptions,
+  ) {
+    if (typeof this.prisma.repository?.findMany !== 'function') {
+      return null;
+    }
+
+    const buckets = new Set(options?.buckets?.filter(Boolean) ?? []);
+    const needsVisibleBroken = buckets.has('visible_broken');
+    const needsHighValueWeak = buckets.has('high_value_weak');
+
+    const whereOr: Prisma.RepositoryWhereInput[] = [];
+    const exposureRepositoryIds = new Set<string>();
+
+    if (needsVisibleBroken || needsHighValueWeak) {
+      const exposureSets = await this.loadExposureSets();
+      if (needsVisibleBroken) {
+        for (const repositoryId of exposureSets.homepageIds) {
+          exposureRepositoryIds.add(repositoryId);
+        }
+        for (const repositoryId of exposureSets.dailySummaryIds) {
+          exposureRepositoryIds.add(repositoryId);
+        }
+        for (const repositoryId of exposureSets.telegramIds) {
+          exposureRepositoryIds.add(repositoryId);
+        }
+        whereOr.push({ isFavorited: true });
+      }
+      if (needsHighValueWeak) {
+        for (const repositoryId of exposureSets.homepageIds) {
+          exposureRepositoryIds.add(repositoryId);
+        }
+        whereOr.push({
+          cachedRanking: {
+            is: {
+              moneyPriority: {
+                in: ['P0', 'P1'],
+              },
+            },
+          },
+        });
+        whereOr.push({
+          cachedRanking: {
+            is: {
+              moneyScore: {
+                gte: 75,
+              },
+            },
+          },
+        });
+        whereOr.push({
+          finalScore: {
+            gte: 75,
+          },
+        });
+        whereOr.push({
+          favorite: {
+            is: {
+              priority: 'HIGH',
+            },
+          },
+        });
+      }
+    }
+
+    if (exposureRepositoryIds.size > 0) {
+      whereOr.push({
+        id: {
+          in: [...exposureRepositoryIds],
+        },
+      });
+    }
+
+    if (!whereOr.length) {
+      return null;
+    }
+
+    const rows = await this.prisma.repository.findMany({
+      where: {
+        OR: whereOr,
+      },
+      orderBy: {
+        id: 'asc',
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    return [...new Set(rows.map((row) => row.id).filter(Boolean))];
   }
 
   private async persistDecisionRecalcGateSnapshot(
