@@ -206,3 +206,30 @@ test('keeps a concrete snapshot-style fallback sentence when repo metadata is no
   );
   assert.doesNotMatch(result.oneLinerZh, /token|成本明细|CLI 工具/);
 });
+
+test('requires strong metadata evidence before emitting sensitive token or env actions', () => {
+  const result = condenseRepositoryOneLiner({
+    repository: {
+      name: 'app-store-shot',
+      fullName: 'acme/app-store-shot',
+      description:
+        'Generate production-ready App Store screenshots for iOS apps with automated export.',
+      topics: ['ios', 'screenshots', 'app-store'],
+      readmeText:
+        'Docs include token usage examples, env var setup, and a playlist import snippet for demo data, but the repo itself is about App Store screenshots.',
+    },
+    projectType: 'tool',
+    candidate: '',
+    fallback: '',
+    signals: {
+      hasRealUser: true,
+      hasClearUseCase: true,
+      isDirectlyMonetizable: true,
+      categoryMain: 'tools',
+      categorySub: 'content-creation',
+    },
+  });
+
+  assert.doesNotMatch(result.oneLinerZh, /token|环境变量|播放列表/);
+  assert.match(result.oneLinerZh, /技术实现或能力示例|App Store/);
+});

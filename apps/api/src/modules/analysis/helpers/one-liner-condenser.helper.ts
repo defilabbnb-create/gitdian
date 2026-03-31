@@ -112,6 +112,52 @@ function buildHaystack(input: OneLinerCondenserInput) {
     .join('\n');
 }
 
+function buildActionEvidenceSources(input: OneLinerCondenserInput) {
+  return {
+    core: [
+      cleanText(input.repository.name, 120),
+      cleanText(input.repository.fullName, 160),
+      cleanText(input.repository.description, 240),
+      cleanText((input.repository.topics ?? []).join(' '), 240),
+    ]
+      .map((item) => item.toLowerCase())
+      .filter(Boolean),
+    support: [
+      cleanText(input.candidate, 220),
+      cleanText(input.fallback, 220),
+      cleanText(input.repository.readmeText, 900),
+    ]
+      .map((item) => item.toLowerCase())
+      .filter(Boolean),
+  };
+}
+
+function countPatternHits(pattern: RegExp, values: string[]) {
+  let count = 0;
+
+  for (const value of values) {
+    if (value && pattern.test(value)) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+function hasStrongSensitiveActionEvidence(
+  input: OneLinerCondenserInput,
+  pattern: RegExp,
+) {
+  const sources = buildActionEvidenceSources(input);
+  const coreHits = countPatternHits(pattern, sources.core);
+
+  if (coreHits > 0) {
+    return true;
+  }
+
+  return coreHits + countPatternHits(pattern, sources.support) >= 2;
+}
+
 function resolveExplicitUser(haystack: string) {
   const userRules: Array<[RegExp, string]> = [
     [/(platform engineering|platform engineers|平台工程)/i, '平台工程团队'],
@@ -158,43 +204,72 @@ function resolveLikelyUser(
   return null;
 }
 
-function resolveConcreteAction(haystack: string, projectType: OneLinerProjectType) {
-  const actionRules: Array<[RegExp, string]> = [
-    [/(spotify web api|playlist|recommend)/i, '在命令行里搜索歌曲并管理播放列表'],
-    [/(certificate|tls|dns-01|签发|续期)/i, '签发和续期 TLS 证书'],
-    [/(secret manager|secrets management|dotenv|environment variables?|env vars?|密钥管理|环境变量)/i, '管理环境变量和密钥'],
-    [
-      /(token (usage|cost)|usage (tracking|dashboard)|cost (tracking|dashboard|observability)|api cost|token 成本|token 用量|成本明细|计费)/i,
-      '记录 token 与成本明细',
-    ],
-    [/(api call log|api request log|request log|调用日志|请求日志)/i, '记录 API 调用日志'],
-    [/(review comment|pull request|pr review|diff|审阅|审查)/i, '审阅代码 diff 和变更说明'],
-    [/(approval|audit|审批|审计链)/i, '发起审批并记录审计链路'],
-    [/(kubectl exec|临时访问|access request|回收权限)/i, '审批临时访问并自动回收权限'],
-    [/(egress|出站流量|firewall|防火墙规则)/i, '监控出站流量并生成防火墙规则'],
-    [/(visitor|地理分布|访客地图)/i, '查看实时访客地理分布'],
-    [/(resume|ats|简历)/i, '改写简历并生成 ATS 匹配评分'],
-    [/(green screen|绿幕|抠像|keying|matte)/i, '分离绿幕素材的前景与边缘'],
-    [/(clipboard|剪贴板)/i, '记录剪贴板历史并快速粘贴'],
-    [/(react component|component style|组件样式)/i, '预览和编辑 React 组件样式'],
-    [/(docker sandbox|沙箱)/i, '把终端命令隔离到 Docker 沙箱里执行'],
-    [/(claims|billing|理赔|账单)/i, '审核理赔账单并标记异常'],
-    [/(search api|serp|retrieval|检索接口)/i, '提供搜索与检索接口'],
-    [/(scrap|crawl|extract data|网页采集)/i, '采集网页与结构化数据'],
-    [
-      /(deployment pipeline|deploy pipeline|release pipeline|release management|deploy orchestration|application delivery|app delivery|发布流水线|交付流程)/i,
-      '部署和交付应用',
-    ],
-    [/(auth|authentication|login|sso|identity)/i, '接入登录与权限能力'],
-    [/(observability|monitoring dashboard|monitoring stack|alert routing|系统监控|运行指标|告警)/i, '监控系统运行状态'],
-    [/(workflow|automation|orchestration|zapier|n8n)/i, '串联和执行多步流程'],
-    [/(memory|context window|long-term memory|上下文|记忆)/i, '管理长期上下文与记忆'],
+function resolveConcreteAction(
+  input: OneLinerCondenserInput,
+  haystack: string,
+  projectType: OneLinerProjectType,
+) {
+  const actionRules: Array<{
+    pattern: RegExp;
+    action: string;
+    requiresStrongEvidence?: boolean;
+  }> = [
+    {
+      pattern: /(spotify web api|playlist|recommend)/i,
+      action: '在命令行里搜索歌曲并管理播放列表',
+      requiresStrongEvidence: true,
+    },
+    { pattern: /(certificate|tls|dns-01|签发|续期)/i, action: '签发和续期 TLS 证书' },
+    {
+      pattern:
+        /(secret manager|secrets management|dotenv|environment variables?|env vars?|密钥管理|环境变量)/i,
+      action: '管理环境变量和密钥',
+      requiresStrongEvidence: true,
+    },
+    {
+      pattern:
+        /(token (usage|cost)|usage (tracking|dashboard)|cost (tracking|dashboard|observability)|api cost|token 成本|token 用量|成本明细|计费)/i,
+      action: '记录 token 与成本明细',
+      requiresStrongEvidence: true,
+    },
+    { pattern: /(api call log|api request log|request log|调用日志|请求日志)/i, action: '记录 API 调用日志' },
+    { pattern: /(review comment|pull request|pr review|diff|审阅|审查)/i, action: '审阅代码 diff 和变更说明' },
+    { pattern: /(approval|audit|审批|审计链)/i, action: '发起审批并记录审计链路' },
+    { pattern: /(kubectl exec|临时访问|access request|回收权限)/i, action: '审批临时访问并自动回收权限' },
+    { pattern: /(egress|出站流量|firewall|防火墙规则)/i, action: '监控出站流量并生成防火墙规则' },
+    { pattern: /(visitor|地理分布|访客地图)/i, action: '查看实时访客地理分布' },
+    { pattern: /(resume|ats|简历)/i, action: '改写简历并生成 ATS 匹配评分' },
+    { pattern: /(green screen|绿幕|抠像|keying|matte)/i, action: '分离绿幕素材的前景与边缘' },
+    { pattern: /(clipboard|剪贴板)/i, action: '记录剪贴板历史并快速粘贴' },
+    { pattern: /(react component|component style|组件样式)/i, action: '预览和编辑 React 组件样式' },
+    { pattern: /(docker sandbox|沙箱)/i, action: '把终端命令隔离到 Docker 沙箱里执行' },
+    { pattern: /(claims|billing|理赔|账单)/i, action: '审核理赔账单并标记异常' },
+    { pattern: /(search api|serp|retrieval|检索接口)/i, action: '提供搜索与检索接口' },
+    { pattern: /(scrap|crawl|extract data|网页采集)/i, action: '采集网页与结构化数据' },
+    {
+      pattern:
+        /(deployment pipeline|deploy pipeline|release pipeline|release management|deploy orchestration|application delivery|app delivery|发布流水线|交付流程)/i,
+      action: '部署和交付应用',
+    },
+    { pattern: /(auth|authentication|login|sso|identity)/i, action: '接入登录与权限能力' },
+    { pattern: /(observability|monitoring dashboard|monitoring stack|alert routing|系统监控|运行指标|告警)/i, action: '监控系统运行状态' },
+    { pattern: /(workflow|automation|orchestration|zapier|n8n)/i, action: '串联和执行多步流程' },
+    { pattern: /(memory|context window|long-term memory|上下文|记忆)/i, action: '管理长期上下文与记忆' },
   ];
 
-  for (const [pattern, action] of actionRules) {
-    if (pattern.test(haystack)) {
-      return action;
+  for (const rule of actionRules) {
+    if (!rule.pattern.test(haystack)) {
+      continue;
     }
+
+    if (
+      rule.requiresStrongEvidence &&
+      !hasStrongSensitiveActionEvidence(input, rule.pattern)
+    ) {
+      continue;
+    }
+
+    return rule.action;
   }
 
   if (projectType === 'demo') {
@@ -394,7 +469,7 @@ function buildDerivedFacts(input: OneLinerCondenserInput): DerivedFacts {
   const haystack = buildHaystack(input);
   const explicitUser = resolveExplicitUser(haystack);
   const likelyUser = resolveLikelyUser(haystack, explicitUser);
-  const concreteAction = resolveConcreteAction(haystack, input.projectType);
+  const concreteAction = resolveConcreteAction(input, haystack, input.projectType);
   const artifactType = resolveArtifactType(haystack, input.projectType);
   const direction = resolveDirection(haystack, input, {
     concreteAction,
@@ -654,6 +729,11 @@ export function condenseRepositoryOneLiner(
   const acceptedFallback = isAcceptedCandidate(fallback, input.projectType, facts)
     ? fallback
     : '';
+  const acceptedFallbackLooksSpecific =
+    Boolean(acceptedFallback) &&
+    looksSpecificNarrativeSentence(acceptedFallback) &&
+    hasExplicitUserInLine(acceptedFallback) &&
+    hasConcreteActionInLine(acceptedFallback);
 
   let mode: OneLinerConfidenceLevel = 'low';
   let oneLinerZh = '';
@@ -662,8 +742,8 @@ export function condenseRepositoryOneLiner(
     (input.projectType === 'product' || input.projectType === 'tool') &&
     facts.hasRealUser &&
     facts.hasClearUseCase &&
-    Boolean(facts.explicitUser) &&
-    Boolean(facts.concreteAction) &&
+    (acceptedFallbackLooksSpecific ||
+      (Boolean(facts.explicitUser) && Boolean(facts.concreteAction))) &&
     !facts.weakReadme;
 
   const canUseMediumConfidenceSentence =

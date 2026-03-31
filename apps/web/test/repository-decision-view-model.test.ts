@@ -462,6 +462,8 @@ test('historical repair degraded repositories hide strong priority and stale mod
   assert.equal(decisionView.detail.statusLabel, '待重算');
   assert.match(decisionView.display.headline, /教务人员|Salesforce|成绩查看流程/);
   assert.doesNotMatch(decisionView.display.headline, /帮开发者部署和交付应用/);
+  assert.match(decisionView.display.homepageHeadline, /重算判断|用户冲突|收费冲突|执行冲突/);
+  assert.doesNotMatch(decisionView.display.homepageHeadline, /当前判断待重算/);
   assert.match(decisionView.display.reason, /重算判断|用户冲突|收费冲突|执行冲突/);
   assert.doesNotMatch(decisionView.display.reason, /典型工具型机会/);
   assert.match(decisionView.display.targetUsersLabel, /目标用户标签待复核/);

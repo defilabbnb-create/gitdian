@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import {
@@ -9,6 +11,10 @@ type CliOptions = {
   dryRun?: boolean;
   limit?: number;
   priority?: HistoricalRecoveryPriority | null;
+  buckets?: Array<'visible_broken' | 'high_value_weak' | 'stale_watch'>;
+  minPriorityScore?: number;
+  repositoryIds?: string[];
+  repositoryIdsFile?: string;
   onlyConflicts?: boolean;
   onlyFeatured?: boolean;
   onlyFallback?: boolean;
@@ -23,8 +29,26 @@ type CliOptions = {
     | 'rerun_light_analysis'
     | 'rerun_full_deep'
     | 'queue_claude_review'
+    | 'historical_repair_loop'
     | 'export_training_samples';
 };
+
+const HISTORICAL_REPAIR_BUCKETS = [
+  'visible_broken',
+  'high_value_weak',
+  'stale_watch',
+] as const;
+
+function parseCommaSeparatedList(value: string | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 function parseBoolean(value: string | undefined) {
   if (!value) {
@@ -72,6 +96,32 @@ function parseArgs(argv: string[]): CliOptions {
         options.priority = normalized as HistoricalRecoveryPriority;
       }
     }
+    if (flag === 'buckets' || flag === 'bucket') {
+      const parsed = parseCommaSeparatedList(value).filter((item): item is
+        (typeof HISTORICAL_REPAIR_BUCKETS)[number] =>
+        HISTORICAL_REPAIR_BUCKETS.includes(
+          item as (typeof HISTORICAL_REPAIR_BUCKETS)[number],
+        ),
+      );
+      if (parsed.length) {
+        options.buckets = parsed;
+      }
+    }
+    if (flag === 'minPriorityScore') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        options.minPriorityScore = parsed;
+      }
+    }
+    if (flag === 'repositoryIds' || flag === 'repositoryId') {
+      const parsed = parseCommaSeparatedList(value);
+      if (parsed.length) {
+        options.repositoryIds = parsed;
+      }
+    }
+    if (flag === 'repositoryIdsFile' && value) {
+      options.repositoryIdsFile = value;
+    }
     if (flag === 'onlyConflicts') {
       options.onlyConflicts = parseBoolean(value);
     }
@@ -103,6 +153,7 @@ function parseArgs(argv: string[]): CliOptions {
         normalized === 'rerun_light_analysis' ||
         normalized === 'rerun_full_deep' ||
         normalized === 'queue_claude_review' ||
+        normalized === 'historical_repair_loop' ||
         normalized === 'export_training_samples'
       ) {
         options.mode = normalized as CliOptions['mode'];
@@ -113,8 +164,33 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
+export function parseHistoricalDataRecoveryArgs(argv: string[]) {
+  return parseArgs(argv);
+}
+
+async function resolveRepositoryIdsFromFile(filePath: string | undefined) {
+  if (!filePath) {
+    return [];
+  }
+
+  const content = await readFile(path.resolve(filePath), 'utf8');
+  return content
+    .split(/[\n,\r]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 async function bootstrap() {
   const options = parseArgs(process.argv.slice(2));
+  const repositoryIdsFromFile = await resolveRepositoryIdsFromFile(
+    options.repositoryIdsFile,
+  );
+  if (repositoryIdsFromFile.length) {
+    options.repositoryIds = [
+      ...(options.repositoryIds ?? []),
+      ...repositoryIdsFromFile,
+    ];
+  }
   process.env.ENABLE_QUEUE_WORKERS = 'false';
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: ['error', 'warn', 'log'],
@@ -137,6 +213,18 @@ async function bootstrap() {
         includeFullNames: audit.items.map((item) => item.fullName),
       });
       process.stdout.write(`${JSON.stringify(exportResult, null, 2)}\n`);
+      return;
+    }
+
+    if (options.mode === 'historical_repair_loop') {
+      const result = await recoveryService.runHistoricalRepairLoop({
+        dryRun: options.dryRun,
+        limit: options.limit,
+        buckets: options.buckets,
+        minPriorityScore: options.minPriorityScore,
+        repositoryIds: options.repositoryIds,
+      });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return;
     }
 
@@ -165,4 +253,6 @@ async function bootstrap() {
   }
 }
 
-void bootstrap();
+if (require.main === module) {
+  void bootstrap();
+}

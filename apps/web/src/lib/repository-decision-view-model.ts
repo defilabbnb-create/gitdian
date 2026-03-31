@@ -1408,7 +1408,7 @@ function buildHeadline(
 
     return {
       headline: appendConservativeSuffix(baseHeadline, holdbackSuffix),
-      homepageHeadline: appendConservativeSuffix(baseHeadline, '当前判断待重算。'),
+      homepageHeadline: appendConservativeSuffix(baseHeadline, holdbackSuffix),
     };
   }
 

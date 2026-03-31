@@ -12,6 +12,7 @@
     "inventory:historical-data": "node dist/scripts/run-historical-data-inventory.js",
     "bucket:historical-data": "node dist/scripts/run-historical-repair-bucketing.js",
     "priority:historical-data": "node dist/scripts/run-historical-repair-priority.js",
+    "repair:historical-data": "node dist/scripts/run-historical-repair-loop.js",
     "build:evidence-map": "node dist/scripts/run-evidence-map.js",
     "report:evidence-map": "node dist/scripts/health/evidence-map-coverage-report.js",
     "report:evidence-gap-taxonomy": "node dist/scripts/health/evidence-gap-taxonomy-report.js",

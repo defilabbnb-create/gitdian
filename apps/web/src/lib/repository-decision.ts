@@ -307,6 +307,12 @@ const TEMPLATE_ONE_LINER_PATTERNS = [
   /^一个帮产品快速接入登录和权限的服务[。！]?$/,
 ];
 
+const KNOWN_BAD_HEADLINE_PATTERNS = [
+  /^一个(?:帮(?:开发者|工程师|运维人员|团队)|用于)?记录 token 与成本明细的(?:CLI 工具|工具|代码项目|浏览器扩展).*/,
+  /^一个(?:帮(?:开发者|工程师|团队)|用于)?管理环境变量和密钥的(?:CLI 工具|工具|代码项目|浏览器扩展).*/,
+  /^一个(?:帮(?:开发者|工程师|运维人员)|用于)?在命令行里搜索歌曲并管理播放列表的(?:CLI 工具|工具).*/,
+];
+
 const STRONG_MONETIZATION_PATTERNS = [
   /可从团队订阅、托管版或企业版收费/,
   /已有现实收费路径/,
@@ -519,13 +525,20 @@ function buildThinFallbackSummary(
     projectTypeLabel: fallbackCategory.label,
     legacyTier: null,
   };
+  const targetUsersLabel = moneyPriority.targetUsers;
+  const fallbackOneLiner = buildThinFallbackOneLiner({
+    repository,
+    categoryLabel: fallbackCategory.label,
+    targetUsersLabel,
+    preferredOneLiners: [
+      insight?.oneLinerZh,
+      repository.coreAsset?.oneLinerZh,
+      repository.description,
+    ],
+  });
 
   return {
-    oneLiner:
-      cleanDecisionText(insight?.oneLinerZh) ||
-      cleanDecisionText(repository.coreAsset?.oneLinerZh) ||
-      cleanDecisionText(repository.description) ||
-      '这个项目的中文摘要还在校正，先看最终结论与详情。',
+    oneLiner: fallbackOneLiner,
     judgementLabel: actionJudgementLabel(fallbackAction),
     finalDecisionLabel: `${actionJudgementLabel(fallbackAction)} · ${ACTION_LABELS[fallbackAction]}`,
     verdict: fallbackVerdict,
@@ -545,7 +558,7 @@ function buildThinFallbackSummary(
     manualNote: '',
     manualUpdatedAt: '',
     moneyPriority,
-    targetUsersLabel: moneyPriority.targetUsers,
+    targetUsersLabel,
     monetizationLabel: moneyPriority.monetization,
     recommendedMoveLabel: moneyPriority.recommendedMove,
     worthDoingLabel: '等后端最终判断补齐后再决定',
@@ -565,6 +578,50 @@ function buildThinFallbackSummary(
       claudeOneLiner: '暂无历史复核一句话',
     },
   };
+}
+
+function buildThinFallbackOneLiner(args: {
+  repository: RepositoryDecisionTarget;
+  categoryLabel: string;
+  targetUsersLabel: string;
+  preferredOneLiners: Array<unknown>;
+}) {
+  const preferred = args.preferredOneLiners
+    .map((value) => cleanDecisionText(value))
+    .find(
+      (value) =>
+        value.length > 0 &&
+        !isGenericOneLiner(value) &&
+        !looksLikeGenericFallbackSubject(value) &&
+        !isTemplatedDecisionHeadline(value) &&
+        !isUnsafeRepositoryHeadline(value),
+    );
+
+  if (preferred) {
+    return preferred;
+  }
+
+  const targetUsers = hasUnclearUserLabel(args.targetUsersLabel)
+    ? ''
+    : trimHeadlinePunctuation(args.targetUsersLabel) ?? '';
+  const categoryLabel =
+    args.categoryLabel && args.categoryLabel !== '待分类'
+      ? trimHeadlinePunctuation(args.categoryLabel) ?? ''
+      : '';
+
+  if (targetUsers && categoryLabel) {
+    return `面向${targetUsers}的${categoryLabel}项目，当前细节分析还在补齐。`;
+  }
+
+  if (categoryLabel) {
+    return `一个${categoryLabel}方向项目，当前细节分析还在补齐。`;
+  }
+
+  if (targetUsers) {
+    return `面向${targetUsers}的项目，当前细节分析还在补齐。`;
+  }
+
+  return '这个项目当前细节分析还在补齐，先结合仓库描述和详情查看。';
 }
 
 function buildSummaryFromFinalDecision(
@@ -1132,6 +1189,7 @@ type RepositoryMetadataHint = {
   pattern: RegExp;
   subject: string;
   targetUsers: string;
+  requiresStrongEvidence?: boolean;
 };
 
 const REPOSITORY_METADATA_HINTS: RepositoryMetadataHint[] = [
@@ -1193,6 +1251,7 @@ const REPOSITORY_METADATA_HINTS: RepositoryMetadataHint[] = [
       /(playlist|playlists|song search|search songs?|music cli|terminal music|music player)/i,
     subject: '一个用于在命令行里搜索歌曲并管理播放列表的工具',
     targetUsers: '主要在命令行里管理音乐的开发者',
+    requiresStrongEvidence: true,
   },
   {
     pattern: /(resume|ats|curriculum vitae|job application|cover letter)/i,
@@ -1216,6 +1275,7 @@ const REPOSITORY_METADATA_HINTS: RepositoryMetadataHint[] = [
       /(secret|secrets|environment variables?|env vars?|dotenv|token manager|vault|secret manager)/i,
     subject: '一个帮团队管理密钥和环境变量的工具',
     targetUsers: '开发团队和平台工程团队',
+    requiresStrongEvidence: true,
   },
   {
     pattern:
@@ -1238,6 +1298,41 @@ function getRepositoryMetadataCorpus(repository: RepositoryDecisionTarget) {
     .join('\n');
 }
 
+function hasStrongRepositoryMetadataHintEvidence(
+  repository: RepositoryDecisionTarget,
+  pattern: RegExp,
+) {
+  const coreValues = [
+    repository.name,
+    repository.fullName,
+    repository.description,
+    repository.topics?.join(' '),
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+  let coreHits = 0;
+  for (const value of coreValues) {
+    if (pattern.test(value)) {
+      coreHits += 1;
+    }
+  }
+
+  if (coreHits > 0) {
+    return true;
+  }
+
+  const supportValues = [repository.homepage, repository.language].filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  );
+  let supportHits = 0;
+  for (const value of supportValues) {
+    if (pattern.test(value)) {
+      supportHits += 1;
+    }
+  }
+
+  return coreHits + supportHits >= 2;
+}
+
 function matchRepositoryMetadataHint(repository: RepositoryDecisionTarget) {
   const corpus = getRepositoryMetadataCorpus(repository);
 
@@ -1245,9 +1340,22 @@ function matchRepositoryMetadataHint(repository: RepositoryDecisionTarget) {
     return null;
   }
 
-  return (
-    REPOSITORY_METADATA_HINTS.find((hint) => hint.pattern.test(corpus)) ?? null
-  );
+  for (const hint of REPOSITORY_METADATA_HINTS) {
+    if (!hint.pattern.test(corpus)) {
+      continue;
+    }
+
+    if (
+      hint.requiresStrongEvidence &&
+      !hasStrongRepositoryMetadataHintEvidence(repository, hint.pattern)
+    ) {
+      continue;
+    }
+
+    return hint;
+  }
+
+  return null;
 }
 
 function inferRepositorySpecificSubject(
@@ -1353,6 +1461,28 @@ function looksLikeGenericFallbackSubject(text: string) {
   );
 }
 
+function isStockFallbackHeadline(text: string) {
+  return (
+    text === ONE_LINER_LOW_PRIORITY_FALLBACK ||
+    text === ONE_LINER_REVIEWING_FALLBACK ||
+    text === ONE_LINER_TECHNICAL_FALLBACK ||
+    text === HOMEPAGE_LOW_PRIORITY_FALLBACK ||
+    text === HOMEPAGE_REVIEWING_FALLBACK
+  );
+}
+
+function isUnsafeRepositoryHeadline(text: string) {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+
+  return (
+    isStockFallbackHeadline(normalized) ||
+    KNOWN_BAD_HEADLINE_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    (/token/i.test(normalized) && /成本明细/.test(normalized)) ||
+    (/环境变量/.test(normalized) && /密钥/.test(normalized)) ||
+    /播放列表/.test(normalized)
+  );
+}
+
 function pickHeadlineCandidateText(...values: Array<unknown>) {
   for (const value of values) {
     const normalized = trimHeadlinePunctuation(value as string | null | undefined);
@@ -1407,7 +1537,11 @@ function resolveSpecificFallbackSubject(
         return false;
       }
 
-      return !isGenericOneLiner(value) && !isTemplatedDecisionHeadline(value);
+      return (
+        !isGenericOneLiner(value) &&
+        !isTemplatedDecisionHeadline(value) &&
+        !isUnsafeRepositoryHeadline(value)
+      );
     });
 
   if (safeHeadline) {
@@ -1478,14 +1612,22 @@ function buildSpecificFallbackHeadline(
       return finalizeHeadline(`${subject}，但${evidenceGapClause}。`);
     }
 
-  if (/^(这个项目|这个方向|当前|README|仓库)/.test(reason)) {
-    const subjectLedReason =
-      subject && (isGenericHomepageReason(reason) || isAbstractSignalReason(reason))
-        ? buildSubjectLedHomepageReason(repository, summary, reason)
-        : null;
+    if (
+      subject &&
+      mode === 'reviewing' &&
+      /(?:证据|冲突|缺少|待补|不够稳|不够清楚)/u.test(reason)
+    ) {
+      return finalizeHeadline(`${subject}，先结合结论和详情再判断。`);
+    }
 
-    return finalizeHeadline(subjectLedReason || reason);
-  }
+    if (/^(这个项目|这个方向|当前|README|仓库)/.test(reason)) {
+      const subjectLedReason =
+        subject && (isGenericHomepageReason(reason) || isAbstractSignalReason(reason))
+          ? buildSubjectLedHomepageReason(repository, summary, reason)
+          : null;
+
+      return finalizeHeadline(subjectLedReason || reason);
+    }
 
     const reasonLed =
       mode === 'technical'
@@ -2263,6 +2405,10 @@ export function getRepositoryDecisionHeadline(
   const validation = getRepositoryHeadlineValidation(repository, summary);
 
   if (options?.forceDegrade) {
+    return pickRepositoryHeadlineFallback(repository, summary, validation);
+  }
+
+  if (isUnsafeRepositoryHeadline(validation.sanitized)) {
     return pickRepositoryHeadlineFallback(repository, summary, validation);
   }
 

@@ -151,6 +151,8 @@ test('fallback idea analysis drops English-heavy light-analysis fields and falls
 test('thin fallback summary reuses light analysis when final decision is missing', () => {
   const repository = createRepositoryFixture({
     finalDecision: null,
+    categoryL1: 'tools',
+    categoryL2: 'automation',
     analysisState: {
       lightAnalysis: {
         targetUsers: '跨境卖家和客服团队',
@@ -167,6 +169,8 @@ test('thin fallback summary reuses light analysis when final decision is missing
   assert.equal(summary.targetUsersLabel, '跨境卖家和客服团队');
   assert.equal(summary.monetizationLabel, '适合先按席位订阅和自动化处理量收费。');
   assert.match(summary.verdictReason, /减少重复客服处理成本|自动化工单流程/);
+  assert.match(summary.oneLiner, /跨境卖家和客服团队|自动化工具/);
+  assert.doesNotMatch(summary.oneLiner, /中文摘要还在校正/);
 });
 
 test('fallback idea analysis reuses extracted idea and deep modules when light analysis is missing', () => {
@@ -295,6 +299,35 @@ test('fallback idea analysis prefers concrete sync users and early-stage reason 
   assert.match(fallback.whyItMatters, /极早期阶段|高频刚需/);
   assert.match(fallback.useCase, /极早期阶段|高频刚需/);
   assert.doesNotMatch(fallback.whyItMatters, /当前冲突主要集中在/);
+});
+
+test('default headline falls back away from stale token-cost copy on visible repositories', () => {
+  const repository = createRepositoryFixture({
+    description: 'Manage reusable code snippets with local-first search and quick insert.',
+    topics: ['snippet', 'developer-tool'],
+    analysis: {
+      ideaSnapshotJson: {
+        oneLinerZh: '一款本地优先的代码片段管理 CLI 工具',
+        reason: '当前主要缺少更多真实团队的留存证据。',
+      },
+      insightJson: {
+        oneLinerZh: '一个帮开发者记录 token 与成本明细的 CLI 工具',
+        verdictReason: '当前冲突主要集中在 user / monetization。',
+      },
+    },
+    finalDecision: {
+      oneLinerZh: '一个帮开发者记录 token 与成本明细的 CLI 工具',
+      decisionSummary: {
+        headlineZh: '一个帮开发者记录 token 与成本明细的 CLI 工具',
+      },
+    },
+  });
+
+  const summary = getRepositoryDecisionSummary(repository);
+  const headline = getRepositoryDecisionHeadline(repository, summary);
+
+  assert.match(headline, /代码片段管理 CLI 工具/);
+  assert.doesNotMatch(headline, /token 与成本明细/);
 });
 
 test('force-degraded headline keeps specific sports-api subject instead of generic metadata fallback', () => {

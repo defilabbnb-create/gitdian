@@ -56,6 +56,10 @@ const GENERIC_UNTRUSTED_HEADLINE_PATTERNS = [
   /^一个(?:帮(?:开发者|工程师)|用于)?监控系统运行状态的(?:CLI 工具|工具|可观测组件).*/,
 ];
 
+function isGenericUntrustedHeadline(value: string) {
+  return GENERIC_UNTRUSTED_HEADLINE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 const GENERIC_SAFE_TARGET_USER_PATTERNS = [
   /^独立开发者和小团队$/,
   /^开发者和小团队$/,
@@ -143,11 +147,15 @@ function pickPreferredText(...values: Array<unknown>) {
 }
 
 function pickPreferredConservativeHeadline(...values: Array<unknown>) {
-  return pickPreferredSpecificText(
-    values,
-    (value) =>
-      GENERIC_UNTRUSTED_HEADLINE_PATTERNS.some((pattern) => pattern.test(value)),
-  );
+  for (const value of values) {
+    const normalized = normalizePreferredText(value);
+
+    if (normalized && !isGenericUntrustedHeadline(normalized)) {
+      return normalized;
+    }
+  }
+
+  return null;
 }
 
 function pickPreferredSpecificText(
