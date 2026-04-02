@@ -10,6 +10,13 @@ import { HomeSecondaryLinks } from '@/components/repositories/home-runtime-statu
 import { RuntimeFailurePanel } from '@/components/runtime-failure-panel';
 import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getRepositories } from '@/lib/api/repositories';
+import {
+  buildHomeFallbackQuery,
+  buildHomeFastDefaultQuery,
+  resolveHomeRepositoriesTimeoutMs,
+  shouldFallbackHomeRepositories,
+  shouldUseFastHomeDefaultQuery,
+} from '@/lib/home-repositories-policy';
 import { normalizeRepositoryListQuery } from '@/lib/types/repository';
 
 export const dynamic = 'force-dynamic';
@@ -113,7 +120,10 @@ async function loadHomeRepositories(
 
   try {
     const repositories = await getRepositories(query, {
-      timeoutMs: 8_000,
+      timeoutMs: resolveHomeRepositoriesTimeoutMs({
+        query,
+        rawSearchParams,
+      }),
     });
 
     return {
@@ -138,77 +148,4 @@ async function loadHomeRepositories(
         '挣钱优先排序当前响应较慢，首页已自动切到“最近可用项目”以保证先打开和先可读。你仍然可以稍后再切回挣钱优先视图继续看。',
     };
   }
-}
-
-function shouldFallbackHomeRepositories(
-  query: ReturnType<typeof normalizeRepositoryListQuery>,
-) {
-  const hasExplicitFilter = Boolean(
-    query.keyword ||
-      query.language ||
-      query.opportunityLevel ||
-      query.isFavorited !== undefined ||
-      query.roughPass !== undefined ||
-      query.hasCompletenessAnalysis !== undefined ||
-      query.hasIdeaFitAnalysis !== undefined ||
-      query.hasExtractedIdea !== undefined ||
-      query.hasPromisingIdeaSnapshot !== undefined ||
-      query.hasGoodInsight !== undefined ||
-      query.hasManualInsight !== undefined ||
-      query.finalVerdict ||
-      query.finalCategory ||
-      query.moneyPriority ||
-      query.decisionSource ||
-      query.hasConflict !== undefined ||
-      query.needsRecheck !== undefined ||
-      query.hasTrainingHints !== undefined ||
-      query.recommendedAction ||
-      query.createdAfterDays !== undefined ||
-      query.minStars !== undefined ||
-      query.minFinalScore !== undefined ||
-      query.page > 1
-  );
-
-  if (hasExplicitFilter) {
-    return false;
-  }
-
-  return query.sortBy === 'moneyPriority' || query.sortBy === 'insightPriority';
-}
-
-function buildHomeFallbackQuery(
-  query: ReturnType<typeof normalizeRepositoryListQuery>,
-) {
-  return {
-    ...query,
-    view: 'all' as const,
-    sortBy: 'latest' as const,
-    order: 'desc' as const,
-  };
-}
-
-function shouldUseFastHomeDefaultQuery(
-  rawSearchParams: Record<string, string | string[] | undefined>,
-) {
-  const entries = Object.entries(rawSearchParams).filter(([, value]) => {
-    if (Array.isArray(value)) {
-      return value.some((item) => String(item ?? '').trim().length > 0);
-    }
-
-    return String(value ?? '').trim().length > 0;
-  });
-
-  return entries.length === 0;
-}
-
-function buildHomeFastDefaultQuery(
-  query: ReturnType<typeof normalizeRepositoryListQuery>,
-) {
-  return {
-    ...query,
-    view: 'moneyFirst' as const,
-    sortBy: 'moneyPriority' as const,
-    order: 'desc' as const,
-    pageSize: Math.max(Math.min(query.pageSize, 24), 24),
-  };
 }
