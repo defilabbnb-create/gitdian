@@ -7,6 +7,7 @@ import {
   UpdateSettingsPayload,
 } from '@/lib/types/settings';
 import { getApiBaseUrl } from '@/lib/api/base-url';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 function buildTimeoutSignal(timeoutMs?: number) {
   if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
@@ -42,9 +43,9 @@ export async function getSettings(options: { timeoutMs?: number } = {}) {
     method: 'GET',
     cache: 'no-store',
     signal: buildTimeoutSignal(options.timeoutMs),
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<SettingsPayload>(response);
@@ -53,10 +54,10 @@ export async function getSettings(options: { timeoutMs?: number } = {}) {
 export async function updateSettings(payload: UpdateSettingsPayload) {
   const response = await fetch(`${getApiBaseUrl()}/api/settings`, {
     method: 'PUT',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -67,9 +68,9 @@ export async function getSettingsHealth() {
   const response = await fetch(`${getApiBaseUrl()}/api/settings/health`, {
     method: 'GET',
     cache: 'no-store',
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<SettingsHealthPayload>(response);
@@ -80,9 +81,9 @@ export async function getAiHealth(options: { timeoutMs?: number } = {}) {
     method: 'GET',
     cache: 'no-store',
     signal: buildTimeoutSignal(options.timeoutMs),
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<AiHealthPayload>(response);
@@ -93,9 +94,9 @@ export async function getBehaviorMemory(options: { timeoutMs?: number } = {}) {
     method: 'GET',
     cache: 'no-store',
     signal: buildTimeoutSignal(options.timeoutMs),
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<BehaviorMemoryState>(response);
@@ -104,10 +105,10 @@ export async function getBehaviorMemory(options: { timeoutMs?: number } = {}) {
 export async function updateBehaviorMemory(payload: BehaviorMemoryState) {
   const response = await fetch(`${getApiBaseUrl()}/api/settings/behavior-memory`, {
     method: 'PUT',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -117,9 +118,9 @@ export async function updateBehaviorMemory(payload: BehaviorMemoryState) {
 export async function clearBehaviorMemory() {
   const response = await fetch(`${getApiBaseUrl()}/api/settings/behavior-memory`, {
     method: 'DELETE',
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<BehaviorMemoryState>(response);

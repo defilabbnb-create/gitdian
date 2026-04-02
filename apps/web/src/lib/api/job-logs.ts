@@ -9,6 +9,7 @@ import {
   buildJobLogListSearchParams,
 } from '@/lib/types/repository';
 import { getApiBaseUrl } from '@/lib/api/base-url';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 function buildTimeoutSignal(timeoutMs?: number) {
   if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
@@ -31,9 +32,9 @@ export async function getJobLogs(
       method: 'GET',
       cache: 'no-store',
       signal: buildTimeoutSignal(options.timeoutMs),
-      headers: {
+      headers: withInternalApiKey({
         Accept: 'application/json',
-      },
+      }),
     },
   );
 
@@ -90,9 +91,9 @@ export async function getJobLogById(jobId: string) {
   const response = await fetch(`${getApiBaseUrl()}/api/job-logs/${jobId}`, {
     method: 'GET',
     cache: 'no-store',
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<JobLogItem>(response, 'Failed to fetch job detail.');
@@ -101,9 +102,9 @@ export async function getJobLogById(jobId: string) {
 export async function retryJobLog(jobId: string) {
   const response = await fetch(`${getApiBaseUrl()}/api/job-logs/${jobId}/retry`, {
     method: 'POST',
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<EnqueuedTaskResponse>(response, 'Failed to retry job.');
@@ -114,9 +115,9 @@ export async function cancelJobLog(jobId: string) {
     `${getApiBaseUrl()}/api/job-logs/${jobId}/cancel`,
     {
       method: 'POST',
-      headers: {
+      headers: withInternalApiKey({
         Accept: 'application/json',
-      },
+      }),
     },
   );
 

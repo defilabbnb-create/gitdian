@@ -180,10 +180,6 @@ const HISTORICAL_RECOVERY_REPOSITORY_SELECT = {
   },
 } as const satisfies Prisma.RepositorySelect;
 
-type RepositoryRecoveryTarget = Prisma.RepositoryGetPayload<{
-  select: typeof HISTORICAL_RECOVERY_REPOSITORY_SELECT;
-}>;
-
 type RecoverySummarySample = {
   repoId: string;
   fullName: string;
@@ -1149,7 +1145,9 @@ export class HistoricalDataRecoveryService {
 
     await this.persistAnalysisOutcomeSnapshot(outcomeSnapshot);
     await this.persistHistoricalRepairRecentOutcomes(outcomeLogs);
-    await this.saveSystemConfig(RUN_CONFIG_KEY, result);
+    const { selectedPlanItems, ...persistableResult } = result;
+    void selectedPlanItems;
+    await this.saveSystemConfig(RUN_CONFIG_KEY, persistableResult);
     this.logHistoricalRepairLoopTelemetry({
       selectedCount: selected.length,
       loopQueuedCount,

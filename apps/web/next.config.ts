@@ -61,14 +61,6 @@ const createNextConfig = (): NextConfig => ({
 
     return config;
   },
-  eslint: {
-    // We lint and typecheck explicitly in dedicated commands; keeping build
-    // focused on emitting assets makes release flow more stable.
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   env: {
     NEXT_PUBLIC_BUILD_GIT_SHA: resolveBuildGitSha(),
     NEXT_PUBLIC_BUILD_TIME: resolveBuildTime(),

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,9 +40,9 @@ export async function GET(request: NextRequest) {
       method: 'GET',
       cache: 'no-store',
       signal: controller.signal,
-      headers: {
+      headers: withInternalApiKey({
         Accept: 'application/json',
-      },
+      }),
     });
     const body = await response.text();
     const parsedBody = tryParseJsonBody(body);

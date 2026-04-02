@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AdminApiKeyGuard } from './common/auth/admin-api-key.guard';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AnalysisModule } from './modules/analysis/analysis.module';
@@ -32,6 +33,6 @@ import { SystemModule } from './modules/system/system.module';
     GitHubModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, AdminApiKeyGuard],
 })
 export class AppModule {}

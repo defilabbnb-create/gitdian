@@ -2,12 +2,24 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  HistoricalDataRecoveryService,
+  HistoricalDataRecoveryService: RawHistoricalDataRecoveryService,
 } = require('../dist/modules/analysis/historical-data-recovery.service');
 const {
   buildDecisionRecalcFingerprint,
   buildDecisionRecalcGateSnapshot,
 } = require('../dist/modules/analysis/helpers/decision-recalc-gate.helper');
+
+class HistoricalDataRecoveryService extends RawHistoricalDataRecoveryService {
+  constructor(...args) {
+    if (args.length === 8) {
+      // Keep legacy tests compatible with the current constructor shape:
+      // (prisma, repositoryDecision, repositoryInsight, ideaSnapshot, claudeReview,
+      // trainingKnowledgeExport, adaptiveScheduler, queueService, historicalRepairPriority)
+      args.splice(6, 0, {});
+    }
+    super(...args);
+  }
+}
 
 function buildDispatchPlan(overrides = {}) {
   const repoId = overrides.repoId ?? 'repo-1';

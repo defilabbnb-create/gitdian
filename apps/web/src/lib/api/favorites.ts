@@ -10,6 +10,7 @@ import {
   buildFavoriteListSearchParams,
 } from '@/lib/types/repository';
 import { getApiBaseUrl } from '@/lib/api/base-url';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 async function parseResponse<T>(response: Response) {
   const payload = (await response.json()) as
@@ -39,9 +40,9 @@ export async function getFavorites(query: FavoriteListQueryState) {
     {
       method: 'GET',
       cache: 'no-store',
-      headers: {
+      headers: withInternalApiKey({
         Accept: 'application/json',
-      },
+      }),
     },
   );
 
@@ -51,10 +52,10 @@ export async function getFavorites(query: FavoriteListQueryState) {
 export async function createFavorite(payload: FavoriteMutationPayload) {
   const response = await fetch(`${getApiBaseUrl()}/api/favorites`, {
     method: 'POST',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -64,9 +65,9 @@ export async function createFavorite(payload: FavoriteMutationPayload) {
 export async function removeFavorite(repositoryId: string) {
   const response = await fetch(`${getApiBaseUrl()}/api/favorites/${repositoryId}`, {
     method: 'DELETE',
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   return parseResponse<FavoriteWithRepositorySummary>(response);
@@ -78,10 +79,10 @@ export async function updateFavorite(
 ) {
   const response = await fetch(`${getApiBaseUrl()}/api/favorites/${repositoryId}`, {
     method: 'PATCH',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 

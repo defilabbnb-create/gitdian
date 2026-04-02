@@ -11,6 +11,7 @@ import {
 } from '@/lib/types/repository';
 import { normalizeRadarDailySummaryRecord } from '@/lib/api/normalizers';
 import { getApiBaseUrl } from '@/lib/api/base-url';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 function buildTimeoutSignal(timeoutMs?: number) {
   if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
@@ -25,10 +26,10 @@ export async function fetchGitHubRepositories(
 ) {
   const response = await fetch(`${getApiBaseUrl()}/api/github/fetch-repositories`, {
     method: 'POST',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -59,10 +60,10 @@ export async function enqueueGitHubRepositories(
     `${getApiBaseUrl()}/api/github/fetch-repositories/async`,
     {
       method: 'POST',
-      headers: {
+      headers: withInternalApiKey({
         'Content-Type': 'application/json',
         Accept: 'application/json',
-      },
+      }),
       body: JSON.stringify(payload),
     },
   );
@@ -94,10 +95,10 @@ export async function enqueueGitHubCreatedBackfill(
     `${getApiBaseUrl()}/api/github/backfill-created-repositories/async`,
     {
       method: 'POST',
-      headers: {
+      headers: withInternalApiKey({
         'Content-Type': 'application/json',
         Accept: 'application/json',
-      },
+      }),
       body: JSON.stringify(payload),
     },
   );
@@ -135,9 +136,9 @@ export async function getRadarDailySummaries(
       method: 'GET',
       cache: 'no-store',
       signal: buildTimeoutSignal(options.timeoutMs),
-      headers: {
+      headers: withInternalApiKey({
         Accept: 'application/json',
-      },
+      }),
     },
   );
 
@@ -172,9 +173,9 @@ export async function getLatestRadarDailySummary(options: { timeoutMs?: number }
       method: 'GET',
       cache: 'no-store',
       signal: buildTimeoutSignal(options.timeoutMs),
-      headers: {
+      headers: withInternalApiKey({
         Accept: 'application/json',
-      },
+      }),
     },
   );
 
@@ -205,9 +206,9 @@ export async function getRadarRuntimeStatus(
     method: 'GET',
     cache: 'no-store',
     signal: buildTimeoutSignal(options.timeoutMs),
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   const body = (await response.json()) as

@@ -18,6 +18,7 @@ import {
 } from '@/lib/types/repository';
 import { normalizeRepositoryItem } from '@/lib/api/normalizers';
 import { getApiBaseUrl } from '@/lib/api/base-url';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 type ApiPayload<T> =
   | (ApiSuccessResponse<T> & {
@@ -129,9 +130,9 @@ export async function getRepositories(
     method: 'GET',
     cache: 'no-store',
     signal,
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   const payload = await parseApiPayload<ApiPayload<RepositoryListResponse>>(
@@ -168,9 +169,9 @@ export async function getRepositoryById(
     method: 'GET',
     cache: 'no-store',
     signal: buildTimeoutSignal(options.timeoutMs),
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   const payload = await parseApiPayload<ApiPayload<RepositoryDetail>>(
@@ -198,10 +199,10 @@ export async function updateRepositoryManualInsight(
 ) {
   const response = await fetch(`${getApiBaseUrl()}/api/repositories/${id}/manual-insight`, {
     method: 'POST',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -228,9 +229,9 @@ export async function getRepositoryOverviewSummary(options: { timeoutMs?: number
     method: 'GET',
     cache: 'no-store',
     signal: buildTimeoutSignal(options.timeoutMs),
-    headers: {
+    headers: withInternalApiKey({
       Accept: 'application/json',
-    },
+    }),
   });
 
   const payload = await parseApiPayload<ApiPayload<RepositoryOverviewSummary>>(
@@ -258,10 +259,10 @@ export async function runRepositoryAnalysis(
 ) {
   const response = await fetch(`${getApiBaseUrl()}/api/analysis/run/${id}`, {
     method: 'POST',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -293,10 +294,10 @@ export async function enqueueRepositoryAnalysis(
     `${getApiBaseUrl()}/api/analysis/run/${id}/async`,
     {
       method: 'POST',
-      headers: {
+      headers: withInternalApiKey({
         'Content-Type': 'application/json',
         Accept: 'application/json',
-      },
+      }),
       body: JSON.stringify(payload),
     },
   );
@@ -326,10 +327,10 @@ export async function runBatchRepositoryAnalysis(
 ) {
   const response = await fetch(`${getApiBaseUrl()}/api/analysis/run/batch`, {
     method: 'POST',
-    headers: {
+    headers: withInternalApiKey({
       'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -360,10 +361,10 @@ export async function enqueueBatchRepositoryAnalysis(
     `${getApiBaseUrl()}/api/analysis/run/batch/async`,
     {
       method: 'POST',
-      headers: {
+      headers: withInternalApiKey({
         'Content-Type': 'application/json',
         Accept: 'application/json',
-      },
+      }),
       body: JSON.stringify(payload),
     },
   );

@@ -1,6 +1,8 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { AdminApiKeyGuard } from './common/auth/admin-api-key.guard';
+import { INTERNAL_API_KEY_HEADER } from './common/auth/admin-api-key.constants';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -12,8 +14,9 @@ async function bootstrap() {
   app.enableCors({
     origin: webOrigins,
     methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', INTERNAL_API_KEY_HEADER],
   });
+  app.useGlobalGuards(app.get(AdminApiKeyGuard));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

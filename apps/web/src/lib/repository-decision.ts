@@ -1360,8 +1360,9 @@ function matchRepositoryMetadataHint(repository: RepositoryDecisionTarget) {
 
 function inferRepositorySpecificSubject(
   repository: RepositoryDecisionTarget,
-  _summary: RepositoryDecisionSummary,
+  summary: RepositoryDecisionSummary,
 ) {
+  void summary;
   const hint = matchRepositoryMetadataHint(repository);
 
   if (hint) {

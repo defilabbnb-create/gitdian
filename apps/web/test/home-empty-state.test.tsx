@@ -85,7 +85,7 @@ test('homepage with new opportunities does not fall back to the empty state card
 
   assert.doesNotMatch(html, /data-home-empty-state="true"/);
   assert.doesNotMatch(html, /data-home-empty-primary-cta="true"/);
-  assert.match(html, /repo-5/);
+  assert.match(html, /href="\/repositories\/repo-\d+"/);
 });
 
 test('home empty state primary CTA rule is centralized in one selector', () => {

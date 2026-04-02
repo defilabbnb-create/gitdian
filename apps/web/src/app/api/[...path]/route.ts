@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withInternalApiKey } from '@/lib/api/request-headers';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,14 +29,14 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
       method: request.method,
       cache: 'no-store',
       signal: controller.signal,
-      headers: {
+      headers: withInternalApiKey({
         Accept: request.headers.get('accept') ?? 'application/json',
         ...(request.headers.get('content-type')
           ? {
               'Content-Type': request.headers.get('content-type') as string,
             }
           : {}),
-      },
+      }),
       body,
     });
     const responseBody = await upstream.text();
