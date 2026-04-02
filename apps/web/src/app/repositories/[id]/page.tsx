@@ -9,6 +9,7 @@ import { RepositoryDetailIdeaFit } from '@/components/repositories/repository-de
 import { RepositoryNextSteps } from '@/components/repositories/repository-next-steps';
 import { RelatedRepositories } from '@/components/repositories/related-repositories';
 import { RepositoryRelatedJobs } from '@/components/repositories/repository-related-jobs';
+import { RuntimeFailurePanel } from '@/components/runtime-failure-panel';
 import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getJobLogsForRepository } from '@/lib/api/job-logs';
 import { getRepositories, getRepositoryById } from '@/lib/api/repositories';
@@ -205,17 +206,12 @@ export default async function RepositoryDetailPage({
             </RepositoryEvidenceDisclosure>
           </>
         ) : (
-          <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
-              加载失败
-            </p>
-            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-rose-950">
-              仓库详情暂时加载失败
-            </h1>
-            <p className="mt-4 text-sm leading-7 text-rose-800">
-              {errorMessage ?? '请检查后端 API 是否正常运行。'}
-            </p>
-          </section>
+          <RuntimeFailurePanel
+            title="仓库详情暂时加载失败"
+            message={errorMessage ?? '请检查后端 API 是否正常运行。'}
+            recoveryLabel="回到项目列表继续筛选"
+            recoveryHref="/"
+          />
         )}
       </div>
     </main>

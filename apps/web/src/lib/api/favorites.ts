@@ -12,6 +12,14 @@ import {
 import { getApiBaseUrl } from '@/lib/api/base-url';
 import { withInternalApiKey } from '@/lib/api/request-headers';
 
+function buildTimeoutSignal(timeoutMs?: number) {
+  if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal.timeout !== 'function') {
+    return undefined;
+  }
+
+  return AbortSignal.timeout(timeoutMs);
+}
+
 async function parseResponse<T>(response: Response) {
   const payload = (await response.json()) as
     | (ApiSuccessResponse<T> & {
@@ -33,13 +41,19 @@ async function parseResponse<T>(response: Response) {
   return payload.data;
 }
 
-export async function getFavorites(query: FavoriteListQueryState) {
+export async function getFavorites(
+  query: FavoriteListQueryState,
+  options: {
+    timeoutMs?: number;
+  } = {},
+) {
   const search = buildFavoriteListSearchParams(query);
   const response = await fetch(
     `${getApiBaseUrl()}/api/favorites${search ? `?${search}` : ''}`,
     {
       method: 'GET',
       cache: 'no-store',
+      signal: buildTimeoutSignal(options.timeoutMs),
       headers: withInternalApiKey({
         Accept: 'application/json',
       }),

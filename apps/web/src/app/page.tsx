@@ -7,6 +7,7 @@ import { HomeActiveProjectsStrip } from '@/components/repositories/home-active-p
 import { HomePageShellFallback } from '@/components/repositories/home-empty-state-fallback';
 import { HomeOpportunityPool } from '@/components/repositories/home-opportunity-pool';
 import { HomeSecondaryLinks } from '@/components/repositories/home-runtime-status';
+import { RuntimeFailurePanel } from '@/components/runtime-failure-panel';
 import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getRepositories } from '@/lib/api/repositories';
 import { normalizeRepositoryListQuery } from '@/lib/types/repository';
@@ -74,15 +75,12 @@ async function HomePageContent({ searchParams }: HomePageProps) {
       <HomeSecondaryLinks />
 
       {errorMessage ? (
-        <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
-            加载失败
-          </p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-rose-950">
-            项目列表暂时加载失败
-          </h2>
-          <p className="mt-3 text-sm leading-7 text-rose-800">{errorMessage}</p>
-        </section>
+        <RuntimeFailurePanel
+          title="项目列表暂时加载失败"
+          message={errorMessage}
+          recoveryLabel="回到首页保留快捷入口"
+          recoveryHref="/"
+        />
       ) : repositories ? (
         <HomeOpportunityPool
           key={JSON.stringify(repositoriesQuery)}

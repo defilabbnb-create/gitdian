@@ -14,11 +14,29 @@ export function getFriendlyRuntimeError(
 
   const normalized = message.toLowerCase();
 
+  const errorStatus =
+    'status' in error && typeof error.status === 'number'
+      ? error.status
+      : null;
+
+  if (
+    errorStatus === 502 ||
+    errorStatus === 503 ||
+    errorStatus === 504 ||
+    normalized.includes('代理请求失败') ||
+    normalized.includes('proxy request failed') ||
+    normalized.includes('bad gateway') ||
+    normalized.includes('gateway') ||
+    normalized.includes('service unavailable')
+  ) {
+    return '后端接口当前不可达，前端先切到降级展示。请先确认 API 服务是否在线，再刷新当前页面。';
+  }
+
   if (
     normalized.includes('aborted due to timeout') ||
     normalized.includes('timeout')
   ) {
-    return '请求超时了，系统先展示其余可用内容，你稍后刷新即可。';
+    return '请求超时了，前端已自动降级。请稍后刷新；如果持续出现，优先检查后端或代理链路。';
   }
 
   if (

@@ -65,9 +65,14 @@ export async function updateSettings(payload: UpdateSettingsPayload) {
 }
 
 export async function getSettingsHealth() {
+  return getSettingsHealthWithOptions();
+}
+
+export async function getSettingsHealthWithOptions(options: { timeoutMs?: number } = {}) {
   const response = await fetch(`${getApiBaseUrl()}/api/settings/health`, {
     method: 'GET',
     cache: 'no-store',
+    signal: buildTimeoutSignal(options.timeoutMs),
     headers: withInternalApiKey({
       Accept: 'application/json',
     }),

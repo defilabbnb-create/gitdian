@@ -1,11 +1,17 @@
 import { Suspense } from 'react';
+import { RuntimeFailurePanel } from '@/components/runtime-failure-panel';
 import { SettingsBuildInfo } from '@/components/settings/settings-build-info';
 import { SettingsForm } from '@/components/settings/settings-form';
 import { SettingsHealthOverview } from '@/components/settings/settings-health-overview';
 import { SettingsPrimaryConfigOverview } from '@/components/settings/settings-primary-config-overview';
 import { SettingsRuntimeSummary } from '@/components/settings/settings-runtime-summary';
 import { SettingsTechnicalDetails } from '@/components/settings/settings-technical-details';
-import { getAiHealth, getSettings, getSettingsHealth } from '@/lib/api/settings';
+import {
+  getAiHealth,
+  getSettings,
+  getSettingsHealthWithOptions,
+} from '@/lib/api/settings';
+import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,8 +31,8 @@ export default function SettingsPage() {
 
 async function SettingsPageContent() {
   const [settingsResult, healthResult, aiHealthResult] = await Promise.allSettled([
-    getSettings(),
-    getSettingsHealth(),
+    getSettings({ timeoutMs: 6_000 }),
+    getSettingsHealthWithOptions({ timeoutMs: 4_000 }),
     getAiHealth({ timeoutMs: 4_000 }),
   ]);
 
@@ -34,17 +40,19 @@ async function SettingsPageContent() {
     settingsResult.status === 'fulfilled' ? settingsResult.value : null;
   const errorMessage =
     settingsResult.status === 'rejected'
-      ? settingsResult.reason instanceof Error
-        ? settingsResult.reason.message
-        : '配置读取失败，请稍后重试。'
+      ? getFriendlyRuntimeError(
+          settingsResult.reason,
+          '配置读取失败，请稍后重试。',
+        )
       : null;
   const health =
     healthResult.status === 'fulfilled' ? healthResult.value : null;
   const healthErrorMessage =
     healthResult.status === 'rejected'
-      ? healthResult.reason instanceof Error
-        ? healthResult.reason.message
-        : '健康检查读取失败，请稍后重试。'
+      ? getFriendlyRuntimeError(
+          healthResult.reason,
+          '健康检查读取失败，请稍后重试。',
+        )
       : null;
   const aiHealth =
     aiHealthResult.status === 'fulfilled' ? aiHealthResult.value : null;
@@ -90,17 +98,12 @@ async function SettingsPageContent() {
           />
         </section>
       ) : (
-        <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
-            加载失败
-          </p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-rose-950">
-            配置页暂时无法加载
-          </h2>
-          <p className="mt-3 text-sm leading-7 text-rose-800">
-            {errorMessage ?? '请检查后端 settings 模块是否正常运行。'}
-          </p>
-        </section>
+        <RuntimeFailurePanel
+          title="配置页暂时无法加载"
+          message={errorMessage ?? '请检查后端 settings 模块是否正常运行。'}
+          recoveryLabel="回到首页保留快捷入口"
+          recoveryHref="/"
+        />
       )}
     </>
   );
