@@ -596,6 +596,13 @@ export class GitHubColdToolCollectorService {
         metadata: {
           fromColdToolCollector: true,
         },
+        jobOptionsOverride: {
+          priority: this.readPositiveInt(
+            'COLD_TOOL_DEEP_ANALYSIS_PRIORITY',
+            18,
+            1,
+          ),
+        },
       }));
 
     if (!entries.length) {

@@ -1070,6 +1070,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         queueJobId: true,
         jobStatus: true,
         progress: true,
+        triggeredBy: true,
         updatedAt: true,
         payload: true,
       },
@@ -1090,7 +1091,8 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       if (
         row.jobStatus === JobStatus.PENDING &&
         queueSnapshot &&
-        ['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state)
+        ['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state) &&
+        !this.shouldRecoverQueuedColdToolAnalysis(row)
       ) {
         skippedCount += 1;
         continue;
@@ -1134,6 +1136,10 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         ...dtoRecord,
         ...(payload.fullDbCatchup === true ? { useDeepBundle: true } : {}),
       } as RunAnalysisDto;
+      const isColdToolAnalysis = this.isColdToolAnalysisPayload(
+        payload,
+        row.triggeredBy,
+      );
 
       await this.queueService.enqueueSingleAnalysis(
         repositoryId,
@@ -1146,6 +1152,14 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
             staleRecoveredQueueJobId: row.queueJobId ?? null,
             staleRecoveredFromStatus: row.jobStatus,
           },
+          jobOptionsOverride: isColdToolAnalysis
+            ? {
+                priority: this.readConcurrency(
+                  'COLD_TOOL_DEEP_ANALYSIS_PRIORITY',
+                  18,
+                ),
+              }
+            : undefined,
         },
       );
       requeuedCount += 1;
@@ -1156,6 +1170,34 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       requeuedCount,
       skippedCount,
     };
+  }
+
+  private shouldRecoverQueuedColdToolAnalysis(row: {
+    payload: Prisma.JsonValue | null;
+    triggeredBy: string | null;
+  }) {
+    return this.isColdToolAnalysisPayload(
+      this.readJsonRecord(row.payload),
+      row.triggeredBy,
+    );
+  }
+
+  private isColdToolAnalysisPayload(
+    payload: Record<string, unknown>,
+    triggeredBy?: string | null,
+  ) {
+    const dto = this.isJsonRecord(payload.dto) ? payload.dto : null;
+    const lane = this.normalizeNullableString(dto?.analysisLane);
+
+    if (lane === 'cold_tool') {
+      return true;
+    }
+
+    if (payload.fromColdToolCollector === true) {
+      return true;
+    }
+
+    return triggeredBy === 'cold_tool_collector';
   }
 
   private isColdToolCollectorJobStale(
