@@ -235,10 +235,11 @@ export class QueueService implements OnModuleDestroy {
         ? this.hasBehaviorPriorityBoost(dto)
         : typeof priorityOptions.priority === 'number',
     );
+    const queueRoute = this.resolveSingleAnalysisQueue(dto);
 
     return this.enqueueJob({
-      queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
-      jobName: QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
+      queueName: queueRoute.queueName,
+      jobName: queueRoute.jobName,
       payload: {
         repositoryId,
         dto,
@@ -300,103 +301,45 @@ export class QueueService implements OnModuleDestroy {
         .filter(Boolean) as EnqueueResult[];
     }
 
-    const queueName = QUEUE_NAMES.ANALYSIS_SINGLE;
-    const jobName = QUEUE_JOB_TYPES.ANALYSIS_SINGLE;
-    const queue = this.getQueue(queueName);
-    const normalizedEntries = await Promise.all(
-      dedupedEntries.map(async (entry) => {
-        const skipPriorityLookup = this.shouldSkipAnalysisPriorityLookup(
-          entry.jobOptionsOverride,
-        );
-        const priorityOptions = skipPriorityLookup
-          ? {}
-          : await this.buildAnalysisPriorityOptions(entry.repositoryId, entry.dto);
+    const newResultsByRepositoryId = new Map<string, EnqueueResult>();
+    const entriesByQueue = new Map<
+      QueueName,
+      {
+        jobName: string;
+        entries: SingleAnalysisBulkEntry[];
+      }
+    >();
 
-        return {
-          entry,
-          payload: {
-            repositoryId: entry.repositoryId,
-            dto: entry.dto,
-            ...(entry.metadata ?? {}),
-          },
-          options: {
-            ...this.buildJobOptions(queueName),
-            ...priorityOptions,
-            ...(entry.jobOptionsOverride ?? {}),
-          },
-          behaviorPriorityApplied: skipPriorityLookup
-            ? this.hasBehaviorPriorityBoost(entry.dto)
-            : typeof priorityOptions.priority === 'number',
-        };
-      }),
-    );
+    for (const entry of dedupedEntries) {
+      const queueRoute = this.resolveSingleAnalysisQueue(entry.dto);
+      const current = entriesByQueue.get(queueRoute.queueName);
+      if (current) {
+        current.entries.push(entry);
+        continue;
+      }
 
-    await this.recordQueueInfluencesBulk(
-      normalizedEntries.map((entry) => entry.behaviorPriorityApplied),
-    );
-
-    const jobLogs = await this.startQueueJobsBulk(
-      normalizedEntries.map(({ entry, payload, options }) => ({
-        jobName,
-        jobStatus: JobStatus.PENDING,
-        queueName,
-        payload,
-        triggeredBy: entry.triggeredBy ?? triggeredBy,
-        attempts: options.attempts ?? 1,
-        retryCount: 0,
-        parentJobId: entry.parentJobId,
-        startedAt: null,
-      })),
-    );
-
-    let jobs;
-    try {
-      jobs = await queue.addBulk(
-        normalizedEntries.map(({ payload, options }, index) => ({
-          name: jobName,
-          data: {
-            ...payload,
-            jobLogId: jobLogs[index].id,
-          },
-          opts: options,
-        })),
-      );
-    } catch (error) {
-      await this.cancelQueueJobsBulk(jobLogs.map((jobLog) => jobLog.id), {
-        errorMessage: 'Task cancelled because bulk queue add failed.',
-        result: {
-          bulkQueueAddFailed: true,
-          queueName,
-        },
+      entriesByQueue.set(queueRoute.queueName, {
+        jobName: queueRoute.jobName,
+        entries: [entry],
       });
-      throw error;
     }
 
-    const attachInputs = jobs.map((job, index) => ({
-      jobId: jobLogs[index].id,
-      queueName,
-      queueJobId: String(job.id),
-      attempts: normalizedEntries[index].options.attempts ?? 1,
-    }));
-
-    try {
-      await this.attachQueueJobsBulk(attachInputs);
-    } catch {
-      await Promise.all(
-        attachInputs.map((input) => this.jobLogService.attachQueueJob(input)),
+    for (const [queueName, group] of entriesByQueue.entries()) {
+      const groupResults = await this.enqueueSingleAnalysesBulkForQueue(
+        queueName,
+        group.jobName,
+        group.entries,
+        triggeredBy,
       );
+
+      for (const result of groupResults) {
+        const repositoryId = String(result.repositoryId ?? '').trim();
+        if (!repositoryId) {
+          continue;
+        }
+        newResultsByRepositoryId.set(repositoryId, result.enqueueResult);
+      }
     }
-
-    const newResults = jobs.map((job, index) => ({
-      jobId: jobLogs[index].id,
-      queueName,
-      queueJobId: String(job.id),
-      jobStatus: JobStatus.PENDING,
-    }));
-
-    const newResultsByRepositoryId = new Map(
-      dedupedEntries.map((entry, index) => [entry.repositoryId, newResults[index]]),
-    );
 
     return entries.map((entry) => {
       const existing = existingResultsByRepositoryId.get(entry.repositoryId);
@@ -877,6 +820,7 @@ export class QueueService implements OnModuleDestroy {
           removeOnFail: false,
         };
       case QUEUE_NAMES.ANALYSIS_SINGLE:
+      case QUEUE_NAMES.ANALYSIS_SINGLE_COLD:
         return {
           attempts: 2,
           backoff: {
@@ -906,7 +850,9 @@ export class QueueService implements OnModuleDestroy {
 
     return (await this.prisma.jobLog.findFirst({
       where: {
-        queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+        queueName: {
+          in: [QUEUE_NAMES.ANALYSIS_SINGLE, QUEUE_NAMES.ANALYSIS_SINGLE_COLD],
+        },
         jobStatus: {
           in: [JobStatus.PENDING, JobStatus.RUNNING],
         },
@@ -941,7 +887,9 @@ export class QueueService implements OnModuleDestroy {
 
     const rows = (await this.prisma.jobLog.findMany({
       where: {
-        queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+        queueName: {
+          in: [QUEUE_NAMES.ANALYSIS_SINGLE, QUEUE_NAMES.ANALYSIS_SINGLE_COLD],
+        },
         jobStatus: {
           in: [JobStatus.PENDING, JobStatus.RUNNING],
         },
@@ -1013,6 +961,122 @@ export class QueueService implements OnModuleDestroy {
       queueJobId: jobLog.queueJobId ?? jobLog.id,
       jobStatus: jobLog.jobStatus,
     };
+  }
+
+  private resolveSingleAnalysisQueue(dto: RunAnalysisDto) {
+    if (dto.analysisLane === 'cold_tool') {
+      return {
+        queueName: QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+        jobName: QUEUE_JOB_TYPES.ANALYSIS_SINGLE_COLD,
+      } as const;
+    }
+
+    return {
+      queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+      jobName: QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
+    } as const;
+  }
+
+  private async enqueueSingleAnalysesBulkForQueue(
+    queueName: QueueName,
+    jobName: string,
+    entries: SingleAnalysisBulkEntry[],
+    triggeredBy: string,
+  ) {
+    const queue = this.getQueue(queueName);
+    const normalizedEntries = await Promise.all(
+      entries.map(async (entry) => {
+        const skipPriorityLookup = this.shouldSkipAnalysisPriorityLookup(
+          entry.jobOptionsOverride,
+        );
+        const priorityOptions = skipPriorityLookup
+          ? {}
+          : await this.buildAnalysisPriorityOptions(entry.repositoryId, entry.dto);
+
+        return {
+          entry,
+          payload: {
+            repositoryId: entry.repositoryId,
+            dto: entry.dto,
+            ...(entry.metadata ?? {}),
+          },
+          options: {
+            ...this.buildJobOptions(queueName),
+            ...priorityOptions,
+            ...(entry.jobOptionsOverride ?? {}),
+          },
+          behaviorPriorityApplied: skipPriorityLookup
+            ? this.hasBehaviorPriorityBoost(entry.dto)
+            : typeof priorityOptions.priority === 'number',
+        };
+      }),
+    );
+
+    await this.recordQueueInfluencesBulk(
+      normalizedEntries.map((entry) => entry.behaviorPriorityApplied),
+    );
+
+    const jobLogs = await this.startQueueJobsBulk(
+      normalizedEntries.map(({ entry, payload, options }) => ({
+        jobName,
+        jobStatus: JobStatus.PENDING,
+        queueName,
+        payload,
+        triggeredBy: entry.triggeredBy ?? triggeredBy,
+        attempts: options.attempts ?? 1,
+        retryCount: 0,
+        parentJobId: entry.parentJobId,
+        startedAt: null,
+      })),
+    );
+
+    let jobs;
+    try {
+      jobs = await queue.addBulk(
+        normalizedEntries.map(({ payload, options }, index) => ({
+          name: jobName,
+          data: {
+            ...payload,
+            jobLogId: jobLogs[index].id,
+          },
+          opts: options,
+        })),
+      );
+    } catch (error) {
+      await this.cancelQueueJobsBulk(jobLogs.map((jobLog) => jobLog.id), {
+        errorMessage: 'Task cancelled because bulk queue add failed.',
+        result: {
+          bulkQueueAddFailed: true,
+          queueName,
+        },
+      });
+      throw error;
+    }
+
+    const attachInputs = jobs.map((job, index) => ({
+      jobId: jobLogs[index].id,
+      queueName,
+      queueJobId: String(job.id),
+      attempts: normalizedEntries[index].options.attempts ?? 1,
+    }));
+
+    try {
+      await this.attachQueueJobsBulk(attachInputs);
+    } catch {
+      await Promise.all(
+        attachInputs.map((input) => this.jobLogService.attachQueueJob(input)),
+      );
+    }
+
+    return jobs.map((job, index) => ({
+      repositoryId: entries[index].repositoryId,
+      enqueueResult: {
+        jobId: jobLogs[index].id,
+        queueName,
+        queueJobId: String(job.id),
+        jobStatus: JobStatus.PENDING,
+      } as EnqueueResult,
+    }));
   }
 
   private normalizeIdeaSnapshotBulkEntry(

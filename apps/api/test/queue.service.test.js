@@ -124,6 +124,41 @@ test('queue service keeps historical repair snapshot intake available when GitHu
   assert.equal(queueCalls[0].queueName, 'analysis.snapshot');
 });
 
+test('queue service suppresses duplicate active cold-tool collector enqueue', async () => {
+  const { service, queueCalls } = createService();
+
+  service.prisma = {
+    jobLog: {
+      findFirst: async () => ({
+        id: 'job-cold-1',
+        queueName: 'github.cold-tool-collect',
+        queueJobId: 'queue-job-cold-1',
+        jobStatus: 'RUNNING',
+        payload: {
+          dto: {
+            queriesPerRun: 24,
+          },
+        },
+      }),
+    },
+  };
+
+  const result = await service.enqueueGitHubColdToolCollect(
+    {
+      queriesPerRun: 24,
+    },
+    'ui',
+  );
+
+  assert.equal(queueCalls.length, 0);
+  assert.deepEqual(result, {
+    jobId: 'job-cold-1',
+    queueName: 'github.cold-tool-collect',
+    queueJobId: 'queue-job-cold-1',
+    jobStatus: 'RUNNING',
+  });
+});
+
 test('queue service applies a positive behavior priority boost to analysis jobs', async () => {
   const { service, queueCalls, behaviorCalls } = createService();
 
@@ -170,6 +205,113 @@ test('queue service leaves priority untouched when no behavior boost is provided
 
   assert.equal(behaviorCalls[0], false);
   assert.deepEqual(queueCalls[0].jobOptionsOverride, {});
+});
+
+test('queue service suppresses duplicate active single-analysis enqueue for the same repository', async () => {
+  const { service, queueCalls, behaviorCalls } = createService();
+
+  service.prisma = {
+    jobLog: {
+      findFirst: async () => ({
+        id: 'job-active-1',
+        queueName: 'analysis.single',
+        queueJobId: 'queue-job-active-1',
+        jobStatus: 'RUNNING',
+        payload: {
+          repositoryId: 'repo-dup',
+        },
+      }),
+    },
+  };
+
+  const result = await service.enqueueSingleAnalysis(
+    'repo-dup',
+    {
+      mode: 'FULL',
+    },
+    'ui',
+  );
+
+  assert.equal(queueCalls.length, 0);
+  assert.equal(behaviorCalls.length, 0);
+  assert.deepEqual(result, {
+    jobId: 'job-active-1',
+    queueName: 'analysis.single',
+    queueJobId: 'queue-job-active-1',
+    jobStatus: 'RUNNING',
+  });
+});
+
+test('queue service routes cold-tool deep analysis to the dedicated cold queue', async () => {
+  const { service, queueCalls } = createService();
+
+  await service.enqueueSingleAnalysis(
+    'repo-cold-lane',
+    {
+      mode: 'FULL',
+      analysisLane: 'cold_tool',
+    },
+    'cold_tool_collector',
+  );
+
+  assert.equal(queueCalls.length, 1);
+  assert.equal(queueCalls[0].queueName, 'analysis.single.cold');
+  assert.equal(queueCalls[0].jobName, 'analysis.run_single_cold');
+});
+
+test('queue service bulk enqueue splits default and cold-tool analyses into separate queues', async () => {
+  const { service } = createService();
+  const bulkCalls = [];
+
+  service.enqueueSingleAnalysesBulkForQueue = async (
+    queueName,
+    jobName,
+    entries,
+  ) => {
+    bulkCalls.push({
+      queueName,
+      jobName,
+      repositoryIds: entries.map((entry) => entry.repositoryId),
+    });
+    return entries.map((entry, index) => ({
+      repositoryId: entry.repositoryId,
+      enqueueResult: {
+        jobId: `job-${index + 1}`,
+        queueName,
+        queueJobId: `queue-job-${index + 1}`,
+        jobStatus: 'PENDING',
+      },
+    }));
+  };
+
+  const results = await service.enqueueSingleAnalysesBulk(
+    [
+      {
+        repositoryId: 'repo-default',
+        dto: {
+          mode: 'FULL',
+        },
+      },
+      {
+        repositoryId: 'repo-cold',
+        dto: {
+          mode: 'FULL',
+          analysisLane: 'cold_tool',
+        },
+      },
+    ],
+    'ui',
+  );
+
+  assert.equal(bulkCalls.length, 2);
+  assert.deepEqual(
+    bulkCalls.map((call) => call.queueName).sort(),
+    ['analysis.single', 'analysis.single.cold'],
+  );
+  assert.deepEqual(
+    results.map((item) => item.queueName),
+    ['analysis.single', 'analysis.single.cold'],
+  );
 });
 
 test('queue service preserves router metadata on analysis payloads', async () => {
@@ -468,4 +610,111 @@ test('queue service bulk single analysis enqueue preserves per-job options and b
     results.map((result) => result.queueJobId),
     ['queue-job-1', 'queue-job-2'],
   );
+});
+
+test('queue service bulk single analysis enqueue suppresses active and duplicate repository jobs', async () => {
+  const intakeCalls = [];
+  const bulkJobs = [];
+  const behaviorBulkCalls = [];
+  const service = new QueueService(
+    {
+      startJobsBulk: async (inputs) =>
+        inputs.map((_input, index) => ({
+          id: `job-${index + 1}`,
+        })),
+      attachQueueJobsBulk: async (inputs) => inputs,
+    },
+    {
+      recordQueueInfluenceBulk: async (flags) => {
+        behaviorBulkCalls.push(flags);
+      },
+      recordQueueInfluence: async () => {
+        throw new Error('recordQueueInfluence fallback should not be used');
+      },
+    },
+    {
+      getAnalysisPriorityAdjustment: async () => ({
+        boost: 0,
+        reasons: [],
+        suppressed: false,
+      }),
+    },
+    {
+      jobLog: {
+        findMany: async () => [
+          {
+            id: 'job-active-1',
+            queueName: 'analysis.single',
+            queueJobId: 'queue-job-active-1',
+            jobStatus: 'PENDING',
+            payload: {
+              repositoryId: 'repo-existing',
+            },
+          },
+        ],
+      },
+    },
+  );
+
+  service.assertAnalysisPoolIntakeAllowed = async (input) => {
+    intakeCalls.push(input);
+  };
+  service.getQueue = () => ({
+    addBulk: async (items) => {
+      bulkJobs.push(items);
+      return items.map((_item, index) => ({
+        id: `queue-job-${index + 1}`,
+      }));
+    },
+  });
+
+  const results = await service.enqueueSingleAnalysesBulk(
+    [
+      {
+        repositoryId: 'repo-existing',
+        dto: { mode: 'FULL' },
+      },
+      {
+        repositoryId: 'repo-new',
+        dto: { mode: 'FULL' },
+      },
+      {
+        repositoryId: 'repo-new',
+        dto: { mode: 'FULL' },
+      },
+    ],
+    'historical_repair',
+  );
+
+  assert.equal(intakeCalls.length, 1);
+  assert.deepEqual(intakeCalls[0].repositoryIds, [
+    'repo-existing',
+    'repo-new',
+    'repo-new',
+  ]);
+  assert.equal(behaviorBulkCalls.length, 1);
+  assert.deepEqual(behaviorBulkCalls[0], [false]);
+  assert.equal(bulkJobs.length, 1);
+  assert.equal(bulkJobs[0].length, 1);
+  assert.equal(bulkJobs[0][0].data.repositoryId, 'repo-new');
+  assert.deepEqual(results, [
+    {
+      jobId: 'job-active-1',
+      queueName: 'analysis.single',
+      queueJobId: 'queue-job-active-1',
+      jobStatus: 'PENDING',
+    },
+    {
+      jobId: 'job-1',
+      queueName: 'analysis.single',
+      queueJobId: 'queue-job-1',
+      jobStatus: 'PENDING',
+    },
+    {
+      jobId: 'job-1',
+      queueName: 'analysis.single',
+      queueJobId: 'queue-job-1',
+      jobStatus: 'PENDING',
+    },
+  ]);
 });

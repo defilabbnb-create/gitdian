@@ -101,6 +101,16 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
           >,
         ),
       ),
+      this.createWorker(
+        QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+        this.resolveColdDeepAnalysisConcurrency(),
+        (job) =>
+          this.handleSingleAnalysis(
+            job as Job<
+              QueueJobData & { repositoryId: string; dto: RunAnalysisDto }
+            >,
+          ),
+      ),
       this.createWorker(QUEUE_NAMES.ANALYSIS_BATCH, 1, (job) =>
         this.handleBatchAnalysis(
           job as Job<QueueJobData & { dto: BatchRunAnalysisDto }>,
@@ -232,6 +242,8 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         return this.readConcurrency('IDEA_SNAPSHOT_CONCURRENCY', 12);
       case QUEUE_NAMES.ANALYSIS_SINGLE:
         return this.readConcurrency('DEEP_ANALYSIS_CONCURRENCY', 6);
+      case QUEUE_NAMES.ANALYSIS_SINGLE_COLD:
+        return this.resolveColdDeepAnalysisConcurrency();
       default:
         return 1;
     }
@@ -286,6 +298,13 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     }
 
     return resolved;
+  }
+
+  private resolveColdDeepAnalysisConcurrency() {
+    return this.readConcurrency(
+      'COLD_TOOL_DEEP_ANALYSIS_CONCURRENCY',
+      Math.max(2, Math.floor(this.readConcurrency('DEEP_ANALYSIS_CONCURRENCY', 6) / 2)),
+    );
   }
 
   private startColdToolCollectorScheduler() {
@@ -447,13 +466,14 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       this.analysisSingleWatchdogTickInFlight = true;
 
       try {
+        const migrated = await this.migrateQueuedColdAnalysisBacklogIfNeeded();
         const summary = await this.recoverStaleAnalysisSingleJobsIfNeeded();
-        if (!summary.recoveredCount) {
+        if (!summary.recoveredCount && migrated.migratedCount === 0) {
           return;
         }
 
         this.logger.warn(
-          `Analysis.single watchdog recovered=${summary.recoveredCount} requeued=${summary.requeuedCount} skipped=${summary.skippedCount}`,
+          `Analysis.single watchdog migratedCold=${migrated.migratedCount} recovered=${summary.recoveredCount} requeued=${summary.requeuedCount} skipped=${summary.skippedCount}`,
         );
       } catch (error) {
         this.logger.warn(
@@ -1053,7 +1073,9 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     const cutoff = new Date(Date.now() - staleMinutes * 60_000);
     const staleRows = await this.prisma.jobLog.findMany({
       where: {
-        queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+        queueName: {
+          in: [QUEUE_NAMES.ANALYSIS_SINGLE, QUEUE_NAMES.ANALYSIS_SINGLE_COLD],
+        },
         jobStatus: {
           in: [JobStatus.PENDING, JobStatus.RUNNING],
         },
@@ -1067,6 +1089,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       take: limit,
       select: {
         id: true,
+        queueName: true,
         queueJobId: true,
         jobStatus: true,
         progress: true,
@@ -1081,9 +1104,13 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     let skippedCount = 0;
 
     for (const row of staleRows) {
+      const queueName =
+        row.queueName === QUEUE_NAMES.ANALYSIS_SINGLE_COLD
+          ? QUEUE_NAMES.ANALYSIS_SINGLE_COLD
+          : QUEUE_NAMES.ANALYSIS_SINGLE;
       const queueSnapshot = row.queueJobId
         ? await this.queueService.getQueueJobSnapshot(
-            QUEUE_NAMES.ANALYSIS_SINGLE,
+            queueName,
             row.queueJobId,
           )
         : null;
@@ -1114,7 +1141,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
           ['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state))
       ) {
         await this.queueService.tryRemoveQueueJob(
-          QUEUE_NAMES.ANALYSIS_SINGLE,
+          queueName,
           row.queueJobId,
         );
       }
@@ -1132,14 +1159,19 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       });
       recoveredCount += 1;
 
-      const dto = {
-        ...dtoRecord,
-        ...(payload.fullDbCatchup === true ? { useDeepBundle: true } : {}),
-      } as RunAnalysisDto;
       const isColdToolAnalysis = this.isColdToolAnalysisPayload(
         payload,
         row.triggeredBy,
       );
+      const dto = {
+        ...dtoRecord,
+        ...(isColdToolAnalysis
+          ? {
+              analysisLane: 'cold_tool',
+            }
+          : {}),
+        ...(payload.fullDbCatchup === true ? { useDeepBundle: true } : {}),
+      } as RunAnalysisDto;
 
       await this.queueService.enqueueSingleAnalysis(
         repositoryId,
@@ -1149,6 +1181,11 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
           parentJobId: row.id,
           metadata: {
             fromAnalysisSingleWatchdog: true,
+            ...(isColdToolAnalysis
+              ? {
+                  fromColdToolCollector: true,
+                }
+              : {}),
             staleRecoveredQueueJobId: row.queueJobId ?? null,
             staleRecoveredFromStatus: row.jobStatus,
           },
@@ -1169,6 +1206,132 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       recoveredCount,
       requeuedCount,
       skippedCount,
+    };
+  }
+
+  private async migrateQueuedColdAnalysisBacklogIfNeeded() {
+    const cutoff = new Date(
+      Date.now() -
+        this.readConcurrency(
+          'COLD_TOOL_ANALYSIS_QUEUE_MIGRATION_MINUTES',
+          5,
+        ) *
+          60_000,
+    );
+    const rows = await this.prisma.jobLog.findMany({
+      where: {
+        queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+        jobStatus: JobStatus.PENDING,
+        updatedAt: {
+          lt: cutoff,
+        },
+        OR: [
+          {
+            triggeredBy: 'cold_tool_collector',
+          },
+          {
+            triggeredBy: 'analysis_single_watchdog',
+          },
+          {
+            payload: {
+              path: ['dto', 'analysisLane'],
+              equals: 'cold_tool',
+            },
+          },
+          {
+            payload: {
+              path: ['fromColdToolCollector'],
+              equals: true,
+            },
+          },
+        ],
+      },
+      orderBy: {
+        updatedAt: 'asc',
+      },
+      take: this.readConcurrency('COLD_TOOL_ANALYSIS_QUEUE_MIGRATION_LIMIT', 24),
+      select: {
+        id: true,
+        queueJobId: true,
+        jobStatus: true,
+        progress: true,
+        triggeredBy: true,
+        payload: true,
+      },
+    });
+
+    let migratedCount = 0;
+
+    for (const row of rows) {
+      const payload = this.readJsonRecord(row.payload);
+      if (!this.isColdToolAnalysisPayload(payload, row.triggeredBy)) {
+        continue;
+      }
+
+      const repositoryId = this.normalizeNullableString(payload.repositoryId);
+      const dtoRecord = this.isJsonRecord(payload.dto) ? payload.dto : null;
+      if (!repositoryId || !dtoRecord) {
+        continue;
+      }
+
+      const queueSnapshot = row.queueJobId
+        ? await this.queueService.getQueueJobSnapshot(
+            QUEUE_NAMES.ANALYSIS_SINGLE,
+            row.queueJobId,
+          )
+        : null;
+
+      if (
+        !queueSnapshot ||
+        !['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state)
+      ) {
+        continue;
+      }
+
+      await this.queueService.tryRemoveQueueJob(
+        QUEUE_NAMES.ANALYSIS_SINGLE,
+        row.queueJobId ?? '',
+      );
+      await this.jobLogService.failJob({
+        jobId: row.id,
+        errorMessage:
+          'Queued cold-tool deep analysis was migrated into the dedicated cold analysis queue.',
+        progress: row.progress,
+        result: {
+          migratedToColdQueue: true,
+          previousQueueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+          previousQueueJobId: row.queueJobId,
+          queueState: queueSnapshot.state,
+        },
+      });
+
+      await this.queueService.enqueueSingleAnalysis(
+        repositoryId,
+        {
+          ...dtoRecord,
+          analysisLane: 'cold_tool',
+        } as RunAnalysisDto,
+        'analysis_single_watchdog',
+        {
+          parentJobId: row.id,
+          metadata: {
+            fromColdToolCollector: true,
+            migratedFromDefaultAnalysisQueue: true,
+            staleRecoveredQueueJobId: row.queueJobId ?? null,
+          },
+          jobOptionsOverride: {
+            priority: this.readConcurrency(
+              'COLD_TOOL_DEEP_ANALYSIS_PRIORITY',
+              18,
+            ),
+          },
+        },
+      );
+      migratedCount += 1;
+    }
+
+    return {
+      migratedCount,
     };
   }
 
@@ -1197,7 +1360,10 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       return true;
     }
 
-    return triggeredBy === 'cold_tool_collector';
+    return (
+      triggeredBy === 'cold_tool_collector' ||
+      triggeredBy === 'analysis_single_watchdog'
+    );
   }
 
   private isColdToolCollectorJobStale(
