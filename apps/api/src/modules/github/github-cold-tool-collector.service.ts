@@ -8,7 +8,10 @@ import { RunAnalysisDto } from '../analysis/dto/run-analysis.dto';
 import { GitHubFetchMode } from './dto/fetch-repositories.dto';
 import { RunColdToolCollectorDto } from './dto/run-cold-tool-collector.dto';
 import { GitHubService } from './github.service';
-import { ColdToolExternalSourceService } from './cold-tool-external-source.service';
+import {
+  ColdToolExternalSourceService,
+  ExternalSourceHit,
+} from './cold-tool-external-source.service';
 
 type ColdToolCollectorState = {
   cursor: number;
@@ -53,6 +56,8 @@ type ColdToolCollectorStage =
 
 type ColdToolCollectorPipelinePhase =
   | 'full'
+  | 'external_import'
+  | 'hydrate_content'
   | 'snapshot'
   | 'cold_tool_discovery'
   | 'deep_queue';
@@ -97,8 +102,11 @@ type ColdToolCollectorResumeState = {
   hydrationSkippedRecent: number;
   hydrationFailed: number;
   externalSourceHitCount: number;
+  externalHits: ExternalSourceHit[];
+  externalImportChunkIndex: number;
   repositoryIds: string[];
   originsByRepositoryId: Record<string, ColdToolOrigin[]>;
+  hydrateChunkIndex: number;
   snapshotProcessed: number;
   snapshotChunkIndex: number;
   coldToolEvaluated: number;
@@ -145,6 +153,12 @@ export class GitHubColdToolCollectorService {
     } = {},
   ): Promise<ColdToolCollectorDirectResult> {
     const phase = this.resolvePipelinePhase(dto.phase);
+    if (phase === 'external_import') {
+      return this.runExternalImportPhase(dto, options);
+    }
+    if (phase === 'hydrate_content') {
+      return this.runHydratePhase(dto, options);
+    }
     if (phase === 'snapshot') {
       return this.runSnapshotPhase(dto, options);
     }
@@ -305,11 +319,35 @@ export class GitHubColdToolCollectorService {
       `cold_tool_collection stage=external_discovery queries=${selectedEntries.length} repositoryCandidates=${repositoryIds.size}`,
     );
     await emitRuntime('external_discovery', 40);
-    const externalDiscovery = await this.coldToolExternalSourceService.discoverRepositoryFullNames({
-      queries: this.uniqueKeywords(selectedEntries.map((entry) => entry.keyword)),
-      perQueryLimit: this.readPositiveInt('COLD_TOOL_EXTERNAL_PER_QUERY_LIMIT', 6, 1),
-      concurrency: this.readPositiveInt('COLD_TOOL_EXTERNAL_QUERY_CONCURRENCY', 3, 1),
-    });
+    const externalDiscovery =
+      await this.coldToolExternalSourceService.discoverRepositoryFullNames({
+        queries: this.uniqueKeywords(
+          selectedEntries.map((entry) => entry.keyword),
+        ),
+        perQueryLimit: this.readPositiveInt(
+          'COLD_TOOL_EXTERNAL_PER_QUERY_LIMIT',
+          6,
+          1,
+        ),
+        concurrency: this.readPositiveInt(
+          'COLD_TOOL_EXTERNAL_QUERY_CONCURRENCY',
+          3,
+          1,
+        ),
+        onQueryProgress: async (progressState) => {
+          const progress =
+            40 +
+            Math.round(
+              (progressState.completedQueries /
+                Math.max(1, progressState.totalQueries)) *
+                5,
+            );
+          await emitRuntime(
+            'external_discovery',
+            Math.max(40, Math.min(45, progress)),
+          );
+        },
+      });
 
     await options.onHeartbeat?.({
       currentStage: 'external_discovery',
@@ -343,21 +381,115 @@ export class GitHubColdToolCollectorService {
       runtimeUpdatedAt: new Date().toISOString(),
     });
 
+    const resumeState = this.buildResumeState({
+      selectedEntries,
+      nextCursor:
+        searchPlan.length
+          ? (state.cursor + selectedEntries.length) % searchPlan.length
+          : 0,
+      fetchedLinks,
+      createdRepositories,
+      updatedRepositories,
+      failedRepositories,
+      externalImportedRepositories,
+      externalDuplicateRepositoryRefs,
+      externalReusedRepositories,
+      hydratedRepositories,
+      hydrationSkippedRecent,
+      hydrationFailed,
+      externalSourceHitCount: externalDiscovery.hits.length,
+      externalHits: externalDiscovery.hits,
+      externalImportChunkIndex: 0,
+      repositoryIds: Array.from(repositoryIds),
+      originsByRepositoryId: Object.fromEntries(
+        Array.from(originsByRepositoryId.entries()),
+      ),
+      hydrateChunkIndex: 0,
+      snapshotProcessed,
+      snapshotChunkIndex: 0,
+      coldToolEvaluated,
+      discoveryChunkIndex: 0,
+      matchedRepositoryIds: [],
+      deepAnalysisQueued,
+      perQueryLimit,
+      lookbackDays,
+      languageRotationSeed,
+      queryConcurrency,
+    });
+
     this.logger.log(
       `cold_tool_collection stage=external_import sourceHits=${externalDiscovery.hits.length} uniqueRepos=${externalDiscovery.byRepositoryFullName.size}`,
     );
+    await emitRuntime('external_import', 45);
+
+    return {
+      continued: true,
+      phase: 'external_import',
+      repositoryCandidates: resumeState.repositoryIds.length,
+      nextDto: {
+        ...dto,
+        phase: 'external_import',
+        resumeState: resumeState as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async runExternalImportPhase(
+    dto: RunColdToolCollectorDto,
+    options: {
+      onProgress?: (progress: number) => Promise<void> | void;
+      onHeartbeat?: (
+        payload: ColdToolCollectorRuntimePayload,
+      ) => Promise<void> | void;
+    },
+  ): Promise<ColdToolCollectorDirectResult> {
+    const state = this.readResumeState(dto.resumeState);
+    const importEntries = this.getExternalImportEntries(state.externalHits);
+    const importChunks = this.chunkItems(
+      importEntries,
+      this.readPositiveInt(
+        'COLD_TOOL_EXTERNAL_IMPORT_REPOSITORY_CHUNK_SIZE',
+        24,
+        1,
+      ),
+    );
+    const chunkIndex = Math.max(0, state.externalImportChunkIndex);
+
+    if (chunkIndex >= importChunks.length) {
+      this.logger.log(
+        `cold_tool_collection stage=hydrate_content repositoryCandidates=${state.repositoryIds.length}`,
+      );
+      return {
+        continued: true,
+        phase: 'hydrate_content',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'hydrate_content',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
     const existingRepositoriesByFullName =
       await this.findExistingRepositoriesByFullName(
-        Array.from(externalDiscovery.byRepositoryFullName.keys()),
+        importEntries.map(([repositoryFullName]) => repositoryFullName),
       );
     const recentReuseThresholdHours = this.readPositiveInt(
       'COLD_TOOL_EXTERNAL_SKIP_SYNC_RECENT_HOURS',
       72,
       1,
     );
+    const repositoryIds = new Set(state.repositoryIds);
+    const originsByRepositoryId = new Map<string, ColdToolOrigin[]>(
+      Object.entries(state.originsByRepositoryId),
+    );
+    const chunkEntries = importChunks[chunkIndex];
+
+    await this.emitRuntimeFromResumeState(state, 'external_import', 45, options);
 
     await this.runWithConcurrency(
-      Array.from(externalDiscovery.byRepositoryFullName.entries()),
+      chunkEntries,
       this.readPositiveInt('COLD_TOOL_EXTERNAL_IMPORT_CONCURRENCY', 3, 1),
       async ([repositoryFullName, hits]) => {
         try {
@@ -379,13 +511,13 @@ export class GitHubColdToolCollectorService {
                 );
 
           if (existingRepository) {
-            externalReusedRepositories += 1;
+            state.externalReusedRepositories += 1;
           }
           if (repositoryIds.has(imported.repositoryId)) {
-            externalDuplicateRepositoryRefs += 1;
+            state.externalDuplicateRepositoryRefs += 1;
           }
           repositoryIds.add(imported.repositoryId);
-          externalImportedRepositories += 1;
+          state.externalImportedRepositories += 1;
 
           const collectedAt = new Date().toISOString();
           for (const hit of hits) {
@@ -393,63 +525,102 @@ export class GitHubColdToolCollectorService {
               originsByRepositoryId,
               imported.repositoryId,
               {
-              collector: `cold_tools_${hit.source}`,
-              domain: `${hit.source}:package_registry`,
-              keyword: hit.query,
-              locale: 'global',
-              codeLanguage: null,
-              collectedAt,
+                collector: `cold_tools_${hit.source}`,
+                domain: `${hit.source}:package_registry`,
+                keyword: hit.query,
+                locale: 'global',
+                codeLanguage: null,
+                collectedAt,
               },
             );
           }
         } catch {
           // Ignore invalid or deleted repos referenced by registries.
         }
-
-        await options.onHeartbeat?.({
-          currentStage: 'external_import',
-          progress: 55,
-          queriesSelected: selectedEntries.length,
-          githubQueriesCompleted,
-          githubFetchedLinks: fetchedLinks,
-          githubCreatedRepositories: createdRepositories,
-          githubUpdatedRepositories: updatedRepositories,
-          githubFailedRepositories: failedRepositories,
-          externalSourceHitCount: externalDiscovery.hits.length,
-          externalImportedRepositories,
-          externalDuplicateRepositoryRefs,
-          externalReusedRepositories,
-          hydratedRepositories,
-          hydrationSkippedRecent,
-          hydrationFailed,
-          repositoryCandidates: repositoryIds.size,
-          snapshotProcessed,
-          coldToolEvaluated,
-          coldToolMatched,
-          deepAnalysisQueued,
-          activeDomains: Array.from(new Set(selectedEntries.map((entry) => entry.group))),
-          activeProgrammingLanguages: Array.from(
-            new Set(
-              selectedEntries
-                .map((entry) => entry.codeLanguage)
-                .filter((item): item is string => Boolean(item)),
-            ),
-          ),
-          runtimeUpdatedAt: new Date().toISOString(),
-        });
       },
     );
 
-    const repositoryIdList = Array.from(repositoryIds);
-    const nextCursor = searchPlan.length
-      ? (state.cursor + selectedEntries.length) % searchPlan.length
-      : 0;
-    this.logger.log(
-      `cold_tool_collection stage=hydrate_content repositoryCandidates=${repositoryIdList.length}`,
+    state.repositoryIds = Array.from(repositoryIds);
+    state.originsByRepositoryId = Object.fromEntries(
+      Array.from(originsByRepositoryId.entries()),
     );
-    await emitRuntime('hydrate_content', 62);
+    state.externalImportChunkIndex = chunkIndex + 1;
+    const progress =
+      45 +
+      Math.round(
+        (state.externalImportChunkIndex / Math.max(1, importChunks.length)) * 13,
+      );
+    await this.emitRuntimeFromResumeState(
+      state,
+      'external_import',
+      Math.max(45, Math.min(58, progress)),
+      options,
+    );
+
+    if (state.externalImportChunkIndex < importChunks.length) {
+      return {
+        continued: true,
+        phase: 'external_import',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'external_import',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
+    return {
+      continued: true,
+      phase: 'hydrate_content',
+      repositoryCandidates: state.repositoryIds.length,
+      nextDto: {
+        ...dto,
+        phase: 'hydrate_content',
+        resumeState: state as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async runHydratePhase(
+    dto: RunColdToolCollectorDto,
+    options: {
+      onProgress?: (progress: number) => Promise<void> | void;
+      onHeartbeat?: (
+        payload: ColdToolCollectorRuntimePayload,
+      ) => Promise<void> | void;
+    },
+  ): Promise<ColdToolCollectorDirectResult> {
+    const state = this.readResumeState(dto.resumeState);
+    const hydrateChunks = this.chunkItems(
+      state.repositoryIds,
+      this.readPositiveInt(
+        'COLD_TOOL_HYDRATE_REPOSITORY_CHUNK_SIZE',
+        120,
+        1,
+      ),
+    );
+    const chunkIndex = Math.max(0, state.hydrateChunkIndex);
+
+    if (chunkIndex >= hydrateChunks.length) {
+      this.logger.log(
+        `cold_tool_collection stage=snapshot repositoryCandidates=${state.repositoryIds.length} snapshotChunks=${this.getSnapshotChunks(state.repositoryIds).length}`,
+      );
+      return {
+        continued: true,
+        phase: 'snapshot',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'snapshot',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
+    await this.emitRuntimeFromResumeState(state, 'hydrate_content', 62, options);
     const hydrationResult = await this.githubService.hydrateRepositories(
-      repositoryIdList,
+      hydrateChunks[chunkIndex],
       {
         concurrency: this.readPositiveInt(
           'COLD_TOOL_HYDRATE_CONCURRENCY',
@@ -463,53 +634,41 @@ export class GitHubColdToolCollectorService {
         ),
       },
     );
-    hydratedRepositories = hydrationResult.hydrated;
-    hydrationSkippedRecent = hydrationResult.skippedRecent;
-    hydrationFailed = hydrationResult.failed;
-
-    const resumeState = this.buildResumeState({
-      selectedEntries,
-      nextCursor,
-      fetchedLinks,
-      createdRepositories,
-      updatedRepositories,
-      failedRepositories,
-      externalImportedRepositories,
-      externalDuplicateRepositoryRefs,
-      externalReusedRepositories,
-      hydratedRepositories,
-      hydrationSkippedRecent,
-      hydrationFailed,
-      externalSourceHitCount: externalDiscovery.hits.length,
-      repositoryIds: repositoryIdList,
-      originsByRepositoryId: Object.fromEntries(
-        Array.from(originsByRepositoryId.entries()),
-      ),
-      snapshotProcessed,
-      snapshotChunkIndex: 0,
-      coldToolEvaluated,
-      discoveryChunkIndex: 0,
-      matchedRepositoryIds: [],
-      deepAnalysisQueued,
-      perQueryLimit,
-      lookbackDays,
-      languageRotationSeed,
-      queryConcurrency,
-    });
-
-    this.logger.log(
-      `cold_tool_collection stage=snapshot repositoryCandidates=${repositoryIdList.length} snapshotChunks=${this.getSnapshotChunks(repositoryIdList).length}`,
+    state.hydratedRepositories += hydrationResult.hydrated;
+    state.hydrationSkippedRecent += hydrationResult.skippedRecent;
+    state.hydrationFailed += hydrationResult.failed;
+    state.hydrateChunkIndex = chunkIndex + 1;
+    const progress =
+      62 +
+      Math.round((state.hydrateChunkIndex / Math.max(1, hydrateChunks.length)) * 8);
+    await this.emitRuntimeFromResumeState(
+      state,
+      'hydrate_content',
+      Math.max(62, Math.min(70, progress)),
+      options,
     );
-    await emitRuntime('snapshot', 70);
+
+    if (state.hydrateChunkIndex < hydrateChunks.length) {
+      return {
+        continued: true,
+        phase: 'hydrate_content',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'hydrate_content',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
 
     return {
       continued: true,
       phase: 'snapshot',
-      repositoryCandidates: repositoryIdList.length,
+      repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
         phase: 'snapshot',
-        resumeState: resumeState as Record<string, unknown>,
+        resumeState: state as Record<string, unknown>,
       },
     };
   }
@@ -1310,6 +1469,8 @@ export class GitHubColdToolCollectorService {
   private resolvePipelinePhase(value: unknown): ColdToolCollectorPipelinePhase {
     const normalized = this.cleanText(value, 80);
     if (
+      normalized === 'external_import' ||
+      normalized === 'hydrate_content' ||
       normalized === 'snapshot' ||
       normalized === 'cold_tool_discovery' ||
       normalized === 'deep_queue'
@@ -1365,10 +1526,16 @@ export class GitHubColdToolCollectorService {
       hydrationSkippedRecent: this.readNonNegativeInt(record.hydrationSkippedRecent, 0),
       hydrationFailed: this.readNonNegativeInt(record.hydrationFailed, 0),
       externalSourceHitCount: this.readNonNegativeInt(record.externalSourceHitCount, 0),
+      externalHits: this.normalizeExternalHits(record.externalHits),
+      externalImportChunkIndex: this.readNonNegativeInt(
+        record.externalImportChunkIndex,
+        0,
+      ),
       repositoryIds,
       originsByRepositoryId: this.normalizeOriginsByRepositoryId(
         record.originsByRepositoryId,
       ),
+      hydrateChunkIndex: this.readNonNegativeInt(record.hydrateChunkIndex, 0),
       snapshotProcessed: this.readNonNegativeInt(record.snapshotProcessed, 0),
       snapshotChunkIndex: this.readNonNegativeInt(record.snapshotChunkIndex, 0),
       coldToolEvaluated: this.readNonNegativeInt(record.coldToolEvaluated, 0),
@@ -1466,11 +1633,52 @@ export class GitHubColdToolCollectorService {
       .filter((item): item is ColdToolOrigin => Boolean(item));
   }
 
+  private normalizeExternalHits(value: unknown): ExternalSourceHit[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          return null;
+        }
+        const record = item as Record<string, unknown>;
+        const source = this.cleanText(record.source, 20);
+        const query = this.cleanText(record.query, 200);
+        const packageName = this.cleanText(record.packageName, 200);
+        const repositoryFullName = this.cleanText(
+          record.repositoryFullName,
+          200,
+        );
+
+        if (
+          (source !== 'npm' && source !== 'crates') ||
+          !query ||
+          !packageName ||
+          !repositoryFullName
+        ) {
+          return null;
+        }
+
+        return {
+          source,
+          query,
+          packageName,
+          repositoryFullName,
+          packageUrl: this.cleanText(record.packageUrl, 400),
+        } satisfies ExternalSourceHit;
+      })
+      .filter((item): item is ExternalSourceHit => Boolean(item));
+  }
+
   private buildResumeState(
     state: ColdToolCollectorResumeState,
   ): ColdToolCollectorResumeState {
     return {
       ...state,
+      externalHits: state.externalHits.map((hit) => ({ ...hit })),
+      externalImportChunkIndex: state.externalImportChunkIndex,
       repositoryIds: [...state.repositoryIds],
       matchedRepositoryIds: [...state.matchedRepositoryIds],
       selectedEntries: state.selectedEntries.map((entry) => ({ ...entry })),
@@ -1480,6 +1688,7 @@ export class GitHubColdToolCollectorService {
           origins.map((origin) => ({ ...origin })),
         ]),
       ),
+      hydrateChunkIndex: state.hydrateChunkIndex,
     };
   }
 
@@ -1495,6 +1704,18 @@ export class GitHubColdToolCollectorService {
       repositoryIds,
       this.readPositiveInt('COLD_TOOL_DISCOVERY_REPOSITORY_CHUNK_SIZE', 48, 1),
     );
+  }
+
+  private getExternalImportEntries(externalHits: ExternalSourceHit[]) {
+    const grouped = new Map<string, ExternalSourceHit[]>();
+
+    for (const hit of externalHits) {
+      const existing = grouped.get(hit.repositoryFullName) ?? [];
+      existing.push(hit);
+      grouped.set(hit.repositoryFullName, existing);
+    }
+
+    return Array.from(grouped.entries());
   }
 
   private async emitRuntimeFromResumeState(
