@@ -329,6 +329,14 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       'COLD_TOOL_AUTOFILL_DEEP_QUEUE_TARGET',
       24,
     );
+    const activeCollector = await this.queueService.getLatestActiveQueueJobLog({
+      queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+      jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
+    });
+    if (activeCollector) {
+      return;
+    }
+
     const depth = await this.queueService.getQueueDepth(
       QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
     );
@@ -452,6 +460,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         const recovered = await this.recoverStaleColdToolCollectorJobIfNeeded();
 
         if (!recovered) {
+          await this.maybeAutofillColdToolCollector({});
           return;
         }
 
