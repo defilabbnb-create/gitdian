@@ -103,18 +103,31 @@ export type ColdRuntimePayload = {
     worktreeDirty: boolean;
   };
   collector: {
+    currentRunId: string | null;
     currentJobId: string | null;
     currentStatus: string | null;
     currentProgress: number | null;
     currentStage: string | null;
     lastHeartbeatAt: string | null;
     lastSuccessJobId: string | null;
+    lastSuccessRunId: string | null;
     lastSuccessAt: string | null;
     lastFailureJobId: string | null;
+    lastFailureRunId: string | null;
     lastFailureAt: string | null;
     lastFailureReason: string | null;
     heartbeatAgeSeconds: number | null;
     heartbeatState: 'healthy' | 'stale' | 'idle' | 'missing';
+    recentPhaseJobs: Array<{
+      runId: string | null;
+      jobId: string;
+      status: string;
+      phase: string | null;
+      progress: number | null;
+      createdAt: string;
+      updatedAt: string;
+      finishedAt: string | null;
+    }>;
   };
   coldDeepQueue: {
     active: number;

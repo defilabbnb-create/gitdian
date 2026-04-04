@@ -27,7 +27,7 @@ export async function ColdRuntimePanel() {
           <RuntimeCell
             label="当前采集阶段"
             value={runtime.collector.currentStage ?? '空闲'}
-            helper={`job=${runtime.collector.currentJobId ?? '--'} progress=${runtime.collector.currentProgress ?? '--'}%`}
+            helper={`run=${shortId(runtime.collector.currentRunId)} job=${runtime.collector.currentJobId ?? '--'} progress=${runtime.collector.currentProgress ?? '--'}%`}
             tone={collectorTone}
           />
           <RuntimeCell
@@ -51,6 +51,63 @@ export async function ColdRuntimePanel() {
                 : '最近没有失败'
             }
           />
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <RuntimeCell
+            label="当前 Run"
+            value={shortId(
+              runtime.collector.currentRunId ?? runtime.collector.lastSuccessRunId,
+            )}
+            helper={`最近成功 run=${shortId(runtime.collector.lastSuccessRunId)} · 最近失败 run=${shortId(runtime.collector.lastFailureRunId)}`}
+            tone={collectorTone}
+          />
+          <RuntimeCell
+            label="阶段接力"
+            value={`${runtime.collector.recentPhaseJobs.length} 条`}
+            helper="同一轮冷门采集会拆成多个 phase job，下面直接看接力明细。"
+          />
+        </div>
+
+        <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              最近 Phase 明细
+            </p>
+            <p className="font-mono text-xs text-slate-500">
+              当前 run: {shortId(runtime.collector.currentRunId)}
+            </p>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {runtime.collector.recentPhaseJobs.map((job) => (
+              <div
+                key={job.jobId}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-3"
+              >
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                  <p className="font-mono text-xs text-slate-500">
+                    run={shortId(job.runId)} job={job.jobId}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {formatTime(job.createdAt)}
+                    {' -> '}
+                    {formatTime(job.updatedAt)}
+                  </p>
+                </div>
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                  <PhaseBadge phase={job.phase} />
+                  <StatusBadge status={job.status} />
+                  <p className="text-sm text-slate-700">
+                    progress={job.progress ?? '--'}%
+                  </p>
+                  <p className="text-sm text-slate-700">
+                    finished={formatTime(job.finishedAt)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {runtime.warnings.length > 0 ? (
@@ -85,6 +142,31 @@ export async function ColdRuntimePanel() {
       </section>
     );
   }
+}
+
+function PhaseBadge({ phase }: { phase: string | null }) {
+  return (
+    <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+      {phase ?? 'full'}
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const classes =
+    status === 'RUNNING'
+      ? 'border-sky-200 bg-sky-50 text-sky-700'
+      : status === 'SUCCESS'
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+        : status === 'FAILED'
+          ? 'border-rose-200 bg-rose-50 text-rose-700'
+          : 'border-slate-200 bg-slate-50 text-slate-700';
+
+  return (
+    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${classes}`}>
+      {status}
+    </span>
+  );
 }
 
 function RuntimeCell({
@@ -149,6 +231,14 @@ function formatAge(value: number | null) {
   const minutes = Math.floor(value / 60);
   const seconds = value % 60;
   return `${minutes}m ${seconds}s 前`;
+}
+
+function shortId(value: string | null) {
+  if (!value) {
+    return '--';
+  }
+
+  return value.slice(0, 12);
 }
 
 function resolveTone(

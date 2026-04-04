@@ -113,6 +113,16 @@ export type SystemColdRuntimePayload = {
     lastFailureReason: string | null;
     heartbeatAgeSeconds: number | null;
     heartbeatState: 'healthy' | 'stale' | 'idle' | 'missing';
+    recentPhaseJobs: Array<{
+      runId: string | null;
+      jobId: string;
+      status: string;
+      phase: string | null;
+      progress: number | null;
+      createdAt: string;
+      updatedAt: string;
+      finishedAt: string | null;
+    }>;
   };
   coldDeepQueue: {
     active: number;
@@ -228,11 +238,12 @@ export class SystemService {
           orderBy: {
             createdAt: 'desc',
           },
-          take: 6,
+          take: 20,
           select: {
             id: true,
             jobStatus: true,
             progress: true,
+            createdAt: true,
             updatedAt: true,
             finishedAt: true,
             errorMessage: true,
@@ -327,6 +338,28 @@ export class SystemService {
       !Array.isArray(lastFailedCollector.result)
         ? (lastFailedCollector.result as Record<string, unknown>)
         : null;
+    const recentPhaseJobs = collectorJobs.map((job) => {
+      const payload =
+        job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload)
+          ? (job.payload as Record<string, unknown>)
+          : null;
+      const resultPayload =
+        job.result && typeof job.result === 'object' && !Array.isArray(job.result)
+          ? (job.result as Record<string, unknown>)
+          : null;
+
+      return {
+        runId:
+          this.readPayloadRunId(resultPayload) ?? this.readPayloadRunId(payload),
+        jobId: job.id,
+        status: job.jobStatus,
+        phase: this.readPayloadPhase(payload),
+        progress: typeof job.progress === 'number' ? job.progress : null,
+        createdAt: job.createdAt.toISOString(),
+        updatedAt: job.updatedAt.toISOString(),
+        finishedAt: job.finishedAt?.toISOString() ?? null,
+      };
+    });
 
     if (heartbeatState === 'stale') {
       warnings.push(
@@ -394,6 +427,7 @@ export class SystemService {
         lastFailureReason: lastFailedCollector?.errorMessage ?? null,
         heartbeatAgeSeconds,
         heartbeatState,
+        recentPhaseJobs,
       },
       coldDeepQueue: {
         active: coldDeepQueueDepth.active,
@@ -528,6 +562,22 @@ export class SystemService {
     const runId = payload.runId;
     if (typeof runId === 'string' && runId.trim().length > 0) {
       return runId.trim();
+    }
+
+    return null;
+  }
+
+  private readPayloadPhase(payload: Record<string, unknown> | null) {
+    if (!payload) {
+      return null;
+    }
+
+    const dto = payload.dto;
+    if (dto && typeof dto === 'object' && !Array.isArray(dto)) {
+      const phase = (dto as Record<string, unknown>).phase;
+      if (typeof phase === 'string' && phase.trim().length > 0) {
+        return phase.trim();
+      }
     }
 
     return null;
