@@ -475,6 +475,22 @@ export class GitHubColdToolCollectorService {
           dto.modelOverride ??
           this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
           'gpt-5.4',
+        onBatchProgress: async (batchProgress) => {
+          const totalChunks = Math.max(1, discoveryRepositoryChunks.length);
+          const completedChunkRatio = index / totalChunks;
+          const currentChunkRatio =
+            batchProgress.totalBatches > 0
+              ? batchProgress.completedBatches / batchProgress.totalBatches
+              : 1;
+          const overallRatio =
+            completedChunkRatio + currentChunkRatio / totalChunks;
+          const progress = 82 + Math.round(overallRatio * 10);
+
+          await emitRuntime(
+            'cold_tool_discovery',
+            Math.max(82, Math.min(92, progress)),
+          );
+        },
       });
       coldToolEvaluated += result.processed;
       for (const item of result.items) {

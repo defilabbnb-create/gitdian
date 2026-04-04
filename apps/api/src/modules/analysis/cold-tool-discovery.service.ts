@@ -136,6 +136,13 @@ export class ColdToolDiscoveryService {
     persist?: boolean;
     forceRefresh?: boolean;
     modelOverride?: string | null;
+    onBatchProgress?: (progress: {
+      completedBatches: number;
+      totalBatches: number;
+      processedRepositories: number;
+      totalRepositories: number;
+      currentBatchRepositoryIds: string[];
+    }) => Promise<void> | void;
   }): Promise<AnalyzeColdToolBatchResult> {
     const uniqueRepositoryIds = [...new Set(args.repositoryIds.filter(Boolean))];
     const batchSize = Math.max(1, Math.min(args.batchSize ?? 4, 8));
@@ -219,8 +226,28 @@ export class ColdToolDiscoveryService {
       await this.externalSiteEvidenceService.fetchRepositorySignalsBatch(
         repositoriesToAnalyze,
       );
+    let completedBatches = 0;
+
+    await args.onBatchProgress?.({
+      completedBatches,
+      totalBatches: batches.length,
+      processedRepositories: 0,
+      totalRepositories: repositoriesToAnalyze.length,
+      currentBatchRepositoryIds: [],
+    });
 
     await this.runWithConcurrency(batches, batchConcurrency, async (batch) => {
+      await args.onBatchProgress?.({
+        completedBatches,
+        totalBatches: batches.length,
+        processedRepositories: Math.min(
+          repositoriesToAnalyze.length,
+          completedBatches * batchSize,
+        ),
+        totalRepositories: repositoriesToAnalyze.length,
+        currentBatchRepositoryIds: batch.map((repository) => repository.id),
+      });
+
       const promptInputs = batch.map((repository) => ({
         repoId: repository.id,
         input: buildColdToolDiscoveryPromptInput(
@@ -290,6 +317,17 @@ export class ColdToolDiscoveryService {
       }
 
       batchResults.push(currentBatchResults);
+      completedBatches += 1;
+      await args.onBatchProgress?.({
+        completedBatches,
+        totalBatches: batches.length,
+        processedRepositories: Math.min(
+          repositoriesToAnalyze.length,
+          completedBatches * batchSize,
+        ),
+        totalRepositories: repositoriesToAnalyze.length,
+        currentBatchRepositoryIds: batch.map((repository) => repository.id),
+      });
     });
 
     const analyzedItems = batchResults.flat();

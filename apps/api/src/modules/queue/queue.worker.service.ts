@@ -1414,7 +1414,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
 
     return Math.max(
       configuredMinutes * 60_000,
-      this.readConcurrency('QUEUE_RUNTIME_HEARTBEAT_MS', 30_000) * 20,
+      this.readConcurrency('QUEUE_JOB_HEARTBEAT_MS', 15_000) * 20,
       this.readConcurrency('COLD_TOOL_WATCHDOG_INTERVAL_MS', 60_000) * 2,
     );
   }

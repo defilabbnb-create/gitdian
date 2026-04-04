@@ -424,8 +424,8 @@ export class SystemService {
       10,
     );
     const queueHeartbeatMs = this.readPositiveIntegerEnv(
-      process.env.QUEUE_RUNTIME_HEARTBEAT_MS,
-      30_000,
+      process.env.QUEUE_JOB_HEARTBEAT_MS,
+      15_000,
     );
     const watchdogIntervalMs = this.readPositiveIntegerEnv(
       process.env.COLD_TOOL_WATCHDOG_INTERVAL_MS,
