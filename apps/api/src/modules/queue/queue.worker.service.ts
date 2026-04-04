@@ -51,6 +51,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   private coldToolWatchdogTickInFlight = false;
   private coldToolAutofillTickInFlight = false;
   private analysisSingleWatchdogTickInFlight = false;
+  private coldToolAutofillRunInFlight = false;
   private coldToolAutofillLastTriggeredAt = 0;
 
   constructor(
@@ -317,62 +318,77 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   private async maybeAutofillColdToolCollector(result: {
     deepAnalysisQueued?: number;
   }) {
-    const enabled = this.readBooleanEnv('ENABLE_COLD_TOOL_COLLECT_AUTOFILL', true);
-    if (!enabled) {
+    if (this.coldToolAutofillRunInFlight) {
       return;
     }
 
-    const cooldownMs = this.readConcurrency(
-      'COLD_TOOL_COLLECT_AUTOFILL_COOLDOWN_MS',
-      60_000,
-    );
-    const now = Date.now();
-    if (now - this.coldToolAutofillLastTriggeredAt < cooldownMs) {
-      return;
+    this.coldToolAutofillRunInFlight = true;
+    try {
+      const enabled = this.readBooleanEnv(
+        'ENABLE_COLD_TOOL_COLLECT_AUTOFILL',
+        true,
+      );
+      if (!enabled) {
+        return;
+      }
+
+      const cooldownMs = this.readConcurrency(
+        'COLD_TOOL_COLLECT_AUTOFILL_COOLDOWN_MS',
+        60_000,
+      );
+      const now = Date.now();
+      if (now - this.coldToolAutofillLastTriggeredAt < cooldownMs) {
+        return;
+      }
+
+      const targetDepth = this.readConcurrency(
+        'COLD_TOOL_AUTOFILL_DEEP_QUEUE_TARGET',
+        24,
+      );
+      const activeCollector = await this.queueService.getLatestActiveQueueJobLog({
+        queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+        jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
+      });
+      if (activeCollector) {
+        return;
+      }
+
+      const depth = await this.queueService.getQueueDepth(
+        QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+      );
+      const totalDepth =
+        depth.active + depth.waiting + depth.delayed + depth.prioritized;
+
+      if (totalDepth >= targetDepth) {
+        return;
+      }
+
+      this.coldToolAutofillLastTriggeredAt = now;
+      const enqueueResult = await this.queueService.enqueueGitHubColdToolCollect(
+        {
+          queriesPerRun: this.readConcurrency(
+            'COLD_TOOL_AUTOFILL_QUERIES_PER_RUN',
+            Math.min(12, this.readConcurrency('COLD_TOOL_QUERIES_PER_RUN', 36)),
+          ),
+          perQueryLimit: this.readConcurrency(
+            'COLD_TOOL_AUTOFILL_PER_QUERY_LIMIT',
+            Math.min(6, this.readConcurrency('COLD_TOOL_PER_QUERY_LIMIT', 8)),
+          ),
+          lookbackDays: this.readConcurrency('COLD_TOOL_LOOKBACK_DAYS', 540),
+          forceRefresh: this.readBooleanEnv(
+            'COLD_TOOL_AUTOFILL_FORCE_REFRESH',
+            true,
+          ),
+        },
+        'cold_tool_autofill',
+      );
+
+      this.logger.log(
+        `Cold tool autofill queued next collector because cold deep queue depth=${totalDepth} target=${targetDepth} recentQueued=${result.deepAnalysisQueued ?? 0} nextJobId=${enqueueResult.jobId} nextQueueJobId=${enqueueResult.queueJobId}`,
+      );
+    } finally {
+      this.coldToolAutofillRunInFlight = false;
     }
-
-    const targetDepth = this.readConcurrency(
-      'COLD_TOOL_AUTOFILL_DEEP_QUEUE_TARGET',
-      24,
-    );
-    const activeCollector = await this.queueService.getLatestActiveQueueJobLog({
-      queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
-      jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
-    });
-    if (activeCollector) {
-      return;
-    }
-
-    const depth = await this.queueService.getQueueDepth(
-      QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
-    );
-    const totalDepth =
-      depth.active + depth.waiting + depth.delayed + depth.prioritized;
-
-    if (totalDepth >= targetDepth) {
-      return;
-    }
-
-    this.coldToolAutofillLastTriggeredAt = now;
-    const enqueueResult = await this.queueService.enqueueGitHubColdToolCollect(
-      {
-        queriesPerRun: this.readConcurrency(
-          'COLD_TOOL_AUTOFILL_QUERIES_PER_RUN',
-          Math.min(12, this.readConcurrency('COLD_TOOL_QUERIES_PER_RUN', 36)),
-        ),
-        perQueryLimit: this.readConcurrency(
-          'COLD_TOOL_AUTOFILL_PER_QUERY_LIMIT',
-          Math.min(6, this.readConcurrency('COLD_TOOL_PER_QUERY_LIMIT', 8)),
-        ),
-        lookbackDays: this.readConcurrency('COLD_TOOL_LOOKBACK_DAYS', 540),
-        forceRefresh: this.readBooleanEnv('COLD_TOOL_AUTOFILL_FORCE_REFRESH', true),
-      },
-      'cold_tool_autofill',
-    );
-
-    this.logger.log(
-      `Cold tool autofill queued next collector because cold deep queue depth=${totalDepth} target=${targetDepth} recentQueued=${result.deepAnalysisQueued ?? 0} nextJobId=${enqueueResult.jobId} nextQueueJobId=${enqueueResult.queueJobId}`,
-    );
   }
 
   private startColdToolCollectorScheduler() {

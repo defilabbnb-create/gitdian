@@ -251,9 +251,13 @@ export class QueueService implements OnModuleDestroy {
       );
     }
 
+    const ageSecondsText = Number.isFinite(ageMs)
+      ? `${Math.max(0, Math.round(ageMs / 1000))}s`
+      : 'unknown duration';
+
     await this.jobLogService.failJob({
       jobId: jobLog.id,
-      errorMessage: `Recovered stale cold-tool collector enqueue blocker after ${Math.max(0, Math.round(ageMs / 1000))}s without usable queue progress.`,
+      errorMessage: `Recovered stale cold-tool collector enqueue blocker after ${ageSecondsText} without usable queue progress.`,
       progress: typeof jobLog.progress === 'number' ? jobLog.progress : 0,
       result: {
         staleEnqueueBlocker: true,
