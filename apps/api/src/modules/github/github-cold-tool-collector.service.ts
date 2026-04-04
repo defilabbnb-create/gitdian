@@ -51,6 +51,12 @@ type ColdToolCollectorStage =
   | 'deep_queue'
   | 'done';
 
+type ColdToolCollectorPipelinePhase =
+  | 'full'
+  | 'snapshot'
+  | 'cold_tool_discovery'
+  | 'deep_queue';
+
 export type ColdToolCollectorRuntimePayload = {
   currentStage: ColdToolCollectorStage;
   progress: number;
@@ -77,6 +83,45 @@ export type ColdToolCollectorRuntimePayload = {
   runtimeUpdatedAt: string;
 };
 
+type ColdToolCollectorResumeState = {
+  selectedEntries: ColdToolSearchPlanEntry[];
+  nextCursor: number;
+  fetchedLinks: number;
+  createdRepositories: number;
+  updatedRepositories: number;
+  failedRepositories: number;
+  externalImportedRepositories: number;
+  externalDuplicateRepositoryRefs: number;
+  externalReusedRepositories: number;
+  hydratedRepositories: number;
+  hydrationSkippedRecent: number;
+  hydrationFailed: number;
+  externalSourceHitCount: number;
+  repositoryIds: string[];
+  originsByRepositoryId: Record<string, ColdToolOrigin[]>;
+  snapshotProcessed: number;
+  snapshotChunkIndex: number;
+  coldToolEvaluated: number;
+  discoveryChunkIndex: number;
+  matchedRepositoryIds: string[];
+  deepAnalysisQueued: number;
+  perQueryLimit: number;
+  lookbackDays: number;
+  languageRotationSeed: number;
+  queryConcurrency: number;
+};
+
+type ColdToolCollectorContinuationResult = {
+  continued: true;
+  nextDto: RunColdToolCollectorDto;
+  phase: ColdToolCollectorPipelinePhase;
+  repositoryCandidates: number;
+};
+
+type ColdToolCollectorDirectResult =
+  | Record<string, unknown>
+  | ColdToolCollectorContinuationResult;
+
 @Injectable()
 export class GitHubColdToolCollectorService {
   private readonly logger = new Logger(GitHubColdToolCollectorService.name);
@@ -98,7 +143,18 @@ export class GitHubColdToolCollectorService {
         payload: ColdToolCollectorRuntimePayload,
       ) => Promise<void> | void;
     } = {},
-  ) {
+  ): Promise<ColdToolCollectorDirectResult> {
+    const phase = this.resolvePipelinePhase(dto.phase);
+    if (phase === 'snapshot') {
+      return this.runSnapshotPhase(dto, options);
+    }
+    if (phase === 'cold_tool_discovery') {
+      return this.runColdToolDiscoveryPhase(dto, options);
+    }
+    if (phase === 'deep_queue') {
+      return this.runDeepQueuePhase(dto, options);
+    }
+
     const state = await this.ensureState();
     const queriesPerRun = Math.min(
       dto.queriesPerRun ??
@@ -385,6 +441,9 @@ export class GitHubColdToolCollectorService {
     );
 
     const repositoryIdList = Array.from(repositoryIds);
+    const nextCursor = searchPlan.length
+      ? (state.cursor + selectedEntries.length) % searchPlan.length
+      : 0;
     this.logger.log(
       `cold_tool_collection stage=hydrate_content repositoryCandidates=${repositoryIdList.length}`,
     );
@@ -408,121 +467,9 @@ export class GitHubColdToolCollectorService {
     hydrationSkippedRecent = hydrationResult.skippedRecent;
     hydrationFailed = hydrationResult.failed;
 
-    this.logger.log(
-      `cold_tool_collection stage=snapshot repositoryCandidates=${repositoryIdList.length}`,
-    );
-    await emitRuntime('snapshot', 70);
-    const snapshotRepositoryChunkSize = this.readPositiveInt(
-      'COLD_TOOL_SNAPSHOT_REPOSITORY_CHUNK_SIZE',
-      120,
-      1,
-    );
-    const snapshotRepositoryChunks = this.chunkItems(
-      repositoryIdList,
-      snapshotRepositoryChunkSize,
-    );
-
-    for (let index = 0; index < snapshotRepositoryChunks.length; index += 1) {
-      const result = await this.ideaSnapshotService.analyzeRepositoriesBatch({
-        repositoryIds: snapshotRepositoryChunks[index],
-        batchSize: this.readPositiveInt('COLD_TOOL_SNAPSHOT_BATCH_SIZE', 8, 1),
-        onlyIfMissing: true,
-        persist: true,
-        analysisLane: 'cold_tool',
-        modelOverride:
-          this.cleanText(process.env.COLD_TOOL_SNAPSHOT_MODEL, 80) ??
-          this.cleanText(process.env.COLD_TOOL_OPENAI_LIGHT_MODEL, 80) ??
-          this.cleanText(process.env.COLD_TOOL_OPENAI_MODEL, 80) ??
-          undefined,
-      });
-      snapshotProcessed += result.processed;
-      await emitRuntime(
-        'snapshot',
-        70 + Math.round(((index + 1) / Math.max(1, snapshotRepositoryChunks.length)) * 10),
-      );
-    }
-
-    this.logger.log(
-      `cold_tool_collection stage=cold_tool_discovery snapshotProcessed=${snapshotProcessed} repositoryCandidates=${repositoryIdList.length}`,
-    );
-    await emitRuntime('cold_tool_discovery', 82);
-    const discoveryRepositoryChunkSize = this.readPositiveInt(
-      'COLD_TOOL_DISCOVERY_REPOSITORY_CHUNK_SIZE',
-      48,
-      1,
-    );
-    const discoveryRepositoryChunks = this.chunkItems(
-      repositoryIdList,
-      discoveryRepositoryChunkSize,
-    );
-    const matchedRepositoryIds = new Set<string>();
-
-    for (let index = 0; index < discoveryRepositoryChunks.length; index += 1) {
-      const chunkRepositoryIds = discoveryRepositoryChunks[index];
-      const chunkOriginsByRepositoryId = Object.fromEntries(
-        chunkRepositoryIds.map((repositoryId: string) => [
-          repositoryId,
-          originsByRepositoryId.get(repositoryId) ?? [],
-        ]),
-      );
-      const result = await this.coldToolDiscoveryService.analyzeRepositoriesBatch({
-        repositoryIds: chunkRepositoryIds,
-        originsByRepositoryId: chunkOriginsByRepositoryId,
-        batchSize: this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE', 4, 1),
-        persist: true,
-        forceRefresh: dto.forceRefresh,
-        modelOverride:
-          dto.modelOverride ??
-          this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
-          'gpt-5.4',
-        onBatchProgress: async (batchProgress) => {
-          const totalChunks = Math.max(1, discoveryRepositoryChunks.length);
-          const completedChunkRatio = index / totalChunks;
-          const currentChunkRatio =
-            batchProgress.totalBatches > 0
-              ? batchProgress.completedBatches / batchProgress.totalBatches
-              : 1;
-          const overallRatio =
-            completedChunkRatio + currentChunkRatio / totalChunks;
-          const progress = 82 + Math.round(overallRatio * 10);
-
-          await emitRuntime(
-            'cold_tool_discovery',
-            Math.max(82, Math.min(92, progress)),
-          );
-        },
-      });
-      coldToolEvaluated += result.processed;
-      for (const item of result.items) {
-        if (item.output?.fitsColdToolPool === true) {
-          matchedRepositoryIds.add(item.repositoryId);
-        }
-      }
-      coldToolMatched = matchedRepositoryIds.size;
-      await emitRuntime(
-        'cold_tool_discovery',
-        82 + Math.round(((index + 1) / Math.max(1, discoveryRepositoryChunks.length)) * 10),
-      );
-    }
-
-    this.logger.log(
-      `cold_tool_collection stage=deep_queue coldToolEvaluated=${coldToolEvaluated} coldToolMatched=${coldToolMatched}`,
-    );
-    await emitRuntime('deep_queue', 95);
-    deepAnalysisQueued = await this.enqueueColdToolDeepAnalyses(
-      Array.from(matchedRepositoryIds),
-    );
-    const nextCursor = searchPlan.length
-      ? (state.cursor + selectedEntries.length) % searchPlan.length
-      : 0;
-
-    const summary = {
-      executedAt: new Date().toISOString(),
-      queriesExecuted: selectedEntries.length,
-      languageRotationSeed,
-      queryConcurrency,
-      perQueryLimit,
-      lookbackDays,
+    const resumeState = this.buildResumeState({
+      selectedEntries,
+      nextCursor,
       fetchedLinks,
       createdRepositories,
       updatedRepositories,
@@ -534,20 +481,278 @@ export class GitHubColdToolCollectorService {
       hydrationSkippedRecent,
       hydrationFailed,
       externalSourceHitCount: externalDiscovery.hits.length,
+      repositoryIds: repositoryIdList,
+      originsByRepositoryId: Object.fromEntries(
+        Array.from(originsByRepositoryId.entries()),
+      ),
       snapshotProcessed,
+      snapshotChunkIndex: 0,
       coldToolEvaluated,
-      coldToolMatched,
+      discoveryChunkIndex: 0,
+      matchedRepositoryIds: [],
       deepAnalysisQueued,
-      topMatchedRepositoryIds: Array.from(matchedRepositoryIds).slice(0, 20),
+      perQueryLimit,
+      lookbackDays,
+      languageRotationSeed,
+      queryConcurrency,
+    });
+
+    this.logger.log(
+      `cold_tool_collection stage=snapshot repositoryCandidates=${repositoryIdList.length} snapshotChunks=${this.getSnapshotChunks(repositoryIdList).length}`,
+    );
+    await emitRuntime('snapshot', 70);
+
+    return {
+      continued: true,
+      phase: 'snapshot',
+      repositoryCandidates: repositoryIdList.length,
+      nextDto: {
+        ...dto,
+        phase: 'snapshot',
+        resumeState: resumeState as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async runSnapshotPhase(
+    dto: RunColdToolCollectorDto,
+    options: {
+      onProgress?: (progress: number) => Promise<void> | void;
+      onHeartbeat?: (
+        payload: ColdToolCollectorRuntimePayload,
+      ) => Promise<void> | void;
+    },
+  ): Promise<ColdToolCollectorDirectResult> {
+    const state = this.readResumeState(dto.resumeState);
+    const snapshotRepositoryChunks = this.getSnapshotChunks(state.repositoryIds);
+    const chunkIndex = Math.max(0, state.snapshotChunkIndex);
+
+    if (chunkIndex >= snapshotRepositoryChunks.length) {
+      return {
+        continued: true,
+        phase: 'cold_tool_discovery',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'cold_tool_discovery',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
+    const chunkRepositoryIds = snapshotRepositoryChunks[chunkIndex];
+    await this.emitRuntimeFromResumeState(state, 'snapshot', 70, options);
+    const result = await this.ideaSnapshotService.analyzeRepositoriesBatch({
+      repositoryIds: chunkRepositoryIds,
+      batchSize: this.readPositiveInt('COLD_TOOL_SNAPSHOT_BATCH_SIZE', 8, 1),
+      onlyIfMissing: true,
+      persist: true,
+      analysisLane: 'cold_tool',
+      modelOverride:
+        this.cleanText(process.env.COLD_TOOL_SNAPSHOT_MODEL, 80) ??
+        this.cleanText(process.env.COLD_TOOL_OPENAI_LIGHT_MODEL, 80) ??
+        this.cleanText(process.env.COLD_TOOL_OPENAI_MODEL, 80) ??
+        undefined,
+    });
+    state.snapshotProcessed += result.processed;
+    state.snapshotChunkIndex = chunkIndex + 1;
+    const progress =
+      70 +
+      Math.round(
+        (state.snapshotChunkIndex / Math.max(1, snapshotRepositoryChunks.length)) * 10,
+      );
+    await this.emitRuntimeFromResumeState(state, 'snapshot', progress, options);
+
+    if (state.snapshotChunkIndex < snapshotRepositoryChunks.length) {
+      return {
+        continued: true,
+        phase: 'snapshot',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'snapshot',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
+    this.logger.log(
+      `cold_tool_collection stage=cold_tool_discovery snapshotProcessed=${state.snapshotProcessed} repositoryCandidates=${state.repositoryIds.length}`,
+    );
+
+    return {
+      continued: true,
+      phase: 'cold_tool_discovery',
+      repositoryCandidates: state.repositoryIds.length,
+      nextDto: {
+        ...dto,
+        phase: 'cold_tool_discovery',
+        resumeState: state as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async runColdToolDiscoveryPhase(
+    dto: RunColdToolCollectorDto,
+    options: {
+      onProgress?: (progress: number) => Promise<void> | void;
+      onHeartbeat?: (
+        payload: ColdToolCollectorRuntimePayload,
+      ) => Promise<void> | void;
+    },
+  ): Promise<ColdToolCollectorDirectResult> {
+    const state = this.readResumeState(dto.resumeState);
+    const discoveryRepositoryChunks = this.getDiscoveryChunks(state.repositoryIds);
+    const chunkIndex = Math.max(0, state.discoveryChunkIndex);
+
+    if (chunkIndex >= discoveryRepositoryChunks.length) {
+      return {
+        continued: true,
+        phase: 'deep_queue',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'deep_queue',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
+    await this.emitRuntimeFromResumeState(state, 'cold_tool_discovery', 82, options);
+    const chunkRepositoryIds = discoveryRepositoryChunks[chunkIndex];
+    const chunkOriginsByRepositoryId = Object.fromEntries(
+      chunkRepositoryIds.map((repositoryId: string) => [
+        repositoryId,
+        state.originsByRepositoryId[repositoryId] ?? [],
+      ]),
+    );
+    const matchedRepositoryIds = new Set(state.matchedRepositoryIds);
+    const result = await this.coldToolDiscoveryService.analyzeRepositoriesBatch({
+      repositoryIds: chunkRepositoryIds,
+      originsByRepositoryId: chunkOriginsByRepositoryId,
+      batchSize: this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE', 4, 1),
+      persist: true,
+      forceRefresh: dto.forceRefresh,
+      modelOverride:
+        dto.modelOverride ??
+        this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
+        'gpt-5.4',
+      onBatchProgress: async (batchProgress) => {
+        const totalChunks = Math.max(1, discoveryRepositoryChunks.length);
+        const completedChunkRatio = chunkIndex / totalChunks;
+        const currentChunkRatio =
+          batchProgress.totalBatches > 0
+            ? batchProgress.completedBatches / batchProgress.totalBatches
+            : 1;
+        const overallRatio =
+          completedChunkRatio + currentChunkRatio / totalChunks;
+        const progress = 82 + Math.round(overallRatio * 10);
+
+        await this.emitRuntimeFromResumeState(
+          state,
+          'cold_tool_discovery',
+          Math.max(82, Math.min(92, progress)),
+          options,
+          matchedRepositoryIds,
+        );
+      },
+    });
+    state.coldToolEvaluated += result.processed;
+    for (const item of result.items) {
+      if (item.output?.fitsColdToolPool === true) {
+        matchedRepositoryIds.add(item.repositoryId);
+      }
+    }
+    state.matchedRepositoryIds = Array.from(matchedRepositoryIds);
+    state.discoveryChunkIndex = chunkIndex + 1;
+    const progress =
+      82 +
+      Math.round(
+        (state.discoveryChunkIndex / Math.max(1, discoveryRepositoryChunks.length)) * 10,
+      );
+    await this.emitRuntimeFromResumeState(
+      state,
+      'cold_tool_discovery',
+      progress,
+      options,
+      matchedRepositoryIds,
+    );
+
+    if (state.discoveryChunkIndex < discoveryRepositoryChunks.length) {
+      return {
+        continued: true,
+        phase: 'cold_tool_discovery',
+        repositoryCandidates: state.repositoryIds.length,
+        nextDto: {
+          ...dto,
+          phase: 'cold_tool_discovery',
+          resumeState: state as Record<string, unknown>,
+        },
+      };
+    }
+
+    return {
+      continued: true,
+      phase: 'deep_queue',
+      repositoryCandidates: state.repositoryIds.length,
+      nextDto: {
+        ...dto,
+        phase: 'deep_queue',
+        resumeState: state as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async runDeepQueuePhase(
+    dto: RunColdToolCollectorDto,
+    options: {
+      onProgress?: (progress: number) => Promise<void> | void;
+      onHeartbeat?: (
+        payload: ColdToolCollectorRuntimePayload,
+      ) => Promise<void> | void;
+    },
+  ) {
+    const state = this.readResumeState(dto.resumeState);
+    state.deepAnalysisQueued = await this.enqueueColdToolDeepAnalyses(
+      state.matchedRepositoryIds,
+    );
+
+    await this.emitRuntimeFromResumeState(state, 'deep_queue', 95, options);
+
+    const summary = {
+      executedAt: new Date().toISOString(),
+      queriesExecuted: state.selectedEntries.length,
+      languageRotationSeed: state.languageRotationSeed,
+      queryConcurrency: state.queryConcurrency,
+      perQueryLimit: state.perQueryLimit,
+      lookbackDays: state.lookbackDays,
+      fetchedLinks: state.fetchedLinks,
+      createdRepositories: state.createdRepositories,
+      updatedRepositories: state.updatedRepositories,
+      failedRepositories: state.failedRepositories,
+      externalImportedRepositories: state.externalImportedRepositories,
+      externalDuplicateRepositoryRefs: state.externalDuplicateRepositoryRefs,
+      externalReusedRepositories: state.externalReusedRepositories,
+      hydratedRepositories: state.hydratedRepositories,
+      hydrationSkippedRecent: state.hydrationSkippedRecent,
+      hydrationFailed: state.hydrationFailed,
+      externalSourceHitCount: state.externalSourceHitCount,
+      snapshotProcessed: state.snapshotProcessed,
+      coldToolEvaluated: state.coldToolEvaluated,
+      coldToolMatched: state.matchedRepositoryIds.length,
+      deepAnalysisQueued: state.deepAnalysisQueued,
+      topMatchedRepositoryIds: state.matchedRepositoryIds.slice(0, 20),
       activeProgrammingLanguages: Array.from(
         new Set(
-          selectedEntries
+          state.selectedEntries
             .map((entry) => entry.codeLanguage)
             .filter((item): item is string => Boolean(item)),
         ),
       ),
-      activeDomains: Array.from(new Set(selectedEntries.map((entry) => entry.group))),
-      queryPlan: selectedEntries.map((entry) => ({
+      activeDomains: Array.from(
+        new Set(state.selectedEntries.map((entry) => entry.group)),
+      ),
+      queryPlan: state.selectedEntries.map((entry) => ({
         domain: entry.group,
         domainZh: entry.labelZh,
         locale: entry.locale,
@@ -559,15 +764,15 @@ export class GitHubColdToolCollectorService {
     };
 
     await this.saveState({
-      cursor: nextCursor,
+      cursor: state.nextCursor,
       lastRunAt: new Date().toISOString(),
       lastRunSummary: summary,
     });
 
     this.logger.log(
-      `cold_tool_collection stage=done fetchedLinks=${fetchedLinks} externalImportedRepositories=${externalImportedRepositories} snapshotProcessed=${snapshotProcessed} coldToolMatched=${coldToolMatched} deepAnalysisQueued=${deepAnalysisQueued}`,
+      `cold_tool_collection stage=done fetchedLinks=${state.fetchedLinks} externalImportedRepositories=${state.externalImportedRepositories} snapshotProcessed=${state.snapshotProcessed} coldToolMatched=${state.matchedRepositoryIds.length} deepAnalysisQueued=${state.deepAnalysisQueued}`,
     );
-    await emitRuntime('done', 100);
+    await this.emitRuntimeFromResumeState(state, 'done', 100, options);
 
     return summary;
   }
@@ -1100,6 +1305,250 @@ export class GitHubColdToolCollectorService {
       entry.searchMode,
       entry.lookbackDays,
     ].join('|');
+  }
+
+  private resolvePipelinePhase(value: unknown): ColdToolCollectorPipelinePhase {
+    const normalized = this.cleanText(value, 80);
+    if (
+      normalized === 'snapshot' ||
+      normalized === 'cold_tool_discovery' ||
+      normalized === 'deep_queue'
+    ) {
+      return normalized;
+    }
+
+    return 'full';
+  }
+
+  private readResumeState(value: unknown): ColdToolCollectorResumeState {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Cold tool collector resume state is missing.');
+    }
+
+    const record = value as Record<string, unknown>;
+    const selectedEntries = Array.isArray(record.selectedEntries)
+      ? record.selectedEntries
+          .map((item) => this.normalizePlanEntry(item))
+          .filter((item): item is ColdToolSearchPlanEntry => Boolean(item))
+      : [];
+    const repositoryIds = Array.isArray(record.repositoryIds)
+      ? record.repositoryIds
+          .map((item) => this.cleanText(item, 160))
+          .filter((item): item is string => Boolean(item))
+      : [];
+    const matchedRepositoryIds = Array.isArray(record.matchedRepositoryIds)
+      ? record.matchedRepositoryIds
+          .map((item) => this.cleanText(item, 160))
+          .filter((item): item is string => Boolean(item))
+      : [];
+
+    return {
+      selectedEntries,
+      nextCursor: this.readNonNegativeInt(record.nextCursor, 0),
+      fetchedLinks: this.readNonNegativeInt(record.fetchedLinks, 0),
+      createdRepositories: this.readNonNegativeInt(record.createdRepositories, 0),
+      updatedRepositories: this.readNonNegativeInt(record.updatedRepositories, 0),
+      failedRepositories: this.readNonNegativeInt(record.failedRepositories, 0),
+      externalImportedRepositories: this.readNonNegativeInt(
+        record.externalImportedRepositories,
+        0,
+      ),
+      externalDuplicateRepositoryRefs: this.readNonNegativeInt(
+        record.externalDuplicateRepositoryRefs,
+        0,
+      ),
+      externalReusedRepositories: this.readNonNegativeInt(
+        record.externalReusedRepositories,
+        0,
+      ),
+      hydratedRepositories: this.readNonNegativeInt(record.hydratedRepositories, 0),
+      hydrationSkippedRecent: this.readNonNegativeInt(record.hydrationSkippedRecent, 0),
+      hydrationFailed: this.readNonNegativeInt(record.hydrationFailed, 0),
+      externalSourceHitCount: this.readNonNegativeInt(record.externalSourceHitCount, 0),
+      repositoryIds,
+      originsByRepositoryId: this.normalizeOriginsByRepositoryId(
+        record.originsByRepositoryId,
+      ),
+      snapshotProcessed: this.readNonNegativeInt(record.snapshotProcessed, 0),
+      snapshotChunkIndex: this.readNonNegativeInt(record.snapshotChunkIndex, 0),
+      coldToolEvaluated: this.readNonNegativeInt(record.coldToolEvaluated, 0),
+      discoveryChunkIndex: this.readNonNegativeInt(record.discoveryChunkIndex, 0),
+      matchedRepositoryIds,
+      deepAnalysisQueued: this.readNonNegativeInt(record.deepAnalysisQueued, 0),
+      perQueryLimit: this.readNonNegativeInt(record.perQueryLimit, 0),
+      lookbackDays: this.readNonNegativeInt(record.lookbackDays, 0),
+      languageRotationSeed: this.readNonNegativeInt(record.languageRotationSeed, 0),
+      queryConcurrency: this.readNonNegativeInt(record.queryConcurrency, 0),
+    };
+  }
+
+  private normalizePlanEntry(value: unknown): ColdToolSearchPlanEntry | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const source = this.cleanText(record.source, 40);
+    const group = this.cleanText(record.group, 80);
+    const labelZh = this.cleanText(record.labelZh, 80);
+    const locale = this.cleanText(record.locale, 40);
+    const keyword = this.cleanText(record.keyword, 200);
+    const searchMode = this.cleanText(record.searchMode, 40);
+
+    if (
+      (source !== 'github_query' && source !== 'github_curated') ||
+      !group ||
+      !labelZh ||
+      !locale ||
+      !keyword ||
+      !searchMode
+    ) {
+      return null;
+    }
+
+    return {
+      source,
+      group,
+      labelZh,
+      locale,
+      keyword,
+      codeLanguage: this.cleanText(record.codeLanguage, 80),
+      searchMode: searchMode as GitHubFetchMode,
+      lookbackDays: this.readNonNegativeInt(record.lookbackDays, 0),
+    };
+  }
+
+  private normalizeOriginsByRepositoryId(
+    value: unknown,
+  ): Record<string, ColdToolOrigin[]> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(record).map(([repositoryId, origins]) => [
+        repositoryId,
+        this.normalizeOriginsArray(origins),
+      ]),
+    );
+  }
+
+  private normalizeOriginsArray(value: unknown): ColdToolOrigin[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          return null;
+        }
+        const record = item as Record<string, unknown>;
+        const collector = this.cleanText(record.collector, 80);
+        const domain = this.cleanText(record.domain, 120);
+        const keyword = this.cleanText(record.keyword, 200);
+        const locale = this.cleanText(record.locale, 40);
+        const collectedAt = this.cleanText(record.collectedAt, 80);
+        if (!collector || !domain || !keyword || !locale || !collectedAt) {
+          return null;
+        }
+
+        return {
+          collector,
+          domain,
+          keyword,
+          locale,
+          codeLanguage: this.cleanText(record.codeLanguage, 80),
+          collectedAt,
+        } satisfies ColdToolOrigin;
+      })
+      .filter((item): item is ColdToolOrigin => Boolean(item));
+  }
+
+  private buildResumeState(
+    state: ColdToolCollectorResumeState,
+  ): ColdToolCollectorResumeState {
+    return {
+      ...state,
+      repositoryIds: [...state.repositoryIds],
+      matchedRepositoryIds: [...state.matchedRepositoryIds],
+      selectedEntries: state.selectedEntries.map((entry) => ({ ...entry })),
+      originsByRepositoryId: Object.fromEntries(
+        Object.entries(state.originsByRepositoryId).map(([repositoryId, origins]) => [
+          repositoryId,
+          origins.map((origin) => ({ ...origin })),
+        ]),
+      ),
+    };
+  }
+
+  private getSnapshotChunks(repositoryIds: string[]) {
+    return this.chunkItems(
+      repositoryIds,
+      this.readPositiveInt('COLD_TOOL_SNAPSHOT_REPOSITORY_CHUNK_SIZE', 120, 1),
+    );
+  }
+
+  private getDiscoveryChunks(repositoryIds: string[]) {
+    return this.chunkItems(
+      repositoryIds,
+      this.readPositiveInt('COLD_TOOL_DISCOVERY_REPOSITORY_CHUNK_SIZE', 48, 1),
+    );
+  }
+
+  private async emitRuntimeFromResumeState(
+    state: ColdToolCollectorResumeState,
+    currentStage: ColdToolCollectorStage,
+    progress: number,
+    options: {
+      onProgress?: (progress: number) => Promise<void> | void;
+      onHeartbeat?: (
+        payload: ColdToolCollectorRuntimePayload,
+      ) => Promise<void> | void;
+    },
+    matchedRepositoryIds: Set<string> | null = null,
+  ) {
+    const activeDomains = Array.from(
+      new Set(state.selectedEntries.map((entry) => entry.group)),
+    );
+    const activeProgrammingLanguages = Array.from(
+      new Set(
+        state.selectedEntries
+          .map((entry) => entry.codeLanguage)
+          .filter((item): item is string => Boolean(item)),
+      ),
+    );
+    const coldToolMatched = matchedRepositoryIds
+      ? matchedRepositoryIds.size
+      : state.matchedRepositoryIds.length;
+
+    await options.onProgress?.(progress);
+    await options.onHeartbeat?.({
+      currentStage,
+      progress,
+      queriesSelected: state.selectedEntries.length,
+      githubQueriesCompleted: state.selectedEntries.length,
+      githubFetchedLinks: state.fetchedLinks,
+      githubCreatedRepositories: state.createdRepositories,
+      githubUpdatedRepositories: state.updatedRepositories,
+      githubFailedRepositories: state.failedRepositories,
+      externalSourceHitCount: state.externalSourceHitCount,
+      externalImportedRepositories: state.externalImportedRepositories,
+      externalDuplicateRepositoryRefs: state.externalDuplicateRepositoryRefs,
+      externalReusedRepositories: state.externalReusedRepositories,
+      hydratedRepositories: state.hydratedRepositories,
+      hydrationSkippedRecent: state.hydrationSkippedRecent,
+      hydrationFailed: state.hydrationFailed,
+      repositoryCandidates: state.repositoryIds.length,
+      snapshotProcessed: state.snapshotProcessed,
+      coldToolEvaluated: state.coldToolEvaluated,
+      coldToolMatched,
+      deepAnalysisQueued: state.deepAnalysisQueued,
+      activeDomains,
+      activeProgrammingLanguages,
+      runtimeUpdatedAt: new Date().toISOString(),
+    });
   }
 
   private uniqueKeywords(keywords: string[]) {

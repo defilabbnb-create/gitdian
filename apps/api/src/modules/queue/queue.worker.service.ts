@@ -405,7 +405,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         }
 
         const result = await this.queueService.enqueueGitHubColdToolCollect(
-          {
+          recovered.dto ?? {
             queriesPerRun: this.readConcurrency(
               'COLD_TOOL_QUERIES_PER_RUN',
               36,
@@ -638,7 +638,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       30_000,
     );
 
-    return this.runQueuedJob(job, async (heartbeat) => {
+    const result = await this.runQueuedJob(job, async (heartbeat) => {
       const result = await this.gitHubColdToolCollectorService.runCollectionDirect(
         job.data.dto,
         {
@@ -700,6 +700,10 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         },
       );
 
+      if (this.isColdToolCollectorContinuationResult(result)) {
+        return result;
+      }
+
       return {
         queriesExecuted: result.queriesExecuted,
         fetchedLinks: result.fetchedLinks,
@@ -708,9 +712,32 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         deepAnalysisQueued: result.deepAnalysisQueued,
         activeDomains: result.activeDomains,
         activeProgrammingLanguages: result.activeProgrammingLanguages,
-        topMatchedRepositoryIds: result.topMatchedRepositoryIds.slice(0, 20),
+        topMatchedRepositoryIds: this.extractRepositoryIds(
+          result.topMatchedRepositoryIds,
+        ).slice(0, 20),
       };
     });
+
+    if (this.isColdToolCollectorContinuationResult(result)) {
+      const handoff = await this.queueService.enqueueGitHubColdToolCollect(
+        result.nextDto,
+        'cold_tool_pipeline',
+      );
+
+      this.logger.log(
+        `Cold tool collector phase handoff phase=${result.phase} repositoryCandidates=${result.repositoryCandidates} nextJobId=${handoff.jobId} nextQueueJobId=${handoff.queueJobId}`,
+      );
+
+      return {
+        continued: true,
+        phase: result.phase,
+        repositoryCandidates: result.repositoryCandidates,
+        nextJobId: handoff.jobId,
+        nextQueueJobId: handoff.queueJobId,
+      };
+    }
+
+    return result;
   }
 
   private async handleIdeaSnapshot(
@@ -1058,6 +1085,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       queueJobId: activeJob.queueJobId,
       queueState,
       heartbeatAgeMs,
+      dto: this.extractColdToolCollectorDto(activeJob.payload),
     };
   }
 
@@ -1429,6 +1457,33 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       runtimeUpdatedAt: this.normalizeNullableString(runtime?.runtimeUpdatedAt),
       progress: this.toNullableNumber(runtime?.progress),
     };
+  }
+
+  private extractColdToolCollectorDto(payload: Prisma.JsonValue | null) {
+    const record = this.readJsonRecord(payload);
+    const dto = this.isJsonRecord(record.dto) ? record.dto : null;
+    return dto ? ({ ...dto } as RunColdToolCollectorDto) : null;
+  }
+
+  private isColdToolCollectorContinuationResult(
+    value: unknown,
+  ): value is {
+    continued: true;
+    phase: string;
+    repositoryCandidates: number;
+    nextDto: RunColdToolCollectorDto;
+  } {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+
+    const record = value as Record<string, unknown>;
+    return (
+      record.continued === true &&
+      typeof record.phase === 'string' &&
+      typeof record.repositoryCandidates === 'number' &&
+      this.isJsonRecord(record.nextDto)
+    );
   }
 
   private readJsonRecord(value: Prisma.JsonValue | null | undefined) {
