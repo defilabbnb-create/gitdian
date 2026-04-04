@@ -1480,9 +1480,12 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     runtime: ColdToolRuntimeState,
   ) {
     const runtimeHeartbeatAt = this.parseTimestamp(runtime.runtimeUpdatedAt);
+    const persistedHeartbeatAt = job.updatedAt?.getTime() ?? null;
     const referenceTime =
-      runtimeHeartbeatAt ??
-      job.updatedAt?.getTime() ??
+      runtimeHeartbeatAt && persistedHeartbeatAt
+        ? Math.max(runtimeHeartbeatAt, persistedHeartbeatAt)
+        : runtimeHeartbeatAt ??
+          persistedHeartbeatAt ??
       job.startedAt?.getTime() ??
       job.createdAt.getTime();
 

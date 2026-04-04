@@ -310,9 +310,12 @@ export class SystemService {
         ? (currentCollector.result.runtime as Record<string, unknown>)
         : null;
     const heartbeatAt =
-      typeof runtime?.runtimeUpdatedAt === 'string'
-        ? runtime.runtimeUpdatedAt
-        : currentCollector?.updatedAt?.toISOString() ?? null;
+      this.pickLatestIsoTimestamp(
+        typeof runtime?.runtimeUpdatedAt === 'string'
+          ? runtime.runtimeUpdatedAt
+          : null,
+        currentCollector?.updatedAt?.toISOString() ?? null,
+      );
     const heartbeatAgeSeconds = this.toAgeSeconds(heartbeatAt);
     const heartbeatState = this.resolveCollectorHeartbeatState({
       jobStatus: currentCollector?.jobStatus ?? null,
@@ -593,6 +596,26 @@ export class SystemService {
     }
 
     return null;
+  }
+
+  private pickLatestIsoTimestamp(left: string | null, right: string | null) {
+    if (!left) {
+      return right;
+    }
+    if (!right) {
+      return left;
+    }
+
+    const leftTs = Date.parse(left);
+    const rightTs = Date.parse(right);
+    if (Number.isNaN(leftTs)) {
+      return right;
+    }
+    if (Number.isNaN(rightTs)) {
+      return left;
+    }
+
+    return leftTs >= rightTs ? left : right;
   }
 
   private buildCollectorPhaseStats(
