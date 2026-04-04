@@ -15,4 +15,13 @@ export class SystemController {
       message: 'System warnings fetched.',
     };
   }
+
+  @Get('version')
+  getVersion() {
+    return {
+      success: true,
+      data: this.systemService.getVersion(),
+      message: 'System version fetched.',
+    };
+  }
 }

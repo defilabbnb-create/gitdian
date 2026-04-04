@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { execSync } from 'node:child_process';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { GitHubRadarService } from '../github/github-radar.service';
@@ -81,6 +82,16 @@ export type SystemWarningsPayload = {
   };
 };
 
+export type SystemVersionPayload = {
+  generatedAt: string;
+  runtime: {
+    gitSha: string;
+    environment: string;
+    bootedAt: string;
+    worktreeDirty: boolean;
+  };
+};
+
 @Injectable()
 export class SystemService {
   constructor(
@@ -147,6 +158,59 @@ export class SystemService {
     });
 
     return payload;
+  }
+
+  getVersion(): SystemVersionPayload {
+    return {
+      generatedAt: new Date().toISOString(),
+      runtime: {
+        gitSha: this.readBuildValue(
+          process.env.GITDIAN_GIT_SHA,
+          this.readRuntimeGitSha(),
+        ),
+        environment: this.readBuildValue(
+          process.env.NODE_ENV,
+          'unknown environment',
+        ),
+        bootedAt: this.readBuildValue(
+          process.env.GITDIAN_RUNTIME_BOOTED_AT,
+          'unknown boot time',
+        ),
+        worktreeDirty:
+          this.readBuildValue(process.env.GITDIAN_WORKTREE_DIRTY, '') === 'true' ||
+          this.readRuntimeDirtyFlag(),
+      },
+    };
+  }
+
+  private readBuildValue(value: string | undefined, fallback: string) {
+    const normalized = value?.trim();
+    return normalized && normalized.length > 0 ? normalized : fallback;
+  }
+
+  private readRuntimeGitSha() {
+    try {
+      return execSync('git rev-parse --short=12 HEAD', {
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'ignore'],
+        encoding: 'utf8',
+      }).trim();
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  private readRuntimeDirtyFlag() {
+    try {
+      const output = execSync('git status --porcelain', {
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'ignore'],
+        encoding: 'utf8',
+      }).trim();
+      return output.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   private toJsonValue(value: unknown): Prisma.InputJsonValue {

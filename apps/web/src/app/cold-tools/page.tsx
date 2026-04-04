@@ -1,6 +1,7 @@
 import { ColdToolCollectorPanel } from '@/components/cold-tools/cold-tool-collector-panel';
 import { RepositoryFilters } from '@/components/repositories/repository-filters';
 import { RepositoryList } from '@/components/repositories/repository-list';
+import { SettingsBuildInfo } from '@/components/settings/settings-build-info';
 import { RuntimeFailurePanel } from '@/components/runtime-failure-panel';
 import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getRepositories } from '@/lib/api/repositories';
@@ -80,6 +81,7 @@ export default async function ColdToolsPage({
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.16),_transparent_24%),linear-gradient(180deg,_#f8fafc_0%,_#ecfdf5_100%)] px-6 py-8 text-slate-950">
       <div className="mx-auto max-w-7xl space-y-6">
+        <SettingsBuildInfo variant="compact" />
         <ColdToolCollectorPanel />
 
         {repositories ? (

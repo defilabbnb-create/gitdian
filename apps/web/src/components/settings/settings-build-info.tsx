@@ -12,6 +12,7 @@ export function SettingsBuildInfo({
     `Git SHA: ${buildInfo.gitSha}`,
     `Environment: ${buildInfo.environment}`,
     `Build Time: ${buildInfo.buildTime}`,
+    `Worktree Dirty: ${buildInfo.worktreeDirty ? 'true' : 'false'}`,
   ];
 
   if (variant === 'compact') {
@@ -94,6 +95,15 @@ export function SettingsBuildInfo({
           </dt>
           <dd className="mt-2 font-mono text-sm text-slate-950">
             {buildInfo.environment}
+          </dd>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Worktree Dirty
+          </dt>
+          <dd className="mt-2 font-mono text-sm text-slate-950">
+            {buildInfo.worktreeDirty ? 'true' : 'false'}
           </dd>
         </div>
       </dl>
