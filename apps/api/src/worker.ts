@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { startRuntimeRefreshWatcher } from './common/runtime/runtime-refresh';
 
 async function bootstrap() {
   process.env.ENABLE_QUEUE_WORKERS = 'true';
@@ -12,8 +13,18 @@ async function bootstrap() {
     process.exit(0);
   };
 
+  const refreshWatcher = startRuntimeRefreshWatcher({
+    serviceName: 'worker',
+    onStale: async () => {
+      await app.close();
+    },
+  });
+
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('exit', () => {
+    refreshWatcher.stop();
+  });
 }
 
 void bootstrap();
