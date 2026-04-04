@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -63,6 +64,7 @@ type ColdToolCollectorPipelinePhase =
   | 'deep_queue';
 
 export type ColdToolCollectorRuntimePayload = {
+  runId: string;
   currentStage: ColdToolCollectorStage;
   progress: number;
   queriesSelected: number;
@@ -89,6 +91,7 @@ export type ColdToolCollectorRuntimePayload = {
 };
 
 type ColdToolCollectorResumeState = {
+  runId: string;
   selectedEntries: ColdToolSearchPlanEntry[];
   nextCursor: number;
   fetchedLinks: number;
@@ -170,6 +173,7 @@ export class GitHubColdToolCollectorService {
     }
 
     const state = await this.ensureState();
+    const runId = dto.runId ?? randomUUID();
     const queriesPerRun = Math.min(
       dto.queriesPerRun ??
         this.readPositiveInt('COLD_TOOL_QUERIES_PER_RUN', 36, 1),
@@ -225,6 +229,7 @@ export class GitHubColdToolCollectorService {
     ) => {
       await options.onProgress?.(progress);
       await options.onHeartbeat?.({
+        runId,
         currentStage,
         progress,
         queriesSelected: selectedEntries.length,
@@ -350,6 +355,7 @@ export class GitHubColdToolCollectorService {
       });
 
     await options.onHeartbeat?.({
+      runId,
       currentStage: 'external_discovery',
       progress: 45,
       queriesSelected: selectedEntries.length,
@@ -382,6 +388,7 @@ export class GitHubColdToolCollectorService {
     });
 
     const resumeState = this.buildResumeState({
+      runId,
       selectedEntries,
       nextCursor:
         searchPlan.length
@@ -428,6 +435,7 @@ export class GitHubColdToolCollectorService {
       repositoryCandidates: resumeState.repositoryIds.length,
       nextDto: {
         ...dto,
+        runId: resumeState.runId,
         phase: 'external_import',
         resumeState: resumeState as Record<string, unknown>,
       },
@@ -465,6 +473,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'hydrate_content',
           resumeState: state as Record<string, unknown>,
         },
@@ -564,6 +573,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'external_import',
           resumeState: state as Record<string, unknown>,
         },
@@ -576,6 +586,7 @@ export class GitHubColdToolCollectorService {
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
+        runId: state.runId,
         phase: 'hydrate_content',
         resumeState: state as Record<string, unknown>,
       },
@@ -612,6 +623,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'snapshot',
           resumeState: state as Record<string, unknown>,
         },
@@ -655,6 +667,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'hydrate_content',
           resumeState: state as Record<string, unknown>,
         },
@@ -667,6 +680,7 @@ export class GitHubColdToolCollectorService {
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
+        runId: state.runId,
         phase: 'snapshot',
         resumeState: state as Record<string, unknown>,
       },
@@ -693,6 +707,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'cold_tool_discovery',
           resumeState: state as Record<string, unknown>,
         },
@@ -729,6 +744,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'snapshot',
           resumeState: state as Record<string, unknown>,
         },
@@ -745,6 +761,7 @@ export class GitHubColdToolCollectorService {
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
+        runId: state.runId,
         phase: 'cold_tool_discovery',
         resumeState: state as Record<string, unknown>,
       },
@@ -771,6 +788,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'deep_queue',
           resumeState: state as Record<string, unknown>,
         },
@@ -844,6 +862,7 @@ export class GitHubColdToolCollectorService {
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
+          runId: state.runId,
           phase: 'cold_tool_discovery',
           resumeState: state as Record<string, unknown>,
         },
@@ -856,6 +875,7 @@ export class GitHubColdToolCollectorService {
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
+        runId: state.runId,
         phase: 'deep_queue',
         resumeState: state as Record<string, unknown>,
       },
@@ -929,7 +949,7 @@ export class GitHubColdToolCollectorService {
     });
 
     this.logger.log(
-      `cold_tool_collection stage=done fetchedLinks=${state.fetchedLinks} externalImportedRepositories=${state.externalImportedRepositories} snapshotProcessed=${state.snapshotProcessed} coldToolMatched=${state.matchedRepositoryIds.length} deepAnalysisQueued=${state.deepAnalysisQueued}`,
+      `cold_tool_collection runId=${state.runId} stage=done fetchedLinks=${state.fetchedLinks} externalImportedRepositories=${state.externalImportedRepositories} snapshotProcessed=${state.snapshotProcessed} coldToolMatched=${state.matchedRepositoryIds.length} deepAnalysisQueued=${state.deepAnalysisQueued}`,
     );
     await this.emitRuntimeFromResumeState(state, 'done', 100, options);
 
@@ -1504,6 +1524,7 @@ export class GitHubColdToolCollectorService {
       : [];
 
     return {
+      runId: this.cleanText(record.runId, 80) ?? randomUUID(),
       selectedEntries,
       nextCursor: this.readNonNegativeInt(record.nextCursor, 0),
       fetchedLinks: this.readNonNegativeInt(record.fetchedLinks, 0),
@@ -1677,6 +1698,7 @@ export class GitHubColdToolCollectorService {
   ): ColdToolCollectorResumeState {
     return {
       ...state,
+      runId: state.runId,
       externalHits: state.externalHits.map((hit) => ({ ...hit })),
       externalImportChunkIndex: state.externalImportChunkIndex,
       repositoryIds: [...state.repositoryIds],
@@ -1746,6 +1768,7 @@ export class GitHubColdToolCollectorService {
 
     await options.onProgress?.(progress);
     await options.onHeartbeat?.({
+      runId: state.runId,
       currentStage,
       progress,
       queriesSelected: state.selectedEntries.length,

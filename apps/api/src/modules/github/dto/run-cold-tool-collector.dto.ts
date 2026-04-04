@@ -57,6 +57,10 @@ export class RunColdToolCollectorDto {
   phase?: string;
 
   @IsOptional()
+  @IsString()
+  runId?: string;
+
+  @IsOptional()
   @IsObject()
   resumeState?: Record<string, unknown>;
 }

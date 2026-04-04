@@ -725,7 +725,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       );
 
       this.logger.log(
-        `Cold tool collector phase handoff phase=${result.phase} repositoryCandidates=${result.repositoryCandidates} nextJobId=${handoff.jobId} nextQueueJobId=${handoff.queueJobId}`,
+        `Cold tool collector phase handoff runId=${result.nextDto.runId ?? 'unknown'} phase=${result.phase} repositoryCandidates=${result.repositoryCandidates} nextJobId=${handoff.jobId} nextQueueJobId=${handoff.queueJobId}`,
       );
 
       return {

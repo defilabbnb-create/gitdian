@@ -98,14 +98,17 @@ export type SystemColdRuntimePayload = {
   generatedAt: string;
   runtime: SystemVersionPayload['runtime'];
   collector: {
+    currentRunId: string | null;
     currentJobId: string | null;
     currentStatus: string | null;
     currentProgress: number | null;
     currentStage: string | null;
     lastHeartbeatAt: string | null;
     lastSuccessJobId: string | null;
+    lastSuccessRunId: string | null;
     lastSuccessAt: string | null;
     lastFailureJobId: string | null;
+    lastFailureRunId: string | null;
     lastFailureAt: string | null;
     lastFailureReason: string | null;
     heartbeatAgeSeconds: number | null;
@@ -233,6 +236,7 @@ export class SystemService {
             updatedAt: true,
             finishedAt: true,
             errorMessage: true,
+            payload: true,
             result: true,
           },
         }),
@@ -305,6 +309,24 @@ export class SystemService {
       newestQueuedAgeSeconds,
     });
     const warnings: string[] = [];
+    const currentCollectorPayload =
+      currentCollector?.result &&
+      typeof currentCollector.result === 'object' &&
+      !Array.isArray(currentCollector.result)
+        ? (currentCollector.result as Record<string, unknown>)
+        : null;
+    const lastSuccessPayload =
+      lastSuccessCollector?.result &&
+      typeof lastSuccessCollector.result === 'object' &&
+      !Array.isArray(lastSuccessCollector.result)
+        ? (lastSuccessCollector.result as Record<string, unknown>)
+        : null;
+    const lastFailurePayload =
+      lastFailedCollector?.result &&
+      typeof lastFailedCollector.result === 'object' &&
+      !Array.isArray(lastFailedCollector.result)
+        ? (lastFailedCollector.result as Record<string, unknown>)
+        : null;
 
     if (heartbeatState === 'stale') {
       warnings.push(
@@ -328,6 +350,15 @@ export class SystemService {
       generatedAt: new Date().toISOString(),
       runtime: this.getVersion().runtime,
       collector: {
+        currentRunId:
+          this.readPayloadRunId(currentCollectorPayload) ??
+          this.readPayloadRunId(
+            currentCollector?.payload &&
+              typeof currentCollector.payload === 'object' &&
+              !Array.isArray(currentCollector.payload)
+              ? (currentCollector.payload as Record<string, unknown>)
+              : null,
+          ),
         currentJobId: currentCollector?.id ?? null,
         currentStatus: currentCollector?.jobStatus ?? null,
         currentProgress:
@@ -339,8 +370,26 @@ export class SystemService {
         lastHeartbeatAt:
           heartbeatAt,
         lastSuccessJobId: lastSuccessCollector?.id ?? null,
+        lastSuccessRunId:
+          this.readPayloadRunId(lastSuccessPayload) ??
+          this.readPayloadRunId(
+            lastSuccessCollector?.payload &&
+              typeof lastSuccessCollector.payload === 'object' &&
+              !Array.isArray(lastSuccessCollector.payload)
+              ? (lastSuccessCollector.payload as Record<string, unknown>)
+              : null,
+          ),
         lastSuccessAt: lastSuccessCollector?.finishedAt?.toISOString() ?? null,
         lastFailureJobId: lastFailedCollector?.id ?? null,
+        lastFailureRunId:
+          this.readPayloadRunId(lastFailurePayload) ??
+          this.readPayloadRunId(
+            lastFailedCollector?.payload &&
+              typeof lastFailedCollector.payload === 'object' &&
+              !Array.isArray(lastFailedCollector.payload)
+              ? (lastFailedCollector.payload as Record<string, unknown>)
+              : null,
+          ),
         lastFailureAt: lastFailedCollector?.updatedAt?.toISOString() ?? null,
         lastFailureReason: lastFailedCollector?.errorMessage ?? null,
         heartbeatAgeSeconds,
@@ -453,6 +502,35 @@ export class SystemService {
 
     const parsed = Number.parseInt(value.trim(), 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private readPayloadRunId(payload: Record<string, unknown> | null) {
+    if (!payload) {
+      return null;
+    }
+
+    const runtime = payload.runtime;
+    if (runtime && typeof runtime === 'object' && !Array.isArray(runtime)) {
+      const runId = (runtime as Record<string, unknown>).runId;
+      if (typeof runId === 'string' && runId.trim().length > 0) {
+        return runId.trim();
+      }
+    }
+
+    const dto = payload.dto;
+    if (dto && typeof dto === 'object' && !Array.isArray(dto)) {
+      const runId = (dto as Record<string, unknown>).runId;
+      if (typeof runId === 'string' && runId.trim().length > 0) {
+        return runId.trim();
+      }
+    }
+
+    const runId = payload.runId;
+    if (typeof runId === 'string' && runId.trim().length > 0) {
+      return runId.trim();
+    }
+
+    return null;
   }
 
   private readRuntimeGitSha() {
