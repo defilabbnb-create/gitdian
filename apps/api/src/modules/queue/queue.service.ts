@@ -82,6 +82,8 @@ type ActiveSingleAnalysisJobLog = {
   queueJobId: string | null;
   jobStatus: JobStatus;
   payload: Prisma.JsonValue | null;
+  updatedAt?: Date;
+  progress?: number;
 };
 
 type QueueJobPayload = Record<string, unknown>;
@@ -194,7 +196,12 @@ export class QueueService implements OnModuleDestroy {
       jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
     });
     if (existingActiveJob) {
-      return this.toExistingEnqueueResult(existingActiveJob);
+      const recovered = await this.recoverStaleColdToolCollectorEnqueueBlocker(
+        existingActiveJob,
+      );
+      if (!recovered) {
+        return this.toExistingEnqueueResult(existingActiveJob);
+      }
     }
     return this.enqueueJob({
       queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
@@ -202,6 +209,61 @@ export class QueueService implements OnModuleDestroy {
       payload: { dto },
       triggeredBy,
     });
+  }
+
+  private async recoverStaleColdToolCollectorEnqueueBlocker(
+    jobLog: ActiveSingleAnalysisJobLog,
+  ) {
+    const staleMs = this.readPositiveIntEnv(
+      process.env.COLD_TOOL_COLLECT_ENQUEUE_STALE_MS,
+      120_000,
+    );
+    const updatedAtMs = jobLog.updatedAt?.getTime() ?? 0;
+    const ageMs = updatedAtMs > 0 ? Date.now() - updatedAtMs : Number.POSITIVE_INFINITY;
+
+    const queueSnapshot = jobLog.queueJobId
+      ? await this.getQueueJobSnapshot(
+          QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+          jobLog.queueJobId,
+        )
+      : null;
+    const queueMissing = !queueSnapshot;
+    const stale =
+      queueMissing ||
+      ageMs >= staleMs ||
+      (jobLog.jobStatus === JobStatus.PENDING &&
+        queueSnapshot &&
+        ['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state) &&
+        ageMs >= staleMs / 2);
+
+    if (!stale) {
+      return false;
+    }
+
+    if (
+      jobLog.queueJobId &&
+      (!queueSnapshot ||
+        ['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state))
+    ) {
+      await this.tryRemoveQueueJob(
+        QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+        jobLog.queueJobId,
+      );
+    }
+
+    await this.jobLogService.failJob({
+      jobId: jobLog.id,
+      errorMessage: `Recovered stale cold-tool collector enqueue blocker after ${Math.max(0, Math.round(ageMs / 1000))}s without usable queue progress.`,
+      progress: typeof jobLog.progress === 'number' ? jobLog.progress : 0,
+      result: {
+        staleEnqueueBlocker: true,
+        queueState: queueSnapshot?.state ?? null,
+        queueJobId: jobLog.queueJobId,
+        recoveredAt: new Date().toISOString(),
+      },
+    });
+
+    return true;
   }
 
   async enqueueSingleAnalysis(
@@ -870,8 +932,19 @@ export class QueueService implements OnModuleDestroy {
         queueJobId: true,
         jobStatus: true,
         payload: true,
+        progress: true,
+        updatedAt: true,
       },
     })) as ActiveSingleAnalysisJobLog | null;
+  }
+
+  private readPositiveIntEnv(value: string | undefined, fallback: number) {
+    if (typeof value !== 'string') {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   private async findActiveSingleAnalysisJobLogs(repositoryIds: string[]) {

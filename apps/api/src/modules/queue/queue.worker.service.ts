@@ -45,9 +45,11 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly workers: Worker[] = [];
   private coldToolSchedulerTimer: NodeJS.Timeout | null = null;
   private coldToolWatchdogTimer: NodeJS.Timeout | null = null;
+  private coldToolAutofillTimer: NodeJS.Timeout | null = null;
   private analysisSingleWatchdogTimer: NodeJS.Timeout | null = null;
   private coldToolSchedulerTickInFlight = false;
   private coldToolWatchdogTickInFlight = false;
+  private coldToolAutofillTickInFlight = false;
   private analysisSingleWatchdogTickInFlight = false;
   private coldToolAutofillLastTriggeredAt = 0;
 
@@ -153,6 +155,10 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     if (this.coldToolWatchdogTimer) {
       clearInterval(this.coldToolWatchdogTimer);
       this.coldToolWatchdogTimer = null;
+    }
+    if (this.coldToolAutofillTimer) {
+      clearInterval(this.coldToolAutofillTimer);
+      this.coldToolAutofillTimer = null;
     }
     if (this.analysisSingleWatchdogTimer) {
       clearInterval(this.analysisSingleWatchdogTimer);
@@ -432,6 +438,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     }, intervalMs);
 
     this.startColdToolCollectorWatchdog();
+    this.startColdToolAutofillMonitor();
   }
 
   private startColdToolCollectorWatchdog() {
@@ -502,6 +509,42 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
 
     void tick();
     this.coldToolWatchdogTimer = setInterval(() => {
+      void tick();
+    }, intervalMs);
+  }
+
+  private startColdToolAutofillMonitor() {
+    const enabled = this.readBooleanEnv('ENABLE_COLD_TOOL_COLLECT_AUTOFILL', true);
+    if (!enabled || this.coldToolAutofillTimer) {
+      return;
+    }
+
+    const intervalMs = this.readConcurrency(
+      'COLD_TOOL_AUTOFILL_CHECK_INTERVAL_MS',
+      15_000,
+    );
+
+    const tick = async () => {
+      if (this.coldToolAutofillTickInFlight) {
+        return;
+      }
+
+      this.coldToolAutofillTickInFlight = true;
+      try {
+        await this.maybeAutofillColdToolCollector({});
+      } catch (error) {
+        this.logger.warn(
+          `Cold tool autofill tick failed: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+      } finally {
+        this.coldToolAutofillTickInFlight = false;
+      }
+    };
+
+    void tick();
+    this.coldToolAutofillTimer = setInterval(() => {
       void tick();
     }, intervalMs);
   }
