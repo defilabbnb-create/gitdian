@@ -128,6 +128,16 @@ export type ColdRuntimePayload = {
       updatedAt: string;
       finishedAt: string | null;
     }>;
+    phaseStats24h: Array<{
+      phase: string;
+      total: number;
+      running: number;
+      success: number;
+      failed: number;
+      failureRate: number;
+      avgDurationSeconds: number | null;
+      latestUpdatedAt: string | null;
+    }>;
   };
   coldDeepQueue: {
     active: number;

@@ -123,6 +123,16 @@ export type SystemColdRuntimePayload = {
       updatedAt: string;
       finishedAt: string | null;
     }>;
+    phaseStats24h: Array<{
+      phase: string;
+      total: number;
+      running: number;
+      success: number;
+      failed: number;
+      failureRate: number;
+      avgDurationSeconds: number | null;
+      latestUpdatedAt: string | null;
+    }>;
   };
   coldDeepQueue: {
     active: number;
@@ -360,6 +370,7 @@ export class SystemService {
         finishedAt: job.finishedAt?.toISOString() ?? null,
       };
     });
+    const phaseStats24h = this.buildCollectorPhaseStats(recentPhaseJobs);
 
     if (heartbeatState === 'stale') {
       warnings.push(
@@ -428,6 +439,7 @@ export class SystemService {
         heartbeatAgeSeconds,
         heartbeatState,
         recentPhaseJobs,
+        phaseStats24h,
       },
       coldDeepQueue: {
         active: coldDeepQueueDepth.active,
@@ -581,6 +593,91 @@ export class SystemService {
     }
 
     return null;
+  }
+
+  private buildCollectorPhaseStats(
+    jobs: Array<{
+      status: string;
+      phase: string | null;
+      createdAt: string;
+      updatedAt: string;
+      finishedAt: string | null;
+    }>,
+  ) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const grouped = new Map<
+      string,
+      {
+        total: number;
+        running: number;
+        success: number;
+        failed: number;
+        durationSeconds: number[];
+        latestUpdatedAt: string | null;
+      }
+    >();
+
+    for (const job of jobs) {
+      const createdAtMs = Date.parse(job.createdAt);
+      if (Number.isNaN(createdAtMs) || createdAtMs < cutoff) {
+        continue;
+      }
+
+      const phase = job.phase ?? 'full';
+      const current = grouped.get(phase) ?? {
+        total: 0,
+        running: 0,
+        success: 0,
+        failed: 0,
+        durationSeconds: [],
+        latestUpdatedAt: null,
+      };
+      current.total += 1;
+      if (job.status === 'RUNNING') {
+        current.running += 1;
+      }
+      if (job.status === 'SUCCESS') {
+        current.success += 1;
+      }
+      if (job.status === 'FAILED') {
+        current.failed += 1;
+      }
+
+      const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN;
+      if (!Number.isNaN(finishedAtMs)) {
+        current.durationSeconds.push(
+          Math.max(0, Math.round((finishedAtMs - createdAtMs) / 1000)),
+        );
+      }
+
+      if (
+        !current.latestUpdatedAt ||
+        Date.parse(job.updatedAt) > Date.parse(current.latestUpdatedAt)
+      ) {
+        current.latestUpdatedAt = job.updatedAt;
+      }
+
+      grouped.set(phase, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([phase, stats]) => ({
+        phase,
+        total: stats.total,
+        running: stats.running,
+        success: stats.success,
+        failed: stats.failed,
+        failureRate:
+          stats.total > 0 ? Math.round((stats.failed / stats.total) * 100) : 0,
+        avgDurationSeconds: stats.durationSeconds.length
+          ? Math.round(
+              stats.durationSeconds.reduce((sum, value) => sum + value, 0) /
+                stats.durationSeconds.length,
+            )
+          : null,
+        latestUpdatedAt: stats.latestUpdatedAt,
+      }))
+      .sort((left, right) => left.phase.localeCompare(right.phase));
   }
 
   private readRuntimeGitSha() {

@@ -110,6 +110,52 @@ export async function ColdRuntimePanel() {
           </div>
         </div>
 
+        <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Phase 统计（24h）
+            </p>
+            <p className="text-xs text-slate-500">
+              直接看每个阶段过去 24 小时的量、失败率和平均耗时。
+            </p>
+          </div>
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            {runtime.collector.phaseStats24h.map((stat) => (
+              <div
+                key={stat.phase}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <PhaseBadge phase={stat.phase} />
+                  <p className="text-xs text-slate-500">
+                    最近更新 {formatTime(stat.latestUpdatedAt)}
+                  </p>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <MetricPill
+                    label="总量"
+                    value={String(stat.total)}
+                  />
+                  <MetricPill
+                    label="失败率"
+                    value={`${stat.failureRate}%`}
+                  />
+                  <MetricPill
+                    label="平均耗时"
+                    value={formatDuration(stat.avgDurationSeconds)}
+                  />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+                  <span>running={stat.running}</span>
+                  <span>success={stat.success}</span>
+                  <span>failed={stat.failed}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {runtime.warnings.length > 0 ? (
           <div className="mt-4 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-950">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
@@ -166,6 +212,17 @@ function StatusBadge({ status }: { status: string }) {
     <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${classes}`}>
       {status}
     </span>
+  );
+}
+
+function MetricPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-semibold text-slate-950">{value}</p>
+    </div>
   );
 }
 
@@ -239,6 +296,20 @@ function shortId(value: string | null) {
   }
 
   return value.slice(0, 12);
+}
+
+function formatDuration(value: number | null) {
+  if (value === null) {
+    return '--';
+  }
+
+  if (value < 60) {
+    return `${value}s`;
+  }
+
+  const minutes = Math.floor(value / 60);
+  const seconds = value % 60;
+  return `${minutes}m ${seconds}s`;
 }
 
 function resolveTone(
