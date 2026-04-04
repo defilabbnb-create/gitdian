@@ -49,6 +49,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   private coldToolSchedulerTickInFlight = false;
   private coldToolWatchdogTickInFlight = false;
   private analysisSingleWatchdogTickInFlight = false;
+  private coldToolAutofillLastTriggeredAt = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -304,6 +305,56 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     return this.readConcurrency(
       'COLD_TOOL_DEEP_ANALYSIS_CONCURRENCY',
       Math.max(2, Math.floor(this.readConcurrency('DEEP_ANALYSIS_CONCURRENCY', 6) / 2)),
+    );
+  }
+
+  private async maybeAutofillColdToolCollector(result: {
+    deepAnalysisQueued?: number;
+  }) {
+    const enabled = this.readBooleanEnv('ENABLE_COLD_TOOL_COLLECT_AUTOFILL', true);
+    if (!enabled) {
+      return;
+    }
+
+    const cooldownMs = this.readConcurrency(
+      'COLD_TOOL_COLLECT_AUTOFILL_COOLDOWN_MS',
+      60_000,
+    );
+    const now = Date.now();
+    if (now - this.coldToolAutofillLastTriggeredAt < cooldownMs) {
+      return;
+    }
+
+    const targetDepth = this.readConcurrency(
+      'COLD_TOOL_AUTOFILL_DEEP_QUEUE_TARGET',
+      24,
+    );
+    const depth = await this.queueService.getQueueDepth(
+      QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+    );
+    const totalDepth =
+      depth.active + depth.waiting + depth.delayed + depth.prioritized;
+
+    if (totalDepth >= targetDepth) {
+      return;
+    }
+
+    this.coldToolAutofillLastTriggeredAt = now;
+    const enqueueResult = await this.queueService.enqueueGitHubColdToolCollect(
+      {
+        queriesPerRun: this.readConcurrency('COLD_TOOL_QUERIES_PER_RUN', 36),
+        perQueryLimit: this.readConcurrency('COLD_TOOL_PER_QUERY_LIMIT', 8),
+        lookbackDays: this.readConcurrency('COLD_TOOL_LOOKBACK_DAYS', 540),
+        forceRefresh: this.readBooleanEnv(
+          'COLD_TOOL_SCHEDULER_FORCE_REFRESH',
+          false,
+        ),
+      },
+      'cold_tool_autofill',
+    );
+
+    this.logger.log(
+      `Cold tool autofill queued next collector because cold deep queue depth=${totalDepth} target=${targetDepth} recentQueued=${result.deepAnalysisQueued ?? 0} nextJobId=${enqueueResult.jobId} nextQueueJobId=${enqueueResult.queueJobId}`,
     );
   }
 
@@ -735,6 +786,10 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         nextJobId: handoff.jobId,
         nextQueueJobId: handoff.queueJobId,
       };
+    }
+
+    if (this.isColdToolCollectorSummaryResult(result)) {
+      await this.maybeAutofillColdToolCollector(result);
     }
 
     return result;
@@ -1484,6 +1539,14 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       typeof record.repositoryCandidates === 'number' &&
       this.isJsonRecord(record.nextDto)
     );
+  }
+
+  private isColdToolCollectorSummaryResult(
+    value: unknown,
+  ): value is {
+    deepAnalysisQueued?: number;
+  } {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   }
 
   private readJsonRecord(value: Prisma.JsonValue | null | undefined) {
