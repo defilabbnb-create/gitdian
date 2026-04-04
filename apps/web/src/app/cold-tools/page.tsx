@@ -37,10 +37,18 @@ export default async function ColdToolsPage({
   let repositories = null;
   let completedTotal = 0;
   let pendingTotal = 0;
+  let skippedTotal = 0;
+  let queuedTotal = 0;
   let errorMessage: string | null = null;
 
   try {
-    const [allRepositories, completedRepositories, pendingRepositories] =
+    const [
+      allRepositories,
+      completedRepositories,
+      pendingRepositories,
+      skippedRepositories,
+      queuedRepositories,
+    ] =
       await Promise.all([
         getRepositories(query, {
           timeoutMs: 20_000,
@@ -67,10 +75,34 @@ export default async function ColdToolsPage({
             timeoutMs: 20_000,
           },
         ),
+        getRepositories(
+          {
+            ...query,
+            page: 1,
+            pageSize: 1,
+            deepAnalysisState: 'skipped',
+          },
+          {
+            timeoutMs: 20_000,
+          },
+        ),
+        getRepositories(
+          {
+            ...query,
+            page: 1,
+            pageSize: 1,
+            deepAnalysisState: 'queued',
+          },
+          {
+            timeoutMs: 20_000,
+          },
+        ),
       ]);
     repositories = allRepositories;
     completedTotal = completedRepositories.pagination.total;
     pendingTotal = pendingRepositories.pagination.total;
+    skippedTotal = skippedRepositories.pagination.total;
+    queuedTotal = queuedRepositories.pagination.total;
   } catch (error) {
     errorMessage = getFriendlyRuntimeError(
       error,
@@ -85,7 +117,7 @@ export default async function ColdToolsPage({
         <ColdToolCollectorPanel />
 
         {repositories ? (
-          <section className="grid gap-4 md:grid-cols-3">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <SummaryCard
               label="冷门工具池规模"
               value={`${repositories.pagination.total.toLocaleString()} 个`}
@@ -112,6 +144,18 @@ export default async function ColdToolsPage({
               value={`${pendingTotal.toLocaleString()} 个`}
               helper="还在补完整分析链，适合继续盯任务和导出未完成清单。"
               href={buildColdToolSectionHref(query, 'pending')}
+            />
+            <SummaryCard
+              label="深度分析已跳过"
+              value={`${skippedTotal.toLocaleString()} 个`}
+              helper="不是失败，而是当前信号偏弱或 snapshot 明确不值得继续深分析。"
+              href={buildColdToolSectionHref(query, 'skipped')}
+            />
+            <SummaryCard
+              label="深度分析排队中"
+              value={`${queuedTotal.toLocaleString()} 个`}
+              helper="已经进入冷门深分析队列，系统会继续自动跑，不需要手工补触发。"
+              href={buildColdToolSectionHref(query, 'queued')}
             />
           </section>
         ) : null}
@@ -170,7 +214,7 @@ function SummaryCard({
 
 function buildColdToolSectionHref(
   query: RepositoryListQueryState,
-  deepAnalysisState: 'completed' | 'pending',
+  deepAnalysisState: 'completed' | 'pending' | 'skipped' | 'queued',
 ) {
   const search = buildRepositoryListSearchParams({
     ...query,

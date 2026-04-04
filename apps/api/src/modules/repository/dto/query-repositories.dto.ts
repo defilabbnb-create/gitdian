@@ -55,6 +55,8 @@ export enum SortOrder {
 export enum RepositoryDeepAnalysisState {
   COMPLETED = 'completed',
   PENDING = 'pending',
+  SKIPPED = 'skipped',
+  QUEUED = 'queued',
 }
 
 function toBoolean(value: unknown) {

@@ -260,7 +260,7 @@ export class RepositoryService {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const skip = (page - 1) * pageSize;
-    const where = this.buildRepositoryWhere(query);
+    const where = await this.buildRepositoryWhere(query);
 
     if (
       query.sortBy === RepositorySortBy.MONEY_PRIORITY &&
@@ -1125,7 +1125,9 @@ export class RepositoryService {
     }
   }
 
-  private buildRepositoryWhere(query: QueryRepositoriesDto): Prisma.RepositoryWhereInput {
+  private async buildRepositoryWhere(
+    query: QueryRepositoriesDto,
+  ): Promise<Prisma.RepositoryWhereInput> {
     const where: Prisma.RepositoryWhereInput = {};
     const andConditions: Prisma.RepositoryWhereInput[] = [];
     const isFavorited = this.toOptionalBoolean(query.isFavorited);
@@ -1404,6 +1406,15 @@ export class RepositoryService {
       andConditions.push({
         NOT: this.buildDeepAnalysisCompletedCondition(),
       });
+    } else if (deepAnalysisState === RepositoryDeepAnalysisState.SKIPPED) {
+      andConditions.push(this.buildDeepAnalysisSkippedCondition());
+    } else if (deepAnalysisState === RepositoryDeepAnalysisState.QUEUED) {
+      const queuedRepositoryIds = await this.findQueuedColdToolRepositoryIds();
+      andConditions.push({
+        id: {
+          in: queuedRepositoryIds.length ? queuedRepositoryIds : ['__never__'],
+        },
+      });
     }
 
     if (typeof query.minStars === 'number' || typeof query.maxStars === 'number') {
@@ -1441,6 +1452,69 @@ export class RepositoryService {
     }
 
     return where;
+  }
+
+  private buildDeepAnalysisSkippedCondition(): Prisma.RepositoryWhereInput {
+    return {
+      AND: [
+        {
+          NOT: this.buildDeepAnalysisCompletedCondition(),
+        },
+        {
+          OR: [
+            {
+              analysis: {
+                is: {
+                  ideaSnapshotJson: {
+                    path: ['isPromising'],
+                    equals: false,
+                  },
+                },
+              },
+            },
+            {
+              analysis: {
+                is: {
+                  ideaSnapshotJson: {
+                    path: ['nextAction'],
+                    equals: 'SKIP',
+                  },
+                },
+              },
+            },
+            {
+              analysis: {
+                is: {
+                  insightJson: {
+                    path: ['oneLinerStrength'],
+                    equals: 'WEAK',
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  private async findQueuedColdToolRepositoryIds() {
+    const rows = (await this.prisma.$queryRawUnsafe(`
+      select distinct payload->>'repositoryId' as "repositoryId"
+      from "JobLog"
+      where "queueName" in ('analysis.single', 'analysis.single.cold')
+        and "jobStatus" in ('PENDING', 'RUNNING')
+        and (
+          "triggeredBy" = 'cold_tool_collector'
+          or "triggeredBy" = 'analysis_single_watchdog'
+          or "payload"->'dto'->>'analysisLane' = 'cold_tool'
+          or coalesce(("payload"->>'fromColdToolCollector')::boolean, false) = true
+        )
+    `)) as Array<{ repositoryId: string | null }>;
+
+    return rows
+      .map((row) => this.cleanOptionalString(row.repositoryId))
+      .filter((value): value is string => Boolean(value));
   }
 
   private buildOrderBy(

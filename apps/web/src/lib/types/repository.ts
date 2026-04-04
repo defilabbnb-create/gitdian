@@ -17,7 +17,11 @@ export type RepositorySortBy =
   | 'createdAtGithub';
 export type SortOrder = 'asc' | 'desc';
 export type RepositoryDisplayMode = 'insight' | 'detail';
-export type RepositoryDeepAnalysisState = 'completed' | 'pending';
+export type RepositoryDeepAnalysisState =
+  | 'completed'
+  | 'pending'
+  | 'skipped'
+  | 'queued';
 export type RepositoryRecommendedView =
   | 'moneyFirst'
   | 'bestIdeas'
@@ -146,7 +150,12 @@ const repositoryRecommendedViewValues = [
   'coldTools',
 ] as const;
 const repositoryDisplayModeValues = ['insight', 'detail'] as const;
-const repositoryDeepAnalysisStateValues = ['completed', 'pending'] as const;
+const repositoryDeepAnalysisStateValues = [
+  'completed',
+  'pending',
+  'skipped',
+  'queued',
+] as const;
 const sortOrderValues = ['asc', 'desc'] as const;
 const favoritePriorityValues = ['LOW', 'MEDIUM', 'HIGH'] as const;
 const favoriteSortByValues = [
