@@ -31,6 +31,7 @@ import { resolveEffectiveOneLinerStrength } from '../analysis/helpers/one-liner-
 import { QueueService } from '../queue/queue.service';
 import {
   QueryRepositoriesDto,
+  RepositoryDeepAnalysisState,
   RepositoryRecommendedAction,
   RepositorySortBy,
   SortOrder,
@@ -52,7 +53,6 @@ type RepositoryDetail = Prisma.RepositoryGetPayload<{
 
 type RepositoryListItem = Prisma.RepositoryGetPayload<{
   include: {
-    content: true;
     analysis: true;
     favorite: true;
   };
@@ -162,6 +162,27 @@ export class RepositoryService {
     }
 
     return undefined;
+  }
+
+  private buildDeepAnalysisCompletedCondition(): Prisma.RepositoryWhereInput {
+    return {
+      analysis: {
+        is: {
+          completenessJson: {
+            not: Prisma.DbNull,
+          },
+          ideaFitJson: {
+            not: Prisma.DbNull,
+          },
+          extractedIdeaJson: {
+            not: Prisma.DbNull,
+          },
+          insightJson: {
+            not: Prisma.DbNull,
+          },
+        },
+      },
+    };
   }
 
   async create(createRepositoryDto: CreateRepositoryDto) {
@@ -293,7 +314,6 @@ export class RepositoryService {
         take: pageSize,
         orderBy,
         include: {
-          content: true,
           analysis: true,
           favorite: true,
         },
@@ -386,7 +406,6 @@ export class RepositoryService {
         },
       },
       include: {
-        content: true,
         analysis: true,
         favorite: true,
       },
@@ -453,7 +472,6 @@ export class RepositoryService {
         },
       },
       include: {
-        content: true,
         analysis: true,
         favorite: true,
       },
@@ -500,7 +518,6 @@ export class RepositoryService {
           updatedAt: 'desc',
         },
         include: {
-          content: true,
           analysis: true,
           favorite: true,
         },
@@ -578,7 +595,6 @@ export class RepositoryService {
         },
       },
       include: {
-        content: true,
         analysis: true,
         favorite: true,
       },
@@ -614,47 +630,62 @@ export class RepositoryService {
   }: {
     where: Prisma.RepositoryWhereInput;
     page: number;
-    pageSize: number;
-    skip: number;
-    query: QueryRepositoriesDto;
+      pageSize: number;
+      skip: number;
+      query: QueryRepositoriesDto;
   }) {
-    const candidates = await this.prisma.repository.findMany({
-      where,
-      select: {
-        id: true,
-        fullName: true,
-        description: true,
-        homepage: true,
-        language: true,
-        topics: true,
-        stars: true,
-        ideaFitScore: true,
-        finalScore: true,
-        toolLikeScore: true,
-        roughPass: true,
-        categoryL1: true,
-        categoryL2: true,
-        createdAtGithub: true,
-        createdAt: true,
-        updatedAt: true,
-        analysis: {
-          select: {
-            insightJson: true,
-            ideaSnapshotJson: true,
-            extractedIdeaJson: true,
-            claudeReviewJson: true,
-            claudeReviewStatus: true,
-            claudeReviewReviewedAt: true,
-            manualVerdict: true,
-            manualAction: true,
-            manualNote: true,
-            manualUpdatedAt: true,
-            completenessJson: true,
-            ideaFitJson: true,
+    let candidates: Array<Record<string, unknown>>;
+    try {
+      candidates = await this.prisma.repository.findMany({
+        where,
+        select: {
+          id: true,
+          fullName: true,
+          description: true,
+          homepage: true,
+          language: true,
+          topics: true,
+          stars: true,
+          ideaFitScore: true,
+          finalScore: true,
+          toolLikeScore: true,
+          roughPass: true,
+          categoryL1: true,
+          categoryL2: true,
+          createdAtGithub: true,
+          createdAt: true,
+          updatedAt: true,
+          analysis: {
+            select: {
+              insightJson: true,
+              ideaSnapshotJson: true,
+              extractedIdeaJson: true,
+              claudeReviewJson: true,
+              claudeReviewStatus: true,
+              claudeReviewReviewedAt: true,
+              manualVerdict: true,
+              manualAction: true,
+              manualNote: true,
+              manualUpdatedAt: true,
+              completenessJson: true,
+              ideaFitJson: true,
+            },
           },
         },
-      },
-    });
+      });
+    } catch (error) {
+      console.warn(
+        '[repository.findAllByDerivedDecision] falling back to windowed derived query:',
+        error instanceof Error ? error.message : String(error),
+      );
+      return this.findAllByDerivedDecisionFallback({
+        where,
+        page,
+        pageSize,
+        skip,
+        query,
+      });
+    }
 
     const auditSnapshot = await this.repositoryDecisionService.getLatestAuditSnapshot();
     const derivedCandidates = this.repositoryDecisionService.attachDerivedAssetsWithAudit(
@@ -689,7 +720,6 @@ export class RepositoryService {
         },
       },
       include: {
-        content: true,
         analysis: true,
         favorite: true,
       },
@@ -714,6 +744,62 @@ export class RepositoryService {
     };
   }
 
+  private async findAllByDerivedDecisionFallback({
+    where,
+    page,
+    pageSize,
+    skip,
+    query,
+  }: {
+    where: Prisma.RepositoryWhereInput;
+    page: number;
+    pageSize: number;
+    skip: number;
+    query: QueryRepositoriesDto;
+  }) {
+    const windowSize = Math.min(Math.max(skip + pageSize * 8, 200), 1000);
+    const auditSnapshot = await this.repositoryDecisionService.getLatestAuditSnapshot();
+    const windowItems = await this.prisma.repository.findMany({
+      where,
+      take: windowSize,
+      orderBy: {
+        updatedAt: 'desc',
+      },
+      include: {
+        analysis: true,
+        favorite: true,
+      },
+    });
+
+    const derivedWindow = this.repositoryDecisionService.attachDerivedAssetsWithAudit(
+      this.serialize(windowItems),
+      auditSnapshot,
+    ) as RepositoryListItem[];
+
+    const filteredCandidates = derivedWindow.filter((candidate) =>
+      this.matchesDerivedDecisionFilters(candidate as unknown as Record<string, unknown>, query),
+    );
+    const orderedItems = filteredCandidates
+      .sort((left, right) =>
+        this.compareDerivedCandidate(
+          left as unknown as Record<string, unknown>,
+          right as unknown as Record<string, unknown>,
+          query,
+        ),
+      )
+      .slice(skip, skip + pageSize);
+
+    return {
+      items: orderedItems,
+      pagination: {
+        page,
+        pageSize,
+        total: filteredCandidates.length,
+        totalPages: Math.ceil(filteredCandidates.length / pageSize) || 1,
+      },
+    };
+  }
+
   async getSummary(): Promise<RepositorySummary> {
     const [
       totalRepositories,
@@ -724,7 +810,9 @@ export class RepositoryService {
       pendingAnalysisRepositories,
       needsIdeaExtractionRepositories,
       highOpportunityUnfavoritedRepositories,
-      analysisRows,
+      completenessAnalysisRows,
+      ideaFitAnalysisRows,
+      extractedIdeaAnalysisRows,
     ] = await this.prisma.$transaction([
       this.prisma.repository.count(),
       this.prisma.repository.count({
@@ -826,24 +914,28 @@ export class RepositoryService {
           ],
         },
       }),
-      this.prisma.repositoryAnalysis.findMany({
-        select: {
-          completenessJson: true,
-          ideaFitJson: true,
-          extractedIdeaJson: true,
+      this.prisma.repositoryAnalysis.count({
+        where: {
+          completenessJson: {
+            not: Prisma.DbNull,
+          },
+        },
+      }),
+      this.prisma.repositoryAnalysis.count({
+        where: {
+          ideaFitJson: {
+            not: Prisma.DbNull,
+          },
+        },
+      }),
+      this.prisma.repositoryAnalysis.count({
+        where: {
+          extractedIdeaJson: {
+            not: Prisma.DbNull,
+          },
         },
       }),
     ]);
-
-    const completenessFromAnalysis = analysisRows.filter(
-      (row) => row.completenessJson !== null,
-    ).length;
-    const ideaFitFromAnalysis = analysisRows.filter(
-      (row) => row.ideaFitJson !== null,
-    ).length;
-    const extractedIdeaRepositories = analysisRows.filter(
-      (row) => row.extractedIdeaJson !== null,
-    ).length;
 
     return {
       totalRepositories,
@@ -851,13 +943,13 @@ export class RepositoryService {
       highOpportunityRepositories,
       completenessAnalyzedRepositories: Math.max(
         completenessAnalyzedRepositories,
-        completenessFromAnalysis,
+        completenessAnalysisRows,
       ),
       ideaFitAnalyzedRepositories: Math.max(
         ideaFitAnalyzedRepositories,
-        ideaFitFromAnalysis,
+        ideaFitAnalysisRows,
       ),
-      extractedIdeaRepositories,
+      extractedIdeaRepositories: extractedIdeaAnalysisRows,
       pendingAnalysisRepositories,
       needsIdeaExtractionRepositories,
       highOpportunityUnfavoritedRepositories,
@@ -1047,6 +1139,8 @@ export class RepositoryService {
       query.hasPromisingIdeaSnapshot,
     );
     const hasManualInsight = this.toOptionalBoolean(query.hasManualInsight);
+    const hasColdToolFit = this.toOptionalBoolean(query.hasColdToolFit);
+    const deepAnalysisState = query.deepAnalysisState;
 
     if (query.keyword) {
       where.OR = [
@@ -1276,6 +1370,40 @@ export class RepositoryService {
           ],
         });
       }
+    }
+
+    if (typeof hasColdToolFit === 'boolean') {
+      if (hasColdToolFit) {
+        andConditions.push({
+          analysis: {
+            is: {
+              tags: {
+                has: 'cold_tool_pool',
+              },
+            },
+          },
+        });
+      } else {
+        andConditions.push({
+          NOT: {
+            analysis: {
+              is: {
+                tags: {
+                  has: 'cold_tool_pool',
+                },
+              },
+            },
+          },
+        });
+      }
+    }
+
+    if (deepAnalysisState === RepositoryDeepAnalysisState.COMPLETED) {
+      andConditions.push(this.buildDeepAnalysisCompletedCondition());
+    } else if (deepAnalysisState === RepositoryDeepAnalysisState.PENDING) {
+      andConditions.push({
+        NOT: this.buildDeepAnalysisCompletedCondition(),
+      });
     }
 
     if (typeof query.minStars === 'number' || typeof query.maxStars === 'number') {
@@ -2054,10 +2182,16 @@ export class RepositoryService {
     analysis: Record<string, unknown>,
     repository?: Record<string, unknown>,
   ) {
+    const analysisJson = this.readJsonObject(
+      analysis.analysisJson as Prisma.JsonValue | undefined,
+    );
     const normalized: Record<string, unknown> = {
       ...analysis,
       manualOverride: this.normalizeManualOverride(analysis),
       claudeReview: this.normalizeClaudeReview(analysis),
+      coldToolPool: analysisJson
+        ? this.readJsonObject(analysisJson.coldToolPool as Prisma.JsonValue | undefined)
+        : null,
     };
 
     if (repository) {
@@ -2094,6 +2228,7 @@ export class RepositoryService {
     delete normalized.manualAction;
     delete normalized.manualNote;
     delete normalized.manualUpdatedAt;
+    delete normalized.analysisJson;
 
     return normalized;
   }

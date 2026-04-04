@@ -52,6 +52,11 @@ export enum SortOrder {
   DESC = 'desc',
 }
 
+export enum RepositoryDeepAnalysisState {
+  COMPLETED = 'completed',
+  PENDING = 'pending',
+}
+
 function toBoolean(value: unknown) {
   if (value === undefined || value === null || value === '') {
     return undefined;
@@ -153,6 +158,15 @@ export class QueryRepositoriesDto {
   @Transform(booleanQueryTransform)
   @IsBoolean()
   hasManualInsight?: boolean;
+
+  @IsOptional()
+  @Transform(booleanQueryTransform)
+  @IsBoolean()
+  hasColdToolFit?: boolean;
+
+  @IsOptional()
+  @IsEnum(RepositoryDeepAnalysisState)
+  deepAnalysisState?: RepositoryDeepAnalysisState;
 
   @IsOptional()
   @IsEnum(RepositoryRecommendedAction)

@@ -3,7 +3,7 @@ import {
   Injectable,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { JobStatus } from '@prisma/client';
+import { JobStatus, Prisma } from '@prisma/client';
 import { JobsOptions, Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { BatchRunAnalysisDto } from '../analysis/dto/batch-run-analysis.dto';
@@ -21,6 +21,7 @@ import { BehaviorMemoryService } from '../behavior-memory/behavior-memory.servic
 import { BatchFastFilterDto } from '../fast-filter/dto/batch-fast-filter.dto';
 import { BackfillCreatedRepositoriesDto } from '../github/dto/backfill-created-repositories.dto';
 import { FetchRepositoriesDto } from '../github/dto/fetch-repositories.dto';
+import { RunColdToolCollectorDto } from '../github/dto/run-cold-tool-collector.dto';
 import { GitHubIdeaSnapshotJobPayload } from '../github/types/github.types';
 import { JobLogService } from '../job-log/job-log.service';
 import { AdaptiveSchedulerService } from '../scheduler/adaptive-scheduler.service';
@@ -75,6 +76,14 @@ type EnqueueResult = {
   jobStatus: JobStatus;
 };
 
+type ActiveSingleAnalysisJobLog = {
+  id: string;
+  queueName: string | null;
+  queueJobId: string | null;
+  jobStatus: JobStatus;
+  payload: Prisma.JsonValue | null;
+};
+
 type QueueJobPayload = Record<string, unknown>;
 
 type IdeaSnapshotBulkEntry = {
@@ -108,6 +117,19 @@ export type QueueJobRuntimeSnapshot = {
   processedOn: number | null;
   finishedOn: number | null;
   timestamp: number;
+};
+
+export type ActiveQueueJobLogSnapshot = {
+  id: string;
+  queueName: string | null;
+  queueJobId: string | null;
+  jobStatus: JobStatus;
+  progress: number;
+  payload: Prisma.JsonValue | null;
+  result: Prisma.JsonValue | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  updatedAt: Date;
 };
 
 @Injectable()
@@ -157,6 +179,31 @@ export class QueueService implements OnModuleDestroy {
     });
   }
 
+  async enqueueGitHubColdToolCollect(
+    dto: RunColdToolCollectorDto,
+    triggeredBy = 'ui',
+  ): Promise<EnqueueResult> {
+    this.assertGitHubIntakeEnabled({
+      source: 'github_cold_tool_collect',
+    });
+    await this.assertAnalysisPoolIntakeAllowed({
+      source: 'github_fetch',
+    });
+    const existingActiveJob = await this.findActiveQueueJobLog({
+      queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+      jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
+    });
+    if (existingActiveJob) {
+      return this.toExistingEnqueueResult(existingActiveJob);
+    }
+    return this.enqueueJob({
+      queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+      jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
+      payload: { dto },
+      triggeredBy,
+    });
+  }
+
   async enqueueSingleAnalysis(
     repositoryId: string,
     dto: RunAnalysisDto,
@@ -171,6 +218,12 @@ export class QueueService implements OnModuleDestroy {
       source: 'analysis_single',
       repositoryIds: [repositoryId],
     });
+    const existingActiveJob = await this.findActiveSingleAnalysisJobLog(
+      repositoryId,
+    );
+    if (existingActiveJob) {
+      return this.toExistingEnqueueResult(existingActiveJob);
+    }
     const skipPriorityLookup = this.shouldSkipAnalysisPriorityLookup(
       options.jobOptionsOverride,
     );
@@ -213,11 +266,45 @@ export class QueueService implements OnModuleDestroy {
       repositoryIds: entries.map((entry) => entry.repositoryId),
     });
 
+    const existingActiveJobsByRepositoryId =
+      await this.findActiveSingleAnalysisJobLogs(
+        entries.map((entry) => entry.repositoryId),
+      );
+    const seenRepositoryIds = new Set<string>();
+    const dedupedEntries: SingleAnalysisBulkEntry[] = [];
+    const existingResultsByRepositoryId = new Map<string, EnqueueResult>();
+
+    for (const entry of entries) {
+      const existingActiveJob = existingActiveJobsByRepositoryId.get(
+        entry.repositoryId,
+      );
+      if (existingActiveJob) {
+        existingResultsByRepositoryId.set(
+          entry.repositoryId,
+          this.toExistingEnqueueResult(existingActiveJob),
+        );
+        continue;
+      }
+
+      if (seenRepositoryIds.has(entry.repositoryId)) {
+        continue;
+      }
+
+      seenRepositoryIds.add(entry.repositoryId);
+      dedupedEntries.push(entry);
+    }
+
+    if (!dedupedEntries.length) {
+      return entries
+        .map((entry) => existingResultsByRepositoryId.get(entry.repositoryId))
+        .filter(Boolean) as EnqueueResult[];
+    }
+
     const queueName = QUEUE_NAMES.ANALYSIS_SINGLE;
     const jobName = QUEUE_JOB_TYPES.ANALYSIS_SINGLE;
     const queue = this.getQueue(queueName);
     const normalizedEntries = await Promise.all(
-      entries.map(async (entry) => {
+      dedupedEntries.map(async (entry) => {
         const skipPriorityLookup = this.shouldSkipAnalysisPriorityLookup(
           entry.jobOptionsOverride,
         );
@@ -300,12 +387,32 @@ export class QueueService implements OnModuleDestroy {
       );
     }
 
-    return jobs.map((job, index) => ({
+    const newResults = jobs.map((job, index) => ({
       jobId: jobLogs[index].id,
       queueName,
       queueJobId: String(job.id),
       jobStatus: JobStatus.PENDING,
     }));
+
+    const newResultsByRepositoryId = new Map(
+      dedupedEntries.map((entry, index) => [entry.repositoryId, newResults[index]]),
+    );
+
+    return entries.map((entry) => {
+      const existing = existingResultsByRepositoryId.get(entry.repositoryId);
+      if (existing) {
+        return existing;
+      }
+
+      const created = newResultsByRepositoryId.get(entry.repositoryId);
+      if (!created) {
+        throw new BadRequestException(
+          `Missing queued result for repository ${entry.repositoryId}.`,
+        );
+      }
+
+      return created;
+    });
   }
 
   async enqueueIdeaSnapshot(
@@ -607,6 +714,78 @@ export class QueueService implements OnModuleDestroy {
     );
   }
 
+  async getLatestActiveQueueJobLog(args: {
+    queueName: QueueName;
+    jobName: string;
+  }): Promise<ActiveQueueJobLogSnapshot | null> {
+    if (!this.prisma?.jobLog) {
+      return null;
+    }
+
+    return (await this.prisma.jobLog.findFirst({
+      where: {
+        queueName: args.queueName,
+        jobName: args.jobName,
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      select: {
+        id: true,
+        queueName: true,
+        queueJobId: true,
+        jobStatus: true,
+        progress: true,
+        payload: true,
+        result: true,
+        createdAt: true,
+        startedAt: true,
+        updatedAt: true,
+      },
+    })) as ActiveQueueJobLogSnapshot | null;
+  }
+
+  async tryRemoveQueueJob(
+    queueName: QueueName,
+    queueJobId: string,
+  ): Promise<{
+    found: boolean;
+    removed: boolean;
+    state: string | null;
+  }> {
+    const queue = this.getQueue(queueName);
+    const job = await queue.getJob(queueJobId);
+
+    if (!job) {
+      return {
+        found: false,
+        removed: false,
+        state: null,
+      };
+    }
+
+    const state = await job.getState();
+
+    if (!['waiting', 'delayed', 'prioritized'].includes(state)) {
+      return {
+        found: true,
+        removed: false,
+        state,
+      };
+    }
+
+    await job.remove();
+
+    return {
+      found: true,
+      removed: true,
+      state,
+    };
+  }
+
   async onModuleDestroy() {
     for (const queue of this.queues.values()) {
       await queue.close();
@@ -647,14 +826,27 @@ export class QueueService implements OnModuleDestroy {
       startedAt: null,
     });
 
-    const job = await queue.add(
-      jobName,
-      {
-        ...payload,
-        jobLogId: jobLog.id,
-      },
-      options,
-    );
+    let job;
+    try {
+      job = await queue.add(
+        jobName,
+        {
+          ...payload,
+          jobLogId: jobLog.id,
+        },
+        options,
+      );
+    } catch (error) {
+      await this.jobLogService.cancelJob({
+        jobId: jobLog.id,
+        errorMessage: 'Task cancelled because queue add failed.',
+        result: {
+          queueAddFailed: true,
+          queueName,
+        },
+      });
+      throw error;
+    }
 
     const queueJobId = String(job.id);
     await this.jobLogService.attachQueueJob({
@@ -705,6 +897,122 @@ export class QueueService implements OnModuleDestroy {
           removeOnFail: false,
         };
     }
+  }
+
+  private async findActiveSingleAnalysisJobLog(repositoryId: string) {
+    if (!this.prisma?.jobLog) {
+      return null;
+    }
+
+    return (await this.prisma.jobLog.findFirst({
+      where: {
+        queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+        payload: {
+          path: ['repositoryId'],
+          equals: repositoryId,
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      select: {
+        id: true,
+        queueName: true,
+        queueJobId: true,
+        jobStatus: true,
+        payload: true,
+      },
+    })) as ActiveSingleAnalysisJobLog | null;
+  }
+
+  private async findActiveSingleAnalysisJobLogs(repositoryIds: string[]) {
+    const results = new Map<string, ActiveSingleAnalysisJobLog>();
+    if (!this.prisma?.jobLog) {
+      return results;
+    }
+
+    const uniqueRepositoryIds = [...new Set(repositoryIds.filter(Boolean))];
+    if (!uniqueRepositoryIds.length) {
+      return results;
+    }
+
+    const rows = (await this.prisma.jobLog.findMany({
+      where: {
+        queueName: QUEUE_NAMES.ANALYSIS_SINGLE,
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+        OR: uniqueRepositoryIds.map((repositoryId) => ({
+          payload: {
+            path: ['repositoryId'],
+            equals: repositoryId,
+          },
+        })),
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      select: {
+        id: true,
+        queueName: true,
+        queueJobId: true,
+        jobStatus: true,
+        payload: true,
+      },
+    })) as ActiveSingleAnalysisJobLog[];
+
+    for (const row of rows) {
+      const payload = this.ensurePayload(row.payload);
+      const repositoryId = String(payload.repositoryId ?? '').trim();
+      if (!repositoryId || results.has(repositoryId)) {
+        continue;
+      }
+      results.set(repositoryId, row);
+    }
+
+    return results;
+  }
+
+  private async findActiveQueueJobLog(args: {
+    queueName: QueueName;
+    jobName: string;
+  }) {
+    if (!this.prisma?.jobLog) {
+      return null;
+    }
+
+    return (await this.prisma.jobLog.findFirst({
+      where: {
+        queueName: args.queueName,
+        jobName: args.jobName,
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      select: {
+        id: true,
+        queueName: true,
+        queueJobId: true,
+        jobStatus: true,
+        payload: true,
+      },
+    })) as ActiveSingleAnalysisJobLog | null;
+  }
+
+  private toExistingEnqueueResult(jobLog: ActiveSingleAnalysisJobLog): EnqueueResult {
+    return {
+      jobId: jobLog.id,
+      queueName:
+        (jobLog.queueName as QueueName | null) ?? QUEUE_NAMES.ANALYSIS_SINGLE,
+      queueJobId: jobLog.queueJobId ?? jobLog.id,
+      jobStatus: jobLog.jobStatus,
+    };
   }
 
   private normalizeIdeaSnapshotBulkEntry(
@@ -870,7 +1178,10 @@ export class QueueService implements OnModuleDestroy {
   }
 
   private assertGitHubIntakeEnabled(args: {
-    source: 'github_fetch' | 'github_created_backfill';
+    source:
+      | 'github_fetch'
+      | 'github_created_backfill'
+      | 'github_cold_tool_collect';
   }) {
     if (this.readGitHubNewRepositoryIntakeEnabled()) {
       return;

@@ -17,6 +17,7 @@ export type RepositorySortBy =
   | 'createdAtGithub';
 export type SortOrder = 'asc' | 'desc';
 export type RepositoryDisplayMode = 'insight' | 'detail';
+export type RepositoryDeepAnalysisState = 'completed' | 'pending';
 export type RepositoryRecommendedView =
   | 'moneyFirst'
   | 'bestIdeas'
@@ -28,7 +29,8 @@ export type RepositoryRecommendedView =
   | 'pendingAnalysis'
   | 'favoritedPendingAnalysis'
   | 'newRadar'
-  | 'backfilledPromising';
+  | 'backfilledPromising'
+  | 'coldTools';
 export type FavoritePriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type FavoriteSortBy = 'createdAt' | 'updatedAt' | 'finalScore' | 'stars';
 export type JobStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
@@ -141,8 +143,10 @@ const repositoryRecommendedViewValues = [
   'favoritedPendingAnalysis',
   'newRadar',
   'backfilledPromising',
+  'coldTools',
 ] as const;
 const repositoryDisplayModeValues = ['insight', 'detail'] as const;
+const repositoryDeepAnalysisStateValues = ['completed', 'pending'] as const;
 const sortOrderValues = ['asc', 'desc'] as const;
 const favoritePriorityValues = ['LOW', 'MEDIUM', 'HIGH'] as const;
 const favoriteSortByValues = [
@@ -596,6 +600,7 @@ export interface RadarRuntimeStatusRecord {
 
 export interface RepositoryAnalysisRecord {
   id: string;
+  coldToolPool?: RepositoryColdToolPoolRecord | null;
   ideaSnapshotJson?: RepositoryIdeaSnapshot | null;
   insightJson?: RepositoryInsightRecord | null;
   manualOverride?: RepositoryManualOverrideRecord | null;
@@ -622,6 +627,58 @@ export interface RepositoryAnalysisRecord {
   promptVersion?: string | null;
   fallbackUsed?: boolean;
   moneyPriority?: RepositoryMoneyPriorityRecord | null;
+}
+
+export interface RepositoryColdToolPoolRecord {
+  version: string;
+  evaluatedAt: string;
+  isRealUserTool: boolean;
+  targetUsersZh: string;
+  useCaseZh: string;
+  usageFrequency: 'HIGH' | 'MEDIUM' | 'LOW';
+  usageFrequencyLabelZh: string;
+  workflowCriticality: 'HIGH' | 'MEDIUM' | 'LOW';
+  workflowCriticalityLabelZh: string;
+  globalActiveUsersBand:
+    | 'LT_10K'
+    | 'ACTIVE_10K_50K'
+    | 'ACTIVE_50K_100K'
+    | 'ACTIVE_100K_500K'
+    | 'ACTIVE_500K_1M'
+    | 'ACTIVE_1M_PLUS'
+    | 'UNKNOWN';
+  globalActiveUsersBandZh: string;
+  globalPotentialUsersBand:
+    | 'LT_10K'
+    | 'ACTIVE_10K_50K'
+    | 'ACTIVE_50K_100K'
+    | 'ACTIVE_100K_500K'
+    | 'ACTIVE_500K_1M'
+    | 'ACTIVE_1M_PLUS'
+    | 'UNKNOWN';
+  globalPotentialUsersBandZh: string;
+  fitsColdToolPool: boolean;
+  hasPayingIntent: boolean;
+  buyerTypeZh: string;
+  willingnessToPay: 'HIGH' | 'MEDIUM' | 'LOW';
+  willingnessToPayLabelZh: string;
+  summaryZh: string;
+  whyUseZh: string;
+  whyPayZh: string;
+  whyNotPayZh: string;
+  confidence: number;
+  originCount: number;
+  origins: Array<{
+    collector: string;
+    domain: string;
+    keyword: string;
+    locale: string;
+    codeLanguage?: string | null;
+    collectedAt: string;
+  }>;
+  provider?: string | null;
+  model?: string | null;
+  promptVersion?: string | null;
 }
 
 export interface RepositoryContentRecord {
@@ -775,6 +832,13 @@ export interface FetchRepositoriesResponse {
   items: FetchRepositoriesItemResult[];
 }
 
+export interface RunColdToolCollectorRequest {
+  queriesPerRun?: number;
+  perQueryLimit?: number;
+  lookbackDays?: number;
+  forceRefresh?: boolean;
+}
+
 export interface BackfillCreatedRepositoriesRequest {
   days?: number;
   perWindowLimit?: number;
@@ -815,6 +879,7 @@ export interface RunAnalysisRequest {
   runIdeaFit?: boolean;
   runIdeaExtract?: boolean;
   forceRerun?: boolean;
+  useDeepBundle?: boolean;
   userSuccessPatterns?: string[];
   userFailurePatterns?: string[];
   preferredCategories?: string[];
@@ -950,6 +1015,8 @@ export interface RepositoryListQueryState {
   hasPromisingIdeaSnapshot?: boolean;
   hasGoodInsight?: boolean;
   hasManualInsight?: boolean;
+  hasColdToolFit?: boolean;
+  deepAnalysisState?: RepositoryDeepAnalysisState;
   finalVerdict?: RepositoryInsightVerdict;
   finalCategory?: string;
   moneyPriority?: RepositoryFounderPriority;
@@ -1070,6 +1137,7 @@ export function normalizeRepositoryListQuery(
   const finalVerdictRaw = toSingle(searchParams.finalVerdict);
   const moneyPriorityRaw = toSingle(searchParams.moneyPriority);
   const decisionSourceRaw = toSingle(searchParams.decisionSource);
+  const deepAnalysisStateRaw = toSingle(searchParams.deepAnalysisState);
   const view = repositoryRecommendedViewValues.includes(
     ((viewRaw === 'goodIdeas' ? 'bestIdeas' : viewRaw) as RepositoryRecommendedView),
   )
@@ -1099,6 +1167,11 @@ export function normalizeRepositoryListQuery(
   )
     ? (decisionSourceRaw as RepositoryDecisionSource)
     : undefined;
+  const deepAnalysisState = repositoryDeepAnalysisStateValues.includes(
+    deepAnalysisStateRaw as RepositoryDeepAnalysisState,
+  )
+    ? (deepAnalysisStateRaw as RepositoryDeepAnalysisState)
+    : undefined;
   const minStars = toPositiveNumber(searchParams.minStars);
   const minFinalScore = toPositiveNumber(searchParams.minFinalScore);
   const sortByRaw = toSingle(searchParams.sortBy);
@@ -1126,6 +1199,8 @@ export function normalizeRepositoryListQuery(
     hasPromisingIdeaSnapshot: toBoolean(searchParams.hasPromisingIdeaSnapshot),
     hasGoodInsight: toBoolean(searchParams.hasGoodInsight),
     hasManualInsight: toBoolean(searchParams.hasManualInsight),
+    hasColdToolFit: toBoolean(searchParams.hasColdToolFit),
+    deepAnalysisState,
     finalVerdict,
     finalCategory: toSingle(searchParams.finalCategory)?.trim() || undefined,
     moneyPriority,
@@ -1233,6 +1308,14 @@ export function buildRepositoryListSearchParams(
 
   if (typeof query.hasManualInsight === 'boolean') {
     params.set('hasManualInsight', String(query.hasManualInsight));
+  }
+
+  if (typeof query.hasColdToolFit === 'boolean') {
+    params.set('hasColdToolFit', String(query.hasColdToolFit));
+  }
+
+  if (query.deepAnalysisState) {
+    params.set('deepAnalysisState', query.deepAnalysisState);
   }
 
   if (query.finalVerdict) {
@@ -1361,6 +1444,13 @@ function getRepositoryViewPreset(
         view,
         createdAfterDays: 365,
         hasPromisingIdeaSnapshot: true,
+        sortBy: 'createdAtGithub',
+        order: 'desc',
+      };
+    case 'coldTools':
+      return {
+        view,
+        hasColdToolFit: true,
         sortBy: 'createdAtGithub',
         order: 'desc',
       };

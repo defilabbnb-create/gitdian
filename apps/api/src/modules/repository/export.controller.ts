@@ -1,5 +1,6 @@
 import { Controller, Get, Header, Query } from '@nestjs/common';
 import { ExportService } from './export.service';
+import { RepositoryDeepAnalysisState } from './dto/query-repositories.dto';
 
 @Controller('export')
 export class ExportController {
@@ -25,5 +26,19 @@ export class ExportController {
   @Get('audit-report')
   async exportAuditReport() {
     return this.exportService.exportAuditReport();
+  }
+
+  @Get('project-brief.csv')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportProjectBriefCsv() {
+    return this.exportService.exportProjectBriefCsv();
+  }
+
+  @Get('cold-tools.csv')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportColdToolsCsv(
+    @Query('deepAnalysisState') deepAnalysisState?: RepositoryDeepAnalysisState,
+  ) {
+    return this.exportService.exportColdToolsCsv(deepAnalysisState);
   }
 }
