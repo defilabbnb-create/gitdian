@@ -2270,16 +2270,25 @@ export class RepositoryService {
       (strength === 'STRONG' ? 'full' : strength === 'WEAK' ? 'skip' : 'light');
     const snapshotPromising = snapshot?.isPromising === true;
     const snapshotNextAction = this.cleanOptionalString(snapshot?.nextAction);
-    const hasDeepArtifacts = Boolean(extractedIdea || ideaFit || completeness);
-    const deepAnalysisStatus = hasDeepArtifacts
+    const hasAnyDeepArtifacts = Boolean(
+      extractedIdea || ideaFit || completeness || insight,
+    );
+    const hasFullDeepArtifacts = Boolean(
+      extractedIdea && ideaFit && completeness && insight,
+    );
+    const deepAnalysisStatus = hasFullDeepArtifacts
       ? 'COMPLETED'
-      : strength === 'WEAK'
+      : hasAnyDeepArtifacts
+        ? 'PENDING'
+        : strength === 'WEAK'
         ? 'SKIPPED_BY_STRENGTH'
         : snapshotPromising === false || snapshotNextAction === 'SKIP'
           ? 'SKIPPED_BY_GATE'
           : 'NOT_STARTED';
     const deepAnalysisStatusReason =
-      deepAnalysisStatus === 'SKIPPED_BY_STRENGTH'
+      deepAnalysisStatus === 'PENDING'
+        ? 'partial_deep_artifacts'
+        : deepAnalysisStatus === 'SKIPPED_BY_STRENGTH'
         ? 'strength_weak'
         : deepAnalysisStatus === 'SKIPPED_BY_GATE'
           ? snapshotPromising === false
