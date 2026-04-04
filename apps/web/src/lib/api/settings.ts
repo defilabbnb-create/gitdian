@@ -94,6 +94,53 @@ export async function getAiHealth(options: { timeoutMs?: number } = {}) {
   return parseResponse<AiHealthPayload>(response);
 }
 
+export type ColdRuntimePayload = {
+  generatedAt: string;
+  runtime: {
+    gitSha: string;
+    environment: string;
+    bootedAt: string;
+    worktreeDirty: boolean;
+  };
+  collector: {
+    currentJobId: string | null;
+    currentStatus: string | null;
+    currentProgress: number | null;
+    currentStage: string | null;
+    lastHeartbeatAt: string | null;
+    lastSuccessJobId: string | null;
+    lastSuccessAt: string | null;
+    lastFailureJobId: string | null;
+    lastFailureAt: string | null;
+    lastFailureReason: string | null;
+    heartbeatAgeSeconds: number | null;
+    heartbeatState: 'healthy' | 'stale' | 'idle' | 'missing';
+  };
+  coldDeepQueue: {
+    active: number;
+    queued: number;
+    newestQueuedAt: string | null;
+    latestCompletedAt: string | null;
+    latestCompletedJobId: string | null;
+    newestQueuedAgeSeconds: number | null;
+    queueState: 'healthy' | 'stalled' | 'idle';
+  };
+  warnings: string[];
+};
+
+export async function getColdRuntime(options: { timeoutMs?: number } = {}) {
+  const response = await fetch(`${getApiBaseUrl()}/api/system/cold-runtime`, {
+    method: 'GET',
+    cache: 'no-store',
+    signal: buildTimeoutSignal(options.timeoutMs),
+    headers: withInternalApiKey({
+      Accept: 'application/json',
+    }),
+  });
+
+  return parseResponse<ColdRuntimePayload>(response);
+}
+
 export async function getBehaviorMemory(options: { timeoutMs?: number } = {}) {
   const response = await fetch(`${getApiBaseUrl()}/api/settings/behavior-memory`, {
     method: 'GET',

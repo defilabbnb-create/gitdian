@@ -24,4 +24,13 @@ export class SystemController {
       message: 'System version fetched.',
     };
   }
+
+  @Get('cold-runtime')
+  async getColdRuntime() {
+    return {
+      success: true,
+      data: await this.systemService.getColdRuntime(),
+      message: 'Cold runtime fetched.',
+    };
+  }
 }

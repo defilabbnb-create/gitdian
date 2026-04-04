@@ -3,6 +3,8 @@ import { execSync } from 'node:child_process';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { GitHubRadarService } from '../github/github-radar.service';
+import { QueueService } from '../queue/queue.service';
+import { QUEUE_NAMES } from '../queue/queue.constants';
 
 const SYSTEM_WARNINGS_CONFIG_KEY = 'system.warnings.latest';
 
@@ -92,11 +94,41 @@ export type SystemVersionPayload = {
   };
 };
 
+export type SystemColdRuntimePayload = {
+  generatedAt: string;
+  runtime: SystemVersionPayload['runtime'];
+  collector: {
+    currentJobId: string | null;
+    currentStatus: string | null;
+    currentProgress: number | null;
+    currentStage: string | null;
+    lastHeartbeatAt: string | null;
+    lastSuccessJobId: string | null;
+    lastSuccessAt: string | null;
+    lastFailureJobId: string | null;
+    lastFailureAt: string | null;
+    lastFailureReason: string | null;
+    heartbeatAgeSeconds: number | null;
+    heartbeatState: 'healthy' | 'stale' | 'idle' | 'missing';
+  };
+  coldDeepQueue: {
+    active: number;
+    queued: number;
+    newestQueuedAt: string | null;
+    latestCompletedAt: string | null;
+    latestCompletedJobId: string | null;
+    newestQueuedAgeSeconds: number | null;
+    queueState: 'healthy' | 'stalled' | 'idle';
+  };
+  warnings: string[];
+};
+
 @Injectable()
 export class SystemService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly gitHubRadarService: GitHubRadarService,
+    private readonly queueService: QueueService,
   ) {}
 
   async getWarnings(): Promise<SystemWarningsPayload> {
@@ -183,9 +215,244 @@ export class SystemService {
     };
   }
 
+  async getColdRuntime(): Promise<SystemColdRuntimePayload> {
+    const [collectorJobs, coldDeepQueueDepth, latestQueuedColdDeep, latestCompletedColdDeep] =
+      await Promise.all([
+        this.prisma.jobLog.findMany({
+          where: {
+            jobName: 'github.collect_cold_tools',
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 6,
+          select: {
+            id: true,
+            jobStatus: true,
+            progress: true,
+            updatedAt: true,
+            finishedAt: true,
+            errorMessage: true,
+            result: true,
+          },
+        }),
+        this.queueService.getQueueDepth(QUEUE_NAMES.ANALYSIS_SINGLE_COLD),
+        this.prisma.jobLog.findFirst({
+          where: {
+            queueName: QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+            jobStatus: {
+              in: ['PENDING', 'RUNNING'],
+            },
+          },
+          orderBy: {
+            updatedAt: 'desc',
+          },
+          select: {
+            id: true,
+            updatedAt: true,
+          },
+        }),
+        this.prisma.jobLog.findFirst({
+          where: {
+            queueName: QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+            jobStatus: 'SUCCESS',
+          },
+          orderBy: {
+            finishedAt: 'desc',
+          },
+          select: {
+            id: true,
+            finishedAt: true,
+          },
+        }),
+      ]);
+
+    const currentCollector =
+      collectorJobs.find((job) => job.jobStatus === 'RUNNING') ??
+      collectorJobs.find((job) => job.jobStatus === 'PENDING') ??
+      null;
+    const lastSuccessCollector =
+      collectorJobs.find((job) => job.jobStatus === 'SUCCESS') ?? null;
+    const lastFailedCollector =
+      collectorJobs.find((job) => job.jobStatus === 'FAILED') ?? null;
+    const runtime =
+      currentCollector?.result &&
+      typeof currentCollector.result === 'object' &&
+      !Array.isArray(currentCollector.result) &&
+      currentCollector.result.runtime &&
+      typeof currentCollector.result.runtime === 'object' &&
+      !Array.isArray(currentCollector.result.runtime)
+        ? (currentCollector.result.runtime as Record<string, unknown>)
+        : null;
+    const heartbeatAt =
+      typeof runtime?.runtimeUpdatedAt === 'string'
+        ? runtime.runtimeUpdatedAt
+        : currentCollector?.updatedAt?.toISOString() ?? null;
+    const heartbeatAgeSeconds = this.toAgeSeconds(heartbeatAt);
+    const heartbeatState = this.resolveCollectorHeartbeatState({
+      jobStatus: currentCollector?.jobStatus ?? null,
+      heartbeatAgeSeconds,
+    });
+    const newestQueuedAt = latestQueuedColdDeep?.updatedAt?.toISOString() ?? null;
+    const newestQueuedAgeSeconds = this.toAgeSeconds(newestQueuedAt);
+    const queuedCount =
+      coldDeepQueueDepth.waiting +
+      coldDeepQueueDepth.delayed +
+      coldDeepQueueDepth.prioritized;
+    const coldDeepQueueState = this.resolveColdDeepQueueState({
+      active: coldDeepQueueDepth.active,
+      queued: queuedCount,
+      newestQueuedAgeSeconds,
+    });
+    const warnings: string[] = [];
+
+    if (heartbeatState === 'stale') {
+      warnings.push(
+        `冷门采集心跳已超过 ${heartbeatAgeSeconds ?? '?'} 秒未更新，watchdog 应该接手恢复。`,
+      );
+    } else if (heartbeatState === 'missing') {
+      warnings.push('冷门采集正在运行，但还没有写入有效运行心跳。');
+    }
+
+    if (coldDeepQueueState === 'stalled') {
+      warnings.push(
+        `冷门深分析队列堆积 ${queuedCount} 个，最近排队项已等待 ${newestQueuedAgeSeconds ?? '?'} 秒。`,
+      );
+    }
+
+    if (lastFailedCollector?.errorMessage) {
+      warnings.push(`最近一次冷门采集失败：${lastFailedCollector.errorMessage}`);
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      runtime: this.getVersion().runtime,
+      collector: {
+        currentJobId: currentCollector?.id ?? null,
+        currentStatus: currentCollector?.jobStatus ?? null,
+        currentProgress:
+          typeof currentCollector?.progress === 'number'
+            ? currentCollector.progress
+            : null,
+        currentStage:
+          typeof runtime?.currentStage === 'string' ? runtime.currentStage : null,
+        lastHeartbeatAt:
+          heartbeatAt,
+        lastSuccessJobId: lastSuccessCollector?.id ?? null,
+        lastSuccessAt: lastSuccessCollector?.finishedAt?.toISOString() ?? null,
+        lastFailureJobId: lastFailedCollector?.id ?? null,
+        lastFailureAt: lastFailedCollector?.updatedAt?.toISOString() ?? null,
+        lastFailureReason: lastFailedCollector?.errorMessage ?? null,
+        heartbeatAgeSeconds,
+        heartbeatState,
+      },
+      coldDeepQueue: {
+        active: coldDeepQueueDepth.active,
+        queued: queuedCount,
+        newestQueuedAt,
+        latestCompletedAt: latestCompletedColdDeep?.finishedAt?.toISOString() ?? null,
+        latestCompletedJobId: latestCompletedColdDeep?.id ?? null,
+        newestQueuedAgeSeconds,
+        queueState: coldDeepQueueState,
+      },
+      warnings,
+    };
+  }
+
   private readBuildValue(value: string | undefined, fallback: string) {
     const normalized = value?.trim();
     return normalized && normalized.length > 0 ? normalized : fallback;
+  }
+
+  private toAgeSeconds(value: string | null) {
+    if (!value) {
+      return null;
+    }
+
+    const timestamp = Date.parse(value);
+    if (Number.isNaN(timestamp)) {
+      return null;
+    }
+
+    return Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  }
+
+  private resolveCollectorHeartbeatState(input: {
+    jobStatus: string | null;
+    heartbeatAgeSeconds: number | null;
+  }): 'healthy' | 'stale' | 'idle' | 'missing' {
+    if (input.jobStatus !== 'RUNNING') {
+      return 'idle';
+    }
+
+    if (input.heartbeatAgeSeconds === null) {
+      return 'missing';
+    }
+
+    return input.heartbeatAgeSeconds > this.resolveColdToolStaleSeconds()
+      ? 'stale'
+      : 'healthy';
+  }
+
+  private resolveColdDeepQueueState(input: {
+    active: number;
+    queued: number;
+    newestQueuedAgeSeconds: number | null;
+  }): 'healthy' | 'stalled' | 'idle' {
+    if (input.active <= 0 && input.queued <= 0) {
+      return 'idle';
+    }
+
+    if (input.active > 0) {
+      return 'healthy';
+    }
+
+    if (
+      input.queued > 0 &&
+      input.newestQueuedAgeSeconds !== null &&
+      input.newestQueuedAgeSeconds > this.resolveAnalysisSingleStaleSeconds()
+    ) {
+      return 'stalled';
+    }
+
+    return 'healthy';
+  }
+
+  private resolveColdToolStaleSeconds() {
+    const staleMinutes = this.readPositiveIntegerEnv(
+      process.env.COLD_TOOL_STALE_RUNTIME_MINUTES,
+      10,
+    );
+    const queueHeartbeatMs = this.readPositiveIntegerEnv(
+      process.env.QUEUE_RUNTIME_HEARTBEAT_MS,
+      30_000,
+    );
+    const watchdogIntervalMs = this.readPositiveIntegerEnv(
+      process.env.COLD_TOOL_WATCHDOG_INTERVAL_MS,
+      60_000,
+    );
+
+    return Math.max(
+      staleMinutes * 60,
+      Math.ceil((queueHeartbeatMs * 20) / 1000),
+      Math.ceil((watchdogIntervalMs * 2) / 1000),
+    );
+  }
+
+  private resolveAnalysisSingleStaleSeconds() {
+    return (
+      this.readPositiveIntegerEnv(process.env.ANALYSIS_SINGLE_STALE_MINUTES, 30) *
+      60
+    );
+  }
+
+  private readPositiveIntegerEnv(value: string | undefined, fallback: number) {
+    if (typeof value !== 'string') {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   private readRuntimeGitSha() {
