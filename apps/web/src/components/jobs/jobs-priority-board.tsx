@@ -35,13 +35,13 @@ export function JobsPriorityBoard({
 
   return (
     <section className="space-y-6" data-testid="jobs-priority-board">
-      <section className="rounded-[32px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(3,105,161,0.86)_100%)] px-7 py-8 text-white shadow-xl shadow-slate-900/10">
+      <section className="rounded-[34px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_54%,_rgba(3,105,161,0.88)_100%)] px-7 py-8 text-white shadow-[0_32px_90px_-42px_rgba(15,23,42,0.48)]">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(300px,360px)] xl:items-end">
           <div className="max-w-4xl">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200/70">
               任务工作台
             </p>
-            <h1 className="mt-3 text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl md:text-[3rem]">
+            <h1 className="font-display mt-3 text-balance text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl md:text-[3.25rem]">
               先看现在有没有异常，再决定先处理哪一类任务。
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-200 md:text-base">
@@ -63,16 +63,23 @@ export function JobsPriorityBoard({
                   当前仓库上下文
                 </span>
               ) : null}
+              <Link
+                href="/repositories"
+                className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-sky-50 transition hover:bg-white/15"
+              >
+                回项目列表
+              </Link>
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-white/15 bg-white/6 p-5 backdrop-blur">
+          <div className="rounded-[28px] border border-white/15 bg-white/8 p-5 backdrop-blur">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80">
-              Plain Text
+              当前摘要
             </p>
-            <div className="mt-3 space-y-1 font-mono text-xs text-sky-50">
+            <div className="mt-3 space-y-2 text-sm text-sky-50">
               <p>当前视图：聚合摘要</p>
               <p>聚合组数：{viewModel.visibleGroupCount}</p>
+              <p>先处理异常，再去完整任务流看剩余积压。</p>
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
@@ -174,7 +181,7 @@ function JobPriorityGroupCard({
       data-job-aggregate-card="true"
       data-job-group-state={group.state}
       data-testid="jobs-aggregated-group"
-      className={`rounded-[28px] border bg-white p-6 shadow-sm ${
+      className={`rounded-[30px] border bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(248,250,252,0.92)_100%)] p-6 shadow-[0_26px_72px_-42px_rgba(15,23,42,0.24)] ${
         isFocused
           ? 'border-sky-300 ring-2 ring-sky-100'
           : group.state === 'FAILED'
@@ -203,7 +210,7 @@ function JobPriorityGroupCard({
             ) : null}
           </div>
 
-          <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+          <h3 className="font-display mt-3 text-[2rem] font-semibold tracking-[-0.04em] text-slate-950">
             {group.displayName}
           </h3>
           <p className="mt-3 max-w-3xl text-balance text-sm leading-7 text-slate-600">
@@ -211,7 +218,7 @@ function JobPriorityGroupCard({
           </p>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-right">
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-right shadow-sm">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
             当前建议动作
           </p>
@@ -301,8 +308,8 @@ function QuietEmptyState({
   description: string;
 }) {
   return (
-    <section className="rounded-[28px] border border-dashed border-slate-300 bg-white/80 px-6 py-8 text-center shadow-sm">
-      <h3 className="text-xl font-semibold tracking-tight text-slate-950">{title}</h3>
+    <section className="rounded-[30px] border border-dashed border-slate-300 bg-white/82 px-6 py-8 text-center shadow-sm">
+      <h3 className="font-display text-2xl font-semibold tracking-[-0.04em] text-slate-950">{title}</h3>
       <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-slate-600">
         {description}
       </p>

@@ -19,14 +19,14 @@ export function SettingsRuntimeSummary({
   return (
     <section
       data-settings-runtime-summary="true"
-      className="rounded-[36px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_58%,_rgba(14,116,144,0.86)_100%)] px-8 py-8 text-white shadow-xl shadow-slate-900/10"
+      className="rounded-[36px] border border-slate-200 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_56%,_rgba(14,116,144,0.88)_100%)] px-8 py-8 text-white shadow-[0_32px_90px_-42px_rgba(15,23,42,0.48)]"
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-4xl">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
             当前运行模式
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-white md:text-[3rem]">
+          <h1 className="font-display mt-3 text-5xl font-semibold tracking-[-0.04em] text-white md:text-[3.35rem]">
             先看系统现在会怎么跑。
           </h1>
           <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 md:text-base">
@@ -77,7 +77,7 @@ function RuntimeCard({
   helper: string;
 }) {
   return (
-    <article className="rounded-[28px] border border-white/10 bg-white/5 px-5 py-5 backdrop-blur">
+    <article className="rounded-[28px] border border-white/10 bg-white/7 px-5 py-5 backdrop-blur">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
         {label}
       </p>

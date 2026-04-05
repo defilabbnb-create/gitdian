@@ -146,14 +146,14 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="rounded-[28px] border border-slate-200 bg-slate-50/70 p-5"
+      className="rounded-[30px] border border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96)_0%,rgba(248,250,252,0.92)_100%)] p-5 shadow-[0_24px_72px_-40px_rgba(15,23,42,0.24)]"
     >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
             主筛选
           </p>
-          <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+          <h3 className="font-display mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
             先用最少的条件开始筛，不要先被高级筛选打断。
           </h3>
           <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">
@@ -175,7 +175,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
           </button>
           <button
             type="submit"
-            className="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-slate-800"
+            className="inline-flex h-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#0f172a_0%,#1e293b_58%,#0f766e_100%)] px-5 text-sm font-semibold text-white transition hover:opacity-95"
           >
             应用筛选
           </button>
@@ -195,7 +195,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
             name="keyword"
             defaultValue={query.keyword ?? ''}
             placeholder="仓库名、描述、owner"
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
           />
         </FilterField>
 
@@ -203,7 +203,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
           <select
             name="finalVerdict"
             defaultValue={query.finalVerdict ?? ''}
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
           >
             <option value="">全部</option>
             <option value="GOOD">只看值得做</option>
@@ -216,7 +216,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
           <select
             name="recommendedAction"
             defaultValue={query.recommendedAction ?? ''}
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
           >
             <option value="">全部</option>
             <option value="BUILD">只看值得做</option>
@@ -229,7 +229,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
           <select
             name="moneyPriority"
             defaultValue={query.moneyPriority ?? ''}
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
           >
             <option value="">全部</option>
             <option value="P0">P0 · 能赚钱</option>
@@ -243,7 +243,7 @@ export function RepositoryFilters({ query }: RepositoryFiltersProps) {
           <select
             name="sortBy"
             defaultValue={query.sortBy}
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
           >
             <option value="moneyPriority">挣钱优先</option>
             <option value="insightPriority">创业判断优先</option>

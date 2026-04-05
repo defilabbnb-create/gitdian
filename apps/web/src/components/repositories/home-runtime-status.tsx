@@ -13,16 +13,17 @@ export async function HomeRuntimeStatus() {
   const loadLevel = getLoadLevel(status);
 
   return (
-    <section className="rounded-[32px] border border-slate-200 bg-white/95 p-5 shadow-sm backdrop-blur">
+    <section className="rounded-[34px] border border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96)_0%,rgba(248,250,252,0.92)_60%,rgba(239,246,255,0.9)_100%)] p-5 shadow-[0_28px_80px_-40px_rgba(15,23,42,0.25)] backdrop-blur">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
             今日系统状态
           </p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+          <h2 className="font-display mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
             只看会影响你今天判断节奏的 4 个信号。
           </h2>
         </div>
+        <LoadBadge level={loadLevel.label} />
       </div>
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatusCard
@@ -79,7 +80,7 @@ export function HomeSecondaryLinks() {
     >
       <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-slate-500">
         <span className="text-slate-400">其他入口</span>
-        <EntryLink href="#all-projects" label="全部项目" />
+        <EntryLink href="/repositories" label="项目列表" />
         <Separator />
         <EntryLink href="/favorites" label="收藏" />
         <Separator />
@@ -101,7 +102,7 @@ function StatusCard({
   helper: string;
 }) {
   return (
-    <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+    <div className="rounded-[24px] border border-slate-200/80 bg-white/78 px-4 py-4 shadow-sm">
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
         {label}
       </p>
@@ -109,6 +110,21 @@ function StatusCard({
         {value}
       </p>
       <p className="mt-2 text-sm leading-6 text-slate-600">{helper}</p>
+    </div>
+  );
+}
+
+function LoadBadge({ level }: { level: string }) {
+  const classes =
+    level === 'EXTREME'
+      ? 'border-rose-200 bg-rose-50 text-rose-700'
+      : level === 'HIGH'
+        ? 'border-amber-200 bg-amber-50 text-amber-700'
+        : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+
+  return (
+    <div className={`inline-flex rounded-full border px-4 py-2 text-sm font-semibold ${classes}`}>
+      当前负载 {level}
     </div>
   );
 }

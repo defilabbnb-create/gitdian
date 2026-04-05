@@ -8,17 +8,17 @@ export async function ColdRuntimePanel() {
     const queueTone = resolveTone(runtime.coldDeepQueue.queueState);
 
     return (
-      <section className="rounded-[28px] border border-emerald-200 bg-white/90 p-5 shadow-sm">
+      <section className="rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.95)_0%,rgba(240,253,244,0.92)_58%,rgba(236,253,245,0.88)_100%)] p-5 shadow-[0_28px_80px_-40px_rgba(5,150,105,0.28)]">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
               冷门运行状态
             </p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+            <h2 className="font-display mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
               直接看采集、深分析和当前运行版本，不靠感觉判断是不是停了。
             </h2>
           </div>
-          <div className="font-mono text-xs text-slate-500">
+          <div className="rounded-full border border-emerald-200 bg-white/80 px-4 py-2 font-mono text-xs text-slate-500">
             Git SHA: {runtime.runtime.gitSha}
           </div>
         </div>
@@ -69,15 +69,16 @@ export async function ColdRuntimePanel() {
           />
         </div>
 
-        <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <details className="mt-4 rounded-[24px] border border-slate-200 bg-white/70 px-4 py-4">
+          <summary className="flex cursor-pointer list-none flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
               最近 Phase 明细
             </p>
             <p className="font-mono text-xs text-slate-500">
-              当前 run: {shortId(runtime.collector.currentRunId)}
+              当前 run: {shortId(runtime.collector.currentRunId)} · 共{' '}
+              {runtime.collector.recentPhaseJobs.length} 条
             </p>
-          </div>
+          </summary>
 
           <div className="mt-3 space-y-2">
             {runtime.collector.recentPhaseJobs.map((job) => (
@@ -108,17 +109,17 @@ export async function ColdRuntimePanel() {
               </div>
             ))}
           </div>
-        </div>
+        </details>
 
-        <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <details className="mt-4 rounded-[24px] border border-slate-200 bg-white/70 px-4 py-4">
+          <summary className="flex cursor-pointer list-none flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
               Phase 统计（24h）
             </p>
             <p className="text-xs text-slate-500">
-              直接看每个阶段过去 24 小时的量、失败率和平均耗时。
+              共 {runtime.collector.phaseStats24h.length} 个 phase
             </p>
-          </div>
+          </summary>
 
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {runtime.collector.phaseStats24h.map((stat) => (
@@ -154,7 +155,7 @@ export async function ColdRuntimePanel() {
               </div>
             ))}
           </div>
-        </div>
+        </details>
 
         {runtime.warnings.length > 0 ? (
           <div className="mt-4 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-950">
@@ -217,7 +218,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function MetricPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3">
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
         {label}
       </p>
@@ -238,14 +239,14 @@ function RuntimeCell({
   tone?: 'default' | 'healthy' | 'warning' | 'danger';
 }) {
   const toneClasses = {
-    default: 'border-slate-200 bg-slate-50',
-    healthy: 'border-emerald-200 bg-emerald-50',
-    warning: 'border-amber-200 bg-amber-50',
-    danger: 'border-rose-200 bg-rose-50',
+    default: 'border-slate-200 bg-white/78',
+    healthy: 'border-emerald-200 bg-emerald-50/86',
+    warning: 'border-amber-200 bg-amber-50/86',
+    danger: 'border-rose-200 bg-rose-50/86',
   }[tone];
 
   return (
-    <div className={`rounded-[24px] border px-4 py-4 ${toneClasses}`}>
+    <div className={`rounded-[24px] border px-4 py-4 shadow-sm ${toneClasses}`}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
         {label}
       </p>

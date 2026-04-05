@@ -37,22 +37,34 @@ export function ColdToolCollectorPanel() {
   }
 
   return (
-    <section className="rounded-[28px] border border-emerald-200 bg-[linear-gradient(180deg,_rgba(240,253,244,1)_0%,_rgba(236,253,245,0.88)_100%)] p-5 shadow-sm">
+    <section className="relative overflow-hidden rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.96)_0%,rgba(255,255,255,0.92)_58%,rgba(220,252,231,0.88)_100%)] p-5 shadow-[0_26px_80px_-40px_rgba(5,150,105,0.28)]">
+      <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.18),transparent_72%)] lg:block" />
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="max-w-3xl space-y-2">
+        <div className="relative max-w-3xl space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
             冷门工具采集框
           </p>
-          <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
+          <h2 className="font-display text-3xl font-semibold tracking-[-0.04em] text-slate-950">
             采全球真实活跃用户约 1万到100万 的互联网工具
           </h2>
           <p className="text-sm leading-7 text-slate-700">
             这条链路会按领域关键词和主流编程语言轮转搜索，仓库入库后先跑
             GPT-5.4 冷门工具判断，命中的项目会立刻进入深度分析。
           </p>
+          <div className="flex flex-wrap gap-2 pt-1 text-xs font-semibold">
+            <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
+              两阶段采集
+            </span>
+            <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
+              命中即进深分析
+            </span>
+            <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
+              长跑模式
+            </span>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-3">
+        <div className="relative flex flex-wrap gap-3">
           <ExportColdToolsButton />
           <Link
             href="/jobs"
@@ -63,7 +75,7 @@ export function ColdToolCollectorPanel() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="mt-5 grid gap-4 lg:grid-cols-4">
+      <form onSubmit={handleSubmit} className="relative mt-5 grid gap-4 lg:grid-cols-4">
         <label className="space-y-2">
           <span className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
             每轮查询数
@@ -74,7 +86,7 @@ export function ColdToolCollectorPanel() {
             max={120}
             value={queriesPerRun}
             onChange={(event) => setQueriesPerRun(Number(event.target.value) || 12)}
-            className="w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-400"
+            className="w-full rounded-2xl border border-emerald-200 bg-white/92 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
           />
         </label>
 
@@ -88,7 +100,7 @@ export function ColdToolCollectorPanel() {
             max={30}
             value={perQueryLimit}
             onChange={(event) => setPerQueryLimit(Number(event.target.value) || 6)}
-            className="w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-400"
+            className="w-full rounded-2xl border border-emerald-200 bg-white/92 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
           />
         </label>
 
@@ -102,12 +114,12 @@ export function ColdToolCollectorPanel() {
             max={3650}
             value={lookbackDays}
             onChange={(event) => setLookbackDays(Number(event.target.value) || 365)}
-            className="w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-400"
+            className="w-full rounded-2xl border border-emerald-200 bg-white/92 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
           />
         </label>
 
         <div className="flex flex-col gap-3">
-          <label className="inline-flex items-center gap-3 rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-700">
+          <label className="inline-flex items-center gap-3 rounded-2xl border border-emerald-200 bg-white/92 px-4 py-3 text-sm text-slate-700 shadow-sm">
             <input
               type="checkbox"
               checked={forceRefresh}
@@ -120,7 +132,7 @@ export function ColdToolCollectorPanel() {
           <button
             type="submit"
             disabled={isPending}
-            className="inline-flex h-11 items-center justify-center rounded-2xl bg-emerald-700 px-5 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#047857_0%,#059669_58%,#10b981_100%)] px-5 text-sm font-semibold text-white transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isPending ? '正在创建任务...' : '开始采集冷门工具'}
           </button>
