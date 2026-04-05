@@ -1,3 +1,5 @@
+import Link from 'next/link';
+import { AppPageHero, AppPageShell } from '@/components/app/page-shell';
 import { ColdToolCollectorPanel } from '@/components/cold-tools/cold-tool-collector-panel';
 import { ColdRuntimePanel } from '@/components/cold-tools/cold-runtime-panel';
 import { RepositoryFilters } from '@/components/repositories/repository-filters';
@@ -112,18 +114,45 @@ export default async function ColdToolsPage({
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.16),_transparent_24%),linear-gradient(180deg,_#f8fafc_0%,_#ecfdf5_100%)] px-6 py-8 text-slate-950">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <AppPageShell tone="emerald">
+      <AppPageHero
+        eyebrow="冷门工具池"
+        title="长尾工具不是补充页，而是专门的新增量雷达。"
+        description="这里同时看采集、深分析、完成度和可导出结果。页面优先回答两个问题：冷门链路有没有在跑，以及这一批新增量现在推进到了哪里。"
+        tone="emerald"
+        chips={[
+          '采集与深分析分池运行',
+          '已完成 / 未完成直接分类',
+          '导出、排队、跳过同页可见',
+        ]}
+        stats={[
+          {
+            label: '工具池规模',
+            value: repositories
+              ? `${repositories.pagination.total.toLocaleString()}`
+              : '--',
+            helper: '当前冷门视图下的总量。',
+          },
+          {
+            label: '深分析完成',
+            value: repositories ? `${completedTotal.toLocaleString()}` : '--',
+            helper: '四层结论都齐的冷门条目。',
+          },
+        ]}
+        aside={<ColdToolsHeroAside />}
+      />
+
+      <div className="space-y-6">
         <SettingsBuildInfo variant="compact" />
         <ColdRuntimePanel />
         <ColdToolCollectorPanel />
 
         {repositories ? (
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
               label="冷门工具池规模"
               value={`${repositories.pagination.total.toLocaleString()} 个`}
-              helper="只显示被判断为真实活跃用户约 1万到100万的工具。"
+              helper="只显示被判断为真实活跃用户约 1000 到 100 万的工具。"
             />
             <SummaryCard
               label="默认排序"
@@ -180,7 +209,7 @@ export default async function ColdToolsPage({
           />
         ) : null}
       </div>
-    </main>
+    </AppPageShell>
   );
 }
 
@@ -196,7 +225,7 @@ function SummaryCard({
   href?: string;
 }) {
   const content = (
-    <section className="rounded-[24px] border border-emerald-200 bg-white/90 p-5 shadow-sm transition hover:border-emerald-300 hover:shadow-md">
+    <section className="surface-card rounded-[26px] p-5 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-xl">
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
         {label}
       </p>
@@ -225,4 +254,28 @@ function buildColdToolSectionHref(
   });
 
   return search ? `/cold-tools?${search}` : '/cold-tools';
+}
+
+function ColdToolsHeroAside() {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+        快速动作
+      </p>
+      <div className="mt-3 grid gap-2">
+        <Link
+          href="/cold-tools?deepAnalysisState=completed"
+          className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100"
+        >
+          直接看已完成深分析
+        </Link>
+        <Link
+          href="/cold-tools?deepAnalysisState=pending"
+          className="rounded-[20px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+        >
+          直接看未完成队列
+        </Link>
+      </div>
+    </div>
+  );
 }

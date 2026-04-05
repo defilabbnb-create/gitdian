@@ -16,11 +16,11 @@ export function RuntimeFailurePanel({
   diagnosticsLabel = '如果这是本地环境，先确认 `api` 进程和 `NEXT_PUBLIC_API_BASE_URL` 指向的后端服务可达。',
 }: RuntimeFailurePanelProps) {
   return (
-    <section className="rounded-[32px] border border-rose-200 bg-rose-50 p-8 shadow-sm">
+    <section className="rounded-[32px] border border-rose-200 bg-[linear-gradient(180deg,rgba(255,241,242,0.96)_0%,rgba(255,247,248,0.88)_100%)] p-8 shadow-[0_24px_72px_-36px_rgba(225,29,72,0.42)]">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
         加载失败
       </p>
-      <h2 className="mt-3 text-2xl font-semibold tracking-tight text-rose-950">
+      <h2 className="font-display mt-3 text-3xl font-semibold tracking-tight text-rose-950">
         {title}
       </h2>
       <p className="mt-3 text-sm leading-7 text-rose-800">{message}</p>

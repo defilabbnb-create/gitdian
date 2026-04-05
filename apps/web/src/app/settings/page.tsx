@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { AppPageHero, AppPageShell } from '@/components/app/page-shell';
 import { RuntimeFailurePanel } from '@/components/runtime-failure-panel';
 import { SettingsBuildInfo } from '@/components/settings/settings-build-info';
 import { SettingsForm } from '@/components/settings/settings-form';
@@ -17,15 +18,37 @@ export const dynamic = 'force-dynamic';
 
 export default function SettingsPage() {
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)] px-6 py-8 text-slate-950">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <SettingsBuildInfo variant="compact" />
+    <AppPageShell tone="slate">
+      <AppPageHero
+        eyebrow="系统设置"
+        title="配置页要先告诉你运行面貌，再允许你改真正会影响行为的参数。"
+        description="这里把运行摘要、健康面板、关键配置和技术细节分层展开。先看当前状态，再决定改采集、分析还是 AI 路由，减少误操作。"
+        tone="slate"
+        chips={[
+          '先看运行摘要',
+          '再改关键配置',
+          '技术细节独立折层',
+        ]}
+        stats={[
+          {
+            label: '修改原则',
+            value: '先观察再落参',
+            helper: '优先减少误改和相互影响。',
+          },
+          {
+            label: '页面职责',
+            value: '运行面 + 参数面',
+            helper: '状态与配置分开展示，但同页决策。',
+          },
+        ]}
+      />
 
+      <div className="space-y-6">
         <Suspense fallback={<SettingsPageContentFallback />}>
           <SettingsPageContent />
         </Suspense>
       </div>
-    </main>
+    </AppPageShell>
   );
 }
 
@@ -96,6 +119,7 @@ async function SettingsPageContent() {
             health={health}
             healthErrorMessage={healthErrorMessage}
           />
+          <SettingsBuildInfo variant="compact" />
         </section>
       ) : (
         <RuntimeFailurePanel

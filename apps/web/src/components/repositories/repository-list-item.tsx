@@ -5,19 +5,30 @@ import {
   getMoneyPriorityTone,
 } from '@/lib/repository-decision';
 import { buildRepositoryDecisionViewModel } from '@/lib/repository-decision-view-model';
-import { RepositoryListItem, RepositoryListQueryState } from '@/lib/types/repository';
+import {
+  buildRepositoryListSearchParams,
+  RepositoryListItem,
+  RepositoryListQueryState,
+} from '@/lib/types/repository';
+import {
+  buildRepositoryAnchorId,
+  buildRepositoryDetailHref,
+  withHash,
+} from '@/lib/repository-detail-navigation';
 import { FavoriteToggleButton } from './favorite-toggle-button';
 
 type RepositoryListItemProps = {
   repository: RepositoryListItem;
   query: RepositoryListQueryState;
   variant?: 'default' | 'featured';
+  basePath?: string;
 };
 
 export function RepositoryListItemCard({
   repository,
   query,
   variant = 'default',
+  basePath = '/repositories',
 }: RepositoryListItemProps) {
   const decisionView = buildRepositoryDecisionViewModel(repository);
   const categoryLabel =
@@ -31,29 +42,43 @@ export function RepositoryListItemCard({
   const showCreatedAtGithub =
     query.view === 'newRadar' ||
     query.view === 'backfilledPromising' ||
+    query.view === 'coldTools' ||
     query.sortBy === 'createdAtGithub';
   const isFeatured = variant === 'featured';
   const showSupportMeta = query.displayMode === 'detail' && !isFeatured;
+  const coldToolPool = repository.analysis?.coldToolPool ?? null;
+  const anchorId = buildRepositoryAnchorId(repository.id);
+  const detailHref = buildRepositoryDetailHref(
+    repository.id,
+    withHash(buildRepositoryReturnHref(query, basePath), anchorId),
+  );
   const wrapperClass = isFeatured
-    ? 'rounded-[32px] border border-slate-300 bg-[linear-gradient(180deg,_rgba(255,255,255,1)_0%,_rgba(248,250,252,0.98)_100%)] p-7 shadow-md shadow-slate-900/5'
-    : 'rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm';
+    ? 'surface-card-strong rounded-[34px] border border-slate-300 p-7 transition hover:-translate-y-0.5 hover:shadow-2xl'
+    : 'surface-card rounded-[30px] p-6 transition hover:-translate-y-0.5 hover:shadow-xl';
   const confidenceTone = decisionView.confidence.isLow
     ? 'border-amber-200 bg-amber-50 text-amber-700'
     : 'border-slate-200 bg-slate-50 text-slate-700';
+  const tertiaryBadge = getTertiaryBadge(decisionView);
 
   return (
-    <article className={wrapperClass}>
+    <article
+      id={anchorId}
+      className={`${wrapperClass} relative overflow-hidden`}
+    >
+      <div className="absolute inset-y-0 left-0 w-1 bg-[linear-gradient(180deg,#0f766e_0%,#0ea5e9_52%,#0f172a_100%)] opacity-80" />
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <Link
-              href={`/repositories/${repository.id}`}
-              className={`${isFeatured ? 'text-2xl' : 'text-xl'} font-semibold tracking-tight text-slate-950 transition hover:text-slate-700`}
+              href={detailHref}
+              className={`${isFeatured ? 'text-3xl' : 'text-[1.45rem]'} font-display font-semibold leading-tight tracking-[-0.03em] text-slate-950 transition hover:text-slate-700`}
             >
               {repository.name}
             </Link>
             {!isFeatured ? (
-              <span className="text-sm text-slate-500">{repository.fullName}</span>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">
+                {repository.fullName}
+              </span>
             ) : null}
           </div>
 
@@ -62,27 +87,10 @@ export function RepositoryListItemCard({
               挣钱优先级 · {decisionView.display.priorityLabel}
             </Badge>
             <Badge className={getActionTone(decisionView.action.toneKey)}>
-              {decisionView.verdict.judgementLabel}
+              建议动作 · {decisionView.display.actionLabel}
             </Badge>
-            {!isFeatured && decisionView.badges.hasManualOverride ? (
-              <Badge className="border-slate-300 bg-slate-100 text-slate-700">
-                已人工判断
-              </Badge>
-            ) : null}
-            {!isFeatured && decisionView.badges.hasConflict ? (
-              <Badge className="border-amber-200 bg-amber-50 text-amber-700">
-                本地与 Claude 有冲突
-              </Badge>
-            ) : null}
-            {!isFeatured && decisionView.badges.needsRecheck ? (
-              <Badge className="border-rose-200 bg-rose-50 text-rose-700">
-                需要复查
-              </Badge>
-            ) : null}
-            {!isFeatured && decisionView.confidence.isLow ? (
-              <Badge className="border-amber-200 bg-amber-50 text-amber-700">
-                摘要待校正
-              </Badge>
+            {tertiaryBadge ? (
+              <Badge className={tertiaryBadge.tone}>{tertiaryBadge.label}</Badge>
             ) : null}
           </div>
         </div>
@@ -93,12 +101,12 @@ export function RepositoryListItemCard({
         />
       </div>
 
-      <section className="mt-5 rounded-[28px] border border-slate-200 bg-slate-50 px-5 py-5">
+      <section className="mt-5 rounded-[30px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.84)_0%,rgba(248,250,252,0.92)_100%)] px-5 py-5">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
           今天该不该做
         </p>
         <h2
-          className={`mt-3 ${isFeatured ? 'text-[2rem]' : 'text-2xl'} font-semibold tracking-tight text-slate-950`}
+          className={`font-display mt-3 ${isFeatured ? 'text-[2.2rem]' : 'text-[1.9rem]'} font-semibold leading-tight tracking-[-0.04em] text-slate-950`}
         >
           {decisionView.display.headline}
         </h2>
@@ -109,16 +117,11 @@ export function RepositoryListItemCard({
           {decisionView.display.reason}
         </p>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
           <DecisionCell
-            label="最终结论"
+            label="现在结论"
             value={decisionView.display.finalDecisionLabel}
             tone={getMoneyPriorityTone(decisionView.priority.toneTier)}
-          />
-          <DecisionCell
-            label="建议动作"
-            value={decisionView.display.actionLabel}
-            tone={getActionTone(decisionView.action.toneKey)}
           />
           <DecisionCell
             label="用户是谁"
@@ -130,22 +133,17 @@ export function RepositoryListItemCard({
             value={decisionView.display.monetizationLabel}
             tone="border-slate-200 bg-white text-slate-700"
           />
-          <DecisionCell
-            label="属于什么"
-            value={categoryLabel}
-            tone="border-violet-200 bg-violet-50 text-violet-700"
-          />
         </div>
 
         {!isFeatured || showCreatedAtGithub ? (
           <div className="mt-4 flex flex-wrap gap-2 text-xs font-medium text-slate-600">
+            <SupportChip className="border-violet-200 bg-violet-50 text-violet-700">
+              属于什么：{categoryLabel}
+            </SupportChip>
             {!isFeatured ? (
               <SupportChip className={confidenceTone}>
                 分析状态：{decisionView.badges.analysisLayerLabel}
               </SupportChip>
-            ) : null}
-            {!isFeatured ? (
-              <SupportChip>{decisionView.badges.claudeReviewLabel}</SupportChip>
             ) : null}
             {!isFeatured && decisionView.badges.hasTrainingHints ? (
               <SupportChip>可沉淀训练样本</SupportChip>
@@ -157,6 +155,82 @@ export function RepositoryListItemCard({
         ) : null}
       </section>
 
+      {query.view === 'coldTools' && coldToolPool ? (
+          <section className="mt-4 rounded-[30px] border border-emerald-200 bg-[linear-gradient(180deg,rgba(236,253,245,0.92)_0%,rgba(240,253,250,0.84)_100%)] px-5 py-5">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+            冷门工具判断
+          </p>
+          <h3 className="mt-3 text-xl font-semibold tracking-tight text-slate-950">
+            {coldToolPool.summaryZh}
+          </h3>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <DecisionCell
+              label="真实活跃用户"
+              value={coldToolPool.globalActiveUsersBandZh}
+              tone="border-emerald-200 bg-white text-emerald-700"
+            />
+            <DecisionCell
+              label="潜在适用人群"
+              value={coldToolPool.globalPotentialUsersBandZh}
+              tone="border-emerald-200 bg-white text-emerald-700"
+            />
+            <DecisionCell
+              label="是否有人买账"
+              value={coldToolPool.hasPayingIntent ? '有人会买单' : '买单意愿偏弱'}
+              tone="border-emerald-200 bg-white text-emerald-700"
+            />
+            <DecisionCell
+              label="谁会买单"
+              value={coldToolPool.buyerTypeZh}
+              tone="border-emerald-200 bg-white text-emerald-700"
+            />
+            <DecisionCell
+              label="判断置信度"
+              value={`${coldToolPool.confidence}%`}
+              tone="border-emerald-200 bg-white text-emerald-700"
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <DecisionCell
+              label="主要用户"
+              value={coldToolPool.targetUsersZh}
+              tone="border-slate-200 bg-white text-slate-700"
+            />
+            <DecisionCell
+              label="使用频率"
+              value={coldToolPool.usageFrequencyLabelZh}
+              tone="border-slate-200 bg-white text-slate-700"
+            />
+            <DecisionCell
+              label="工作流嵌入"
+              value={coldToolPool.workflowCriticalityLabelZh}
+              tone="border-slate-200 bg-white text-slate-700"
+            />
+          </div>
+
+          <div className="mt-4 space-y-3 text-sm leading-7 text-slate-700">
+            <p>
+              <span className="font-semibold text-slate-950">主要场景：</span>
+              {coldToolPool.useCaseZh}
+            </p>
+            <p>
+              <span className="font-semibold text-slate-950">为什么有人用：</span>
+              {coldToolPool.whyUseZh}
+            </p>
+            <p>
+              <span className="font-semibold text-slate-950">为什么有人付费：</span>
+              {coldToolPool.whyPayZh}
+            </p>
+            <p>
+              <span className="font-semibold text-slate-950">为什么可能不付费：</span>
+              {coldToolPool.whyNotPayZh}
+            </p>
+          </div>
+        </section>
+      ) : null}
+
       {showSupportMeta ? (
         <div className="mt-4 flex flex-wrap gap-2 text-xs font-medium text-slate-600">
           <SupportChip>★ {repository.stars.toLocaleString()}</SupportChip>
@@ -167,7 +241,7 @@ export function RepositoryListItemCard({
         </div>
       ) : null}
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-5">
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-slate-200/70 pt-5">
         <div className="flex flex-wrap items-center gap-3">
           <a
             href={repository.htmlUrl}
@@ -178,8 +252,8 @@ export function RepositoryListItemCard({
             查看 GitHub 仓库
           </a>
           <Link
-            href={`/repositories/${repository.id}`}
-            className="inline-flex items-center rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+            href={detailHref}
+            className="inline-flex items-center rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
           >
             查看详情
           </Link>
@@ -232,6 +306,48 @@ function SupportChip({
       {children}
     </span>
   );
+}
+
+function getTertiaryBadge(
+  decisionView: ReturnType<typeof buildRepositoryDecisionViewModel>,
+) {
+  if (decisionView.badges.hasConflict) {
+    return {
+      label: '本地与 Claude 有冲突',
+      tone: 'border-amber-200 bg-amber-50 text-amber-700',
+    };
+  }
+
+  if (decisionView.badges.needsRecheck) {
+    return {
+      label: '需要复查',
+      tone: 'border-rose-200 bg-rose-50 text-rose-700',
+    };
+  }
+
+  if (decisionView.badges.hasManualOverride) {
+    return {
+      label: '已人工判断',
+      tone: 'border-slate-300 bg-slate-100 text-slate-700',
+    };
+  }
+
+  if (decisionView.confidence.isLow) {
+    return {
+      label: '摘要待校正',
+      tone: 'border-amber-200 bg-amber-50 text-amber-700',
+    };
+  }
+
+  return null;
+}
+
+function buildRepositoryReturnHref(
+  query: RepositoryListQueryState,
+  basePath: string,
+) {
+  const search = buildRepositoryListSearchParams(query);
+  return search ? `${basePath}?${search}` : basePath;
 }
 
 function formatShortDate(value: string) {

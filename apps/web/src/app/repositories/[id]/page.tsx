@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { AppPageShell } from '@/components/app/page-shell';
 import { RepositoryAnalysisWorkbench } from '@/components/repositories/repository-analysis-workbench';
 import { RepositoryDetailConclusion } from '@/components/repositories/repository-detail-conclusion';
 import { RepositoryDetailHeader } from '@/components/repositories/repository-detail-header';
@@ -14,6 +15,7 @@ import { getFriendlyRuntimeError } from '@/lib/api/error-messages';
 import { getJobLogsForRepository } from '@/lib/api/job-logs';
 import { getRepositories, getRepositoryById } from '@/lib/api/repositories';
 import { buildRepositoryDecisionViewModel } from '@/lib/repository-decision-view-model';
+import { withHash } from '@/lib/repository-detail-navigation';
 import {
   ApiRequestError,
   RelatedRepositoryItem,
@@ -27,12 +29,19 @@ type RepositoryDetailPageProps = {
   params: Promise<{
     id: string;
   }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function RepositoryDetailPage({
   params,
+  searchParams,
 }: RepositoryDetailPageProps) {
   const { id } = await params;
+  const resolvedSearchParams = ((await searchParams) ?? {}) as Record<
+    string,
+    string | string[] | undefined
+  >;
+  const returnHref = resolveInternalReturnHref(resolvedSearchParams.from);
   let repository = null;
   let errorMessage: string | null = null;
   let relatedJobs = null;
@@ -91,8 +100,8 @@ export default async function RepositoryDetailPage({
     : null;
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#eef2ff_100%)] px-6 py-8 text-slate-950">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <AppPageShell tone="slate">
+      <div className="space-y-6">
         {repository ? (
           <>
             {decisionView ? (
@@ -100,6 +109,7 @@ export default async function RepositoryDetailPage({
                 <RepositoryDetailHeader
                   repository={repository}
                   decisionViewModel={decisionView}
+                  returnHref={returnHref}
                 />
                 <RepositoryDetailConclusion decisionViewModel={decisionView} />
               </>
@@ -170,6 +180,7 @@ export default async function RepositoryDetailPage({
                       <RelatedRepositories
                         items={relatedRepositories}
                         errorMessage={relatedRepositoriesErrorMessage}
+                        returnHref={withHash(`/repositories/${repository.id}`, 'related-repositories')}
                       />
                     </div>
                   </details>
@@ -214,8 +225,20 @@ export default async function RepositoryDetailPage({
           />
         )}
       </div>
-    </main>
+    </AppPageShell>
   );
+}
+
+function resolveInternalReturnHref(
+  value: string | string[] | undefined,
+) {
+  const raw = Array.isArray(value) ? value[0] : value;
+
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) {
+    return '/repositories';
+  }
+
+  return raw;
 }
 
 async function getRelatedRepositories(
