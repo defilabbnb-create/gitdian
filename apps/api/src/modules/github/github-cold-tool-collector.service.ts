@@ -115,6 +115,7 @@ type ColdToolCollectorResumeState = {
   coldToolEvaluated: number;
   discoveryChunkIndex: number;
   matchedRepositoryIds: string[];
+  deepQueuedRepositoryIds: string[];
   deepAnalysisQueued: number;
   perQueryLimit: number;
   lookbackDays: number;
@@ -417,6 +418,7 @@ export class GitHubColdToolCollectorService {
       coldToolEvaluated,
       discoveryChunkIndex: 0,
       matchedRepositoryIds: [],
+      deepQueuedRepositoryIds: [],
       deepAnalysisQueued,
       perQueryLimit,
       lookbackDays,
@@ -804,6 +806,7 @@ export class GitHubColdToolCollectorService {
       ]),
     );
     const matchedRepositoryIds = new Set(state.matchedRepositoryIds);
+    const deepQueuedRepositoryIds = new Set(state.deepQueuedRepositoryIds);
     const result = await this.coldToolDiscoveryService.analyzeRepositoriesBatch({
       repositoryIds: chunkRepositoryIds,
       originsByRepositoryId: chunkOriginsByRepositoryId,
@@ -835,12 +838,27 @@ export class GitHubColdToolCollectorService {
       },
     });
     state.coldToolEvaluated += result.processed;
+    const newlyMatchedRepositoryIds = new Set<string>();
     for (const item of result.items) {
       if (item.output?.fitsColdToolPool === true) {
         matchedRepositoryIds.add(item.repositoryId);
+        newlyMatchedRepositoryIds.add(item.repositoryId);
       }
     }
     state.matchedRepositoryIds = Array.from(matchedRepositoryIds);
+    const incrementalQueueCandidates = Array.from(newlyMatchedRepositoryIds).filter(
+      (repositoryId) => !deepQueuedRepositoryIds.has(repositoryId),
+    );
+    if (incrementalQueueCandidates.length) {
+      const incrementalQueued = await this.enqueueColdToolDeepAnalyses(
+        incrementalQueueCandidates,
+      );
+      state.deepAnalysisQueued += incrementalQueued.queuedCount;
+      incrementalQueued.queuedRepositoryIds.forEach((repositoryId) =>
+        deepQueuedRepositoryIds.add(repositoryId),
+      );
+    }
+    state.deepQueuedRepositoryIds = Array.from(deepQueuedRepositoryIds);
     state.discoveryChunkIndex = chunkIndex + 1;
     const progress =
       82 +
@@ -892,9 +910,16 @@ export class GitHubColdToolCollectorService {
     },
   ) {
     const state = this.readResumeState(dto.resumeState);
-    state.deepAnalysisQueued = await this.enqueueColdToolDeepAnalyses(
-      state.matchedRepositoryIds,
+    const alreadyQueuedRepositoryIds = new Set(state.deepQueuedRepositoryIds);
+    const remainingRepositoryIds = state.matchedRepositoryIds.filter(
+      (repositoryId) => !alreadyQueuedRepositoryIds.has(repositoryId),
     );
+    const queued = await this.enqueueColdToolDeepAnalyses(remainingRepositoryIds);
+    state.deepAnalysisQueued += queued.queuedCount;
+    queued.queuedRepositoryIds.forEach((repositoryId) =>
+      alreadyQueuedRepositoryIds.add(repositoryId),
+    );
+    state.deepQueuedRepositoryIds = Array.from(alreadyQueuedRepositoryIds);
 
     await this.emitRuntimeFromResumeState(state, 'deep_queue', 95, options);
 
@@ -958,7 +983,10 @@ export class GitHubColdToolCollectorService {
 
   private async enqueueColdToolDeepAnalyses(repositoryIds: string[]) {
     if (!repositoryIds.length) {
-      return 0;
+      return {
+        queuedCount: 0,
+        queuedRepositoryIds: [],
+      };
     }
 
     const repositories = await this.prisma.repository.findMany({
@@ -1006,7 +1034,10 @@ export class GitHubColdToolCollectorService {
       }));
 
     if (!entries.length) {
-      return 0;
+      return {
+        queuedCount: 0,
+        queuedRepositoryIds: [],
+      };
     }
 
     await this.queueService.enqueueSingleAnalysesBulk(
@@ -1014,7 +1045,10 @@ export class GitHubColdToolCollectorService {
       'cold_tool_collector',
     );
 
-    return entries.length;
+    return {
+      queuedCount: entries.length,
+      queuedRepositoryIds: entries.map((entry) => entry.repositoryId),
+    };
   }
 
   private buildSearchPlan(languageRotationSeed: number) {
@@ -1522,6 +1556,11 @@ export class GitHubColdToolCollectorService {
           .map((item) => this.cleanText(item, 160))
           .filter((item): item is string => Boolean(item))
       : [];
+    const deepQueuedRepositoryIds = Array.isArray(record.deepQueuedRepositoryIds)
+      ? record.deepQueuedRepositoryIds
+          .map((item) => this.cleanText(item, 160))
+          .filter((item): item is string => Boolean(item))
+      : [];
 
     return {
       runId: this.cleanText(record.runId, 80) ?? randomUUID(),
@@ -1562,6 +1601,7 @@ export class GitHubColdToolCollectorService {
       coldToolEvaluated: this.readNonNegativeInt(record.coldToolEvaluated, 0),
       discoveryChunkIndex: this.readNonNegativeInt(record.discoveryChunkIndex, 0),
       matchedRepositoryIds,
+      deepQueuedRepositoryIds,
       deepAnalysisQueued: this.readNonNegativeInt(record.deepAnalysisQueued, 0),
       perQueryLimit: this.readNonNegativeInt(record.perQueryLimit, 0),
       lookbackDays: this.readNonNegativeInt(record.lookbackDays, 0),
@@ -1703,6 +1743,7 @@ export class GitHubColdToolCollectorService {
       externalImportChunkIndex: state.externalImportChunkIndex,
       repositoryIds: [...state.repositoryIds],
       matchedRepositoryIds: [...state.matchedRepositoryIds],
+      deepQueuedRepositoryIds: [...state.deepQueuedRepositoryIds],
       selectedEntries: state.selectedEntries.map((entry) => ({ ...entry })),
       originsByRepositoryId: Object.fromEntries(
         Object.entries(state.originsByRepositoryId).map(([repositoryId, origins]) => [
