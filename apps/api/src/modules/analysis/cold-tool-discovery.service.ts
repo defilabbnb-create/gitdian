@@ -9,6 +9,7 @@ import {
 } from './external-site-evidence.service';
 import { buildColdToolDiscoveryPromptInput } from './helpers/cold-tool-discovery-input.helper';
 import {
+  buildColdToolDiscoveryPrompt,
   buildColdToolDiscoveryBatchPrompt,
   COLD_TOOL_DISCOVERY_BATCH_PROMPT_VERSION,
 } from './prompts/cold-tool-discovery.prompt';
@@ -148,7 +149,11 @@ export class ColdToolDiscoveryService {
     }) => Promise<void> | void;
   }): Promise<AnalyzeColdToolBatchResult> {
     const uniqueRepositoryIds = [...new Set(args.repositoryIds.filter(Boolean))];
-    const batchSize = Math.max(1, Math.min(args.batchSize ?? 4, 8));
+    const providerOverride = this.readColdToolDiscoveryProvider();
+    const batchSize = this.resolveDiscoveryBatchSize(
+      args.batchSize,
+      providerOverride,
+    );
 
     if (!uniqueRepositoryIds.length) {
       return {
@@ -262,6 +267,7 @@ export class ColdToolDiscoveryService {
         batch,
         promptInputs,
         desiredModel,
+        providerOverride,
         originsByRepositoryId: args.originsByRepositoryId,
         externalSiteSignalsMap,
         persist: args.persist === true,
@@ -302,6 +308,7 @@ export class ColdToolDiscoveryService {
       input: unknown;
     }>;
     desiredModel: string;
+    providerOverride?: AiProviderName;
     originsByRepositoryId?: Record<string, ColdToolOrigin[]>;
     externalSiteSignalsMap: Map<string, RepositoryExternalSiteSignals | null>;
     persist: boolean;
@@ -318,7 +325,7 @@ export class ColdToolDiscoveryService {
         schemaHint: prompt.schemaHint,
         timeoutMs: Math.max(45_000, args.batch.length * 12_000),
         modelOverride: args.desiredModel,
-        providerOverride: this.readColdToolDiscoveryProvider(),
+        providerOverride: args.providerOverride,
         providerOptions: {
           openai: buildColdToolOpenAiOptions(),
         },
@@ -361,11 +368,13 @@ export class ColdToolDiscoveryService {
           continue;
         }
 
-        const singlePrompt = buildColdToolDiscoveryBatchPrompt([singlePromptInput]);
+        const singlePrompt = buildColdToolDiscoveryPrompt(
+          singlePromptInput.input,
+        );
 
         try {
           const aiResult = await this.aiRouterService.generateJson<
-            BatchColdToolDiscoveryOutputItem[]
+            ColdToolDiscoveryOutput
           >({
             taskType: 'idea_fit',
             prompt: singlePrompt.prompt,
@@ -373,14 +382,14 @@ export class ColdToolDiscoveryService {
             schemaHint: singlePrompt.schemaHint,
             timeoutMs: 45_000,
             modelOverride: args.desiredModel,
-            providerOverride: this.readColdToolDiscoveryProvider(),
+            providerOverride: args.providerOverride,
             providerOptions: {
               openai: buildColdToolOpenAiOptions(),
             },
           });
 
-          const normalizedOutputs = this.normalizeBatchOutputs(aiResult.data, [
-            repository.id,
+          const normalizedOutputs = new Map<string, ColdToolDiscoveryOutput>([
+            [repository.id, this.normalizeOutput(aiResult.data)],
           ]);
           const [result] = await this.buildBatchResults({
             batch: [repository],
@@ -475,6 +484,19 @@ export class ColdToolDiscoveryService {
     }
 
     return undefined;
+  }
+
+  private resolveDiscoveryBatchSize(
+    requestedBatchSize: number | undefined,
+    providerOverride?: AiProviderName,
+  ) {
+    const defaultBatchSize =
+      providerOverride === 'omlx'
+        ? this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE_OMLX', 2, 1)
+        : this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE_OPENAI', 2, 1);
+    const rawBatchSize = requestedBatchSize ?? defaultBatchSize;
+
+    return Math.max(1, Math.min(rawBatchSize, 6));
   }
 
   readColdToolPoolRecord(value: Prisma.JsonValue | null | undefined) {
