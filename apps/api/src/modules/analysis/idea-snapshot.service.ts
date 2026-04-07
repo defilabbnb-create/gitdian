@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, RepositoryStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AiRouterService } from '../ai/ai.router.service';
@@ -67,6 +67,8 @@ export type AnalyzeRepositoriesBatchResult = {
 
 @Injectable()
 export class IdeaSnapshotService {
+  private readonly logger = new Logger(IdeaSnapshotService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouterService: AiRouterService,
@@ -76,7 +78,12 @@ export class IdeaSnapshotService {
 
   async analyzeRepository(
     repositoryId: string,
-    options: { onlyIfMissing?: boolean } = {},
+    options: {
+      onlyIfMissing?: boolean;
+      analysisLane?: string;
+      modelOverride?: string | null;
+      providerOverride?: AiProviderName;
+    } = {},
   ) {
     const repository = await this.prisma.repository.findUnique({
       where: { id: repositoryId },
@@ -104,7 +111,7 @@ export class IdeaSnapshotService {
       }
     }
 
-    return this.analyzeRepositoryRecord(repository);
+    return this.analyzeRepositoryRecord(repository, options);
   }
 
   async analyzeRepositoriesBatch(args: {
@@ -187,63 +194,117 @@ export class IdeaSnapshotService {
         'idea_snapshot',
         basePrompt,
       );
-      const aiResult = await this.aiRouterService.generateJson<
-        BatchIdeaSnapshotOutputItem[]
-      >({
-        taskType: 'idea_snapshot',
-        prompt: prompt.prompt,
-        systemPrompt: prompt.systemPrompt,
-        schemaHint: prompt.schemaHint,
-        timeoutMs: Math.max(30_000, batch.length * 7_500),
-        providerOverride:
-          args.analysisLane === 'cold_tool'
-            ? this.readColdToolSnapshotProvider()
-            : undefined,
-        modelOverride:
-          args.modelOverride ??
-          (args.analysisLane === 'cold_tool'
-            ? this.readColdToolSnapshotModel()
-            : undefined),
-        providerOptions:
-          args.analysisLane === 'cold_tool'
-            ? {
-                openai: buildColdToolOpenAiOptions(),
-              }
-            : undefined,
-      });
-      totalLatencyMs += aiResult.latencyMs;
+      try {
+        const aiResult = await this.aiRouterService.generateJson<
+          BatchIdeaSnapshotOutputItem[]
+        >({
+          taskType: 'idea_snapshot',
+          prompt: prompt.prompt,
+          systemPrompt: prompt.systemPrompt,
+          schemaHint: prompt.schemaHint,
+          timeoutMs: Math.max(30_000, batch.length * 7_500),
+          providerOverride:
+            args.analysisLane === 'cold_tool'
+              ? this.readColdToolSnapshotProvider()
+              : undefined,
+          modelOverride:
+            args.modelOverride ??
+            (args.analysisLane === 'cold_tool'
+              ? this.readColdToolSnapshotModel()
+              : undefined),
+          providerOptions:
+            args.analysisLane === 'cold_tool'
+              ? {
+                  openai: buildColdToolOpenAiOptions(),
+                }
+              : undefined,
+        });
+        totalLatencyMs += aiResult.latencyMs;
 
-      const normalizedOutputs = this.normalizeBatchIdeaSnapshots(
-        aiResult.data,
-        batch.map((repository) => repository.id),
-      );
+        const normalizedOutputs = this.normalizeBatchIdeaSnapshots(
+          aiResult.data,
+          batch.map((repository) => repository.id),
+        );
 
-      for (const repository of batch) {
-        const normalizedOutput = normalizedOutputs.get(repository.id) ?? null;
-        if (normalizedOutput && args.persist) {
-          await this.persistIdeaSnapshotResult({
-            repository,
+        for (const repository of batch) {
+          const normalizedOutput = normalizedOutputs.get(repository.id) ?? null;
+          if (normalizedOutput && args.persist) {
+            await this.persistIdeaSnapshotResult({
+              repository,
+              output: normalizedOutput,
+              provider: aiResult.provider,
+              model: aiResult.model,
+              confidence: aiResult.confidence,
+              rawResponse: aiResult.rawResponse,
+              promptVersion: prompt.promptVersion,
+              fallbackUsed: aiResult.fallbackUsed,
+            });
+          }
+          items.push({
+            repositoryId: repository.id,
+            action: normalizedOutput ? 'analyzed' : 'failed',
             output: normalizedOutput,
             provider: aiResult.provider,
             model: aiResult.model,
-            confidence: aiResult.confidence,
-            rawResponse: aiResult.rawResponse,
-            promptVersion: prompt.promptVersion,
+            latencyMs: aiResult.latencyMs,
             fallbackUsed: aiResult.fallbackUsed,
+            message: normalizedOutput
+              ? null
+              : 'Batch idea snapshot output missing repositoryId.',
           });
         }
-        items.push({
-          repositoryId: repository.id,
-          action: normalizedOutput ? 'analyzed' : 'failed',
-          output: normalizedOutput,
-          provider: aiResult.provider,
-          model: aiResult.model,
-          latencyMs: aiResult.latencyMs,
-          fallbackUsed: aiResult.fallbackUsed,
-          message: normalizedOutput
-            ? null
-            : 'Batch idea snapshot output missing repositoryId.',
-        });
+      } catch (error) {
+        if (args.analysisLane !== 'cold_tool') {
+          throw error;
+        }
+
+        const message =
+          error instanceof Error ? error.message : 'Unknown idea snapshot batch error.';
+        this.logger.warn(
+          `Cold snapshot batch failed; falling back to per-repository execution for ${batch.length} repositories. error=${message}`,
+        );
+
+        for (const repository of batch) {
+          try {
+            const itemResult = await this.analyzeRepositoryRecord(repository, {
+              analysisLane: args.analysisLane,
+              modelOverride: args.modelOverride ?? null,
+              providerOverride: this.readColdToolSnapshotProvider(),
+            });
+            totalLatencyMs += itemResult.latencyMs ?? 0;
+            items.push({
+              repositoryId: repository.id,
+              action: 'analyzed',
+              output: {
+                oneLinerZh: itemResult.oneLinerZh,
+                isPromising: itemResult.isPromising,
+                reason: itemResult.reason,
+                category: itemResult.category,
+                toolLike: itemResult.toolLike,
+                nextAction: itemResult.nextAction,
+              },
+              provider: itemResult.provider,
+              model: itemResult.model,
+              latencyMs: itemResult.latencyMs,
+              fallbackUsed: itemResult.fallbackUsed,
+              message: null,
+            });
+          } catch (itemError) {
+            items.push({
+              repositoryId: repository.id,
+              action: 'failed',
+              output: null,
+              provider: null,
+              model: null,
+              latencyMs: null,
+              fallbackUsed: false,
+              message:
+                itemError instanceof Error
+                  ? itemError.message
+                  : 'Cold snapshot fallback failed.',
+            });
+          }
+        }
       }
     }
 
@@ -315,7 +376,14 @@ export class IdeaSnapshotService {
     } satisfies IdeaSnapshotOutput;
   }
 
-  private async analyzeRepositoryRecord(repository: RepositoryIdeaSnapshotTarget) {
+  private async analyzeRepositoryRecord(
+    repository: RepositoryIdeaSnapshotTarget,
+    options: {
+      analysisLane?: string;
+      modelOverride?: string | null;
+      providerOverride?: AiProviderName;
+    } = {},
+  ) {
     const promptInput = buildIdeaSnapshotPromptInput(repository);
     const basePrompt = buildIdeaSnapshotPrompt(promptInput);
     const prompt = await this.analysisTrainingKnowledgeService.enhancePrompt(
@@ -328,6 +396,22 @@ export class IdeaSnapshotService {
       systemPrompt: prompt.systemPrompt,
       schemaHint: prompt.schemaHint,
       timeoutMs: 20000,
+      providerOverride:
+        options.providerOverride ??
+        (options.analysisLane === 'cold_tool'
+          ? this.readColdToolSnapshotProvider()
+          : undefined),
+      modelOverride:
+        options.modelOverride ??
+        (options.analysisLane === 'cold_tool'
+          ? this.readColdToolSnapshotModel()
+          : undefined),
+      providerOptions:
+        options.analysisLane === 'cold_tool'
+          ? {
+              openai: buildColdToolOpenAiOptions(),
+            }
+          : undefined,
     });
 
     const normalized = await this.analysisTrainingKnowledgeService.buildSnapshotEnhancement({
