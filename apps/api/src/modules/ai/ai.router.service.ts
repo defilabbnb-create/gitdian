@@ -29,11 +29,14 @@ export class AiRouterService {
 
   async generateJson<T>(input: GenerateJsonInput): Promise<AiProviderResult<T>> {
     const settings = await this.settingsService.getSettings();
-    const primaryProviderName = this.resolveProviderForTask(
-      input.taskType,
-      settings.ai.defaultProvider,
-      settings.ai.taskRouting,
-    );
+    const primaryProviderName =
+      input.providerOverride && this.providers[input.providerOverride]
+        ? input.providerOverride
+        : this.resolveProviderForTask(
+            input.taskType,
+            settings.ai.defaultProvider,
+            settings.ai.taskRouting,
+          );
     const primaryProvider = this.providers[primaryProviderName];
     const enrichedInput: GenerateJsonInput = {
       ...input,
@@ -42,11 +45,14 @@ export class AiRouterService {
         input.timeoutMs,
         settings.ai.timeoutMs,
       ),
-      modelOverride: this.resolveModelOverride(
-        primaryProviderName,
-        input.taskType,
-        settings,
-      ),
+      modelOverride:
+        primaryProviderName === 'openai' && input.modelOverride
+          ? input.modelOverride
+          : this.resolveModelOverride(
+              primaryProviderName,
+              input.taskType,
+              settings,
+            ),
     };
 
     try {
@@ -69,11 +75,14 @@ export class AiRouterService {
       try {
         const result = await fallbackProvider.generateJson<T>({
           ...enrichedInput,
-          modelOverride: this.resolveModelOverride(
-            fallbackProviderName,
-            input.taskType,
-            settings,
-          ),
+          modelOverride:
+            fallbackProviderName === 'openai' && input.modelOverride
+              ? input.modelOverride
+              : this.resolveModelOverride(
+                  fallbackProviderName,
+                  input.taskType,
+                  settings,
+                ),
         });
         return {
           ...result,

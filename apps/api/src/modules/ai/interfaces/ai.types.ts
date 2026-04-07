@@ -8,6 +8,12 @@ export type AiTaskType =
 
 export type AiProviderName = 'omlx' | 'openai';
 
+export type OpenAiRequestOptions = {
+  apiKey?: string;
+  baseUrl?: string;
+  laneKey?: string;
+};
+
 export type GenerateJsonInput = {
   taskType: AiTaskType;
   prompt: string;
@@ -15,6 +21,10 @@ export type GenerateJsonInput = {
   schemaHint?: string;
   timeoutMs?: number;
   modelOverride?: string | null;
+  providerOverride?: AiProviderName;
+  providerOptions?: {
+    openai?: OpenAiRequestOptions;
+  };
 };
 
 export type AiProviderResult<T> = {

@@ -589,13 +589,18 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
 
       try {
         const migrated = await this.migrateQueuedColdAnalysisBacklogIfNeeded();
+        const replenished = await this.replenishColdAnalysisQueueIfNeeded();
         const summary = await this.recoverStaleAnalysisSingleJobsIfNeeded();
-        if (!summary.recoveredCount && migrated.migratedCount === 0) {
+        if (
+          !summary.recoveredCount &&
+          migrated.migratedCount === 0 &&
+          replenished.queuedCount === 0
+        ) {
           return;
         }
 
         this.logger.warn(
-          `Analysis.single watchdog migratedCold=${migrated.migratedCount} recovered=${summary.recoveredCount} requeued=${summary.requeuedCount} skipped=${summary.skippedCount}`,
+          `Analysis.single watchdog migratedCold=${migrated.migratedCount} replenishedCold=${replenished.queuedCount} recovered=${summary.recoveredCount} requeued=${summary.requeuedCount} skipped=${summary.skippedCount}`,
         );
       } catch (error) {
         this.logger.warn(
@@ -1486,6 +1491,101 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
 
     return {
       migratedCount,
+    };
+  }
+
+  private async replenishColdAnalysisQueueIfNeeded() {
+    const depth = await this.queueService.getQueueDepth(
+      QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+    );
+    const totalDepth =
+      depth.active + depth.waiting + depth.delayed + depth.prioritized;
+    const targetDepth = this.readConcurrency(
+      'COLD_TOOL_AUTOFILL_DEEP_QUEUE_TARGET',
+      48,
+    );
+
+    if (totalDepth >= targetDepth) {
+      return {
+        queuedCount: 0,
+      };
+    }
+
+    const limit = Math.max(
+      1,
+      this.readConcurrency('COLD_TOOL_BACKLOG_REPLENISH_LIMIT', 24),
+    );
+    const rows = await this.prisma.repositoryAnalysis.findMany({
+      where: {
+        tags: {
+          has: 'cold_tool_pool',
+        },
+        OR: [
+          {
+            completenessJson: {
+              equals: Prisma.AnyNull,
+            },
+          },
+          {
+            ideaFitJson: {
+              equals: Prisma.AnyNull,
+            },
+          },
+          {
+            extractedIdeaJson: {
+              equals: Prisma.AnyNull,
+            },
+          },
+          {
+            insightJson: {
+              equals: Prisma.AnyNull,
+            },
+          },
+        ],
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+      take: limit,
+      select: {
+        repositoryId: true,
+      },
+    });
+
+    if (!rows.length) {
+      return {
+        queuedCount: 0,
+      };
+    }
+
+    const results = await this.queueService.enqueueSingleAnalysesBulk(
+      rows.map((row) => ({
+        repositoryId: row.repositoryId,
+        dto: {
+          runFastFilter: false,
+          runCompleteness: true,
+          runIdeaFit: true,
+          runIdeaExtract: true,
+          forceRerun: false,
+          analysisLane: 'cold_tool',
+        } as RunAnalysisDto,
+        triggeredBy: 'cold_tool_backlog_replenish',
+        metadata: {
+          fromColdToolCollector: true,
+          replenishedFromColdPool: true,
+        },
+        jobOptionsOverride: {
+          priority: this.readConcurrency(
+            'COLD_TOOL_DEEP_ANALYSIS_PRIORITY',
+            18,
+          ),
+        },
+      })),
+      'cold_tool_backlog_replenish',
+    );
+
+    return {
+      queuedCount: results.filter((result) => result.jobStatus === 'PENDING').length,
     };
   }
 
