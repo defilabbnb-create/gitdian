@@ -26,7 +26,12 @@ import { GitHubIdeaSnapshotJobPayload } from '../github/types/github.types';
 import { JobLogService } from '../job-log/job-log.service';
 import { AdaptiveSchedulerService } from '../scheduler/adaptive-scheduler.service';
 import { getQueueConnection } from './queue.redis';
-import { QUEUE_JOB_TYPES, QUEUE_NAMES, QueueName } from './queue.constants';
+import {
+  QUEUE_JOB_TYPES,
+  QUEUE_NAMES,
+  QueueJobType,
+  QueueName,
+} from './queue.constants';
 
 export const GITHUB_NEW_REPOSITORY_INTAKE_ENV_NAMES = [
   'GITHUB_NEW_REPOSITORY_INTAKE_ENABLED',
@@ -451,9 +456,17 @@ export class QueueService implements OnModuleDestroy {
       source: 'analysis_snapshot',
       repositoryIds: [payload.repositoryId],
     });
+    const queueName =
+      payload.analysisLane === 'cold_tool'
+        ? QUEUE_NAMES.ANALYSIS_SNAPSHOT_COLD
+        : QUEUE_NAMES.ANALYSIS_SNAPSHOT;
+    const jobName =
+      payload.analysisLane === 'cold_tool'
+        ? QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT_COLD
+        : QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT;
     return this.enqueueJob({
-      queueName: QUEUE_NAMES.ANALYSIS_SNAPSHOT,
-      jobName: QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT,
+      queueName,
+      jobName,
       payload,
       triggeredBy,
       parentJobId: options.parentJobId,
@@ -476,75 +489,108 @@ export class QueueService implements OnModuleDestroy {
       source: 'analysis_snapshot',
       repositoryIds: entries.map((entry) => entry.payload.repositoryId),
     });
+    const groupedEntries = new Map<
+      QueueName,
+      {
+        jobName: QueueJobType;
+        entries: IdeaSnapshotBulkEntry[];
+      }
+    >();
 
-    const queueName = QUEUE_NAMES.ANALYSIS_SNAPSHOT;
-    const jobName = QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT;
-    const queue = this.getQueue(queueName);
-    const options = entries.map((entry) => ({
-      ...this.buildJobOptions(queueName),
-      ...(entry.jobOptionsOverride ?? {}),
-    }));
+    for (const entry of entries) {
+      const queueName =
+        entry.payload.analysisLane === 'cold_tool'
+          ? QUEUE_NAMES.ANALYSIS_SNAPSHOT_COLD
+          : QUEUE_NAMES.ANALYSIS_SNAPSHOT;
+      const jobName =
+        entry.payload.analysisLane === 'cold_tool'
+          ? QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT_COLD
+          : QUEUE_JOB_TYPES.ANALYSIS_SNAPSHOT;
+      const current = groupedEntries.get(queueName);
+      if (current) {
+        current.entries.push(entry);
+        continue;
+      }
+      groupedEntries.set(queueName, {
+        jobName,
+        entries: [entry],
+      });
+    }
 
-    const jobLogs = await this.startQueueJobsBulk(
-      entries.map((entry, index) =>
-        ({
-          jobName,
-          jobStatus: JobStatus.PENDING,
-          queueName,
-          payload: entry.payload,
-          triggeredBy: entry.triggeredBy ?? triggeredBy,
-          attempts: options[index].attempts ?? 1,
-          retryCount: 0,
-          parentJobId: entry.parentJobId ?? parentJobId,
-          startedAt: null,
-        }) as const,
-      ),
-    );
+    const results: EnqueueResult[] = [];
 
-    let jobs;
-    try {
-      jobs = await queue.addBulk(
-        jobLogs.map((jobLog, index) => ({
-          name: jobName,
-          data: {
-            ...entries[index].payload,
-            jobLogId: jobLog.id,
+    for (const [queueName, group] of groupedEntries.entries()) {
+      const queue = this.getQueue(queueName);
+      const options = group.entries.map((entry) => ({
+        ...this.buildJobOptions(queueName),
+        ...(entry.jobOptionsOverride ?? {}),
+      }));
+
+      const jobLogs = await this.startQueueJobsBulk(
+        group.entries.map((entry, index) =>
+          ({
+            jobName: group.jobName,
+            jobStatus: JobStatus.PENDING,
+            queueName,
+            payload: entry.payload,
+            triggeredBy: entry.triggeredBy ?? triggeredBy,
+            attempts: options[index].attempts ?? 1,
+            retryCount: 0,
+            parentJobId: entry.parentJobId ?? parentJobId,
+            startedAt: null,
+          }) as const,
+        ),
+      );
+
+      let jobs;
+      try {
+        jobs = await queue.addBulk(
+          jobLogs.map((jobLog, index) => ({
+            name: group.jobName,
+            data: {
+              ...group.entries[index].payload,
+              jobLogId: jobLog.id,
+            },
+            opts: options[index],
+          })),
+        );
+      } catch (error) {
+        await this.cancelQueueJobsBulk(jobLogs.map((jobLog) => jobLog.id), {
+          errorMessage: 'Task cancelled because bulk queue add failed.',
+          result: {
+            bulkQueueAddFailed: true,
+            queueName,
           },
-          opts: options[index],
+        });
+        throw error;
+      }
+
+      const attachInputs = jobs.map((job, index) => ({
+        jobId: jobLogs[index].id,
+        queueName,
+        queueJobId: String(job.id),
+        attempts: options[index].attempts ?? 1,
+      }));
+
+      try {
+        await this.attachQueueJobsBulk(attachInputs);
+      } catch {
+        await Promise.all(
+          attachInputs.map((input) => this.jobLogService.attachQueueJob(input)),
+        );
+      }
+
+      results.push(
+        ...jobs.map((job, index) => ({
+          jobId: jobLogs[index].id,
+          queueName,
+          queueJobId: String(job.id),
+          jobStatus: JobStatus.PENDING,
         })),
       );
-    } catch (error) {
-      await this.cancelQueueJobsBulk(jobLogs.map((jobLog) => jobLog.id), {
-        errorMessage: 'Task cancelled because bulk queue add failed.',
-        result: {
-          bulkQueueAddFailed: true,
-          queueName,
-        },
-      });
-      throw error;
     }
 
-    const attachInputs = jobs.map((job, index) => ({
-      jobId: jobLogs[index].id,
-      queueName,
-      queueJobId: String(job.id),
-      attempts: options[index].attempts ?? 1,
-    }));
-
-    try {
-      await this.attachQueueJobsBulk(attachInputs);
-    } catch {
-      await Promise.all(
-        attachInputs.map((input) => this.jobLogService.attachQueueJob(input)),
-      );
-    }
-
-    return jobs.map((job, index) => ({
-      jobId: jobLogs[index].id,
-      queueName,
-      queueJobId: String(job.id),
-      jobStatus: JobStatus.PENDING,
-    }));
+    return results;
   }
 
   async enqueueBatchAnalysis(

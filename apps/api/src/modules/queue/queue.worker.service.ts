@@ -98,6 +98,14 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
           job as Job<QueueJobData & GitHubIdeaSnapshotJobPayload>,
         ),
       ),
+      this.createWorker(
+        QUEUE_NAMES.ANALYSIS_SNAPSHOT_COLD,
+        snapshotConcurrency,
+        (job) =>
+          this.handleIdeaSnapshot(
+            job as Job<QueueJobData & GitHubIdeaSnapshotJobPayload>,
+          ),
+      ),
       this.createWorker(QUEUE_NAMES.ANALYSIS_SINGLE, deepAnalysisConcurrency, (job) =>
         this.handleSingleAnalysis(
           job as Job<
@@ -898,8 +906,12 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (result.deepAnalysis.shouldQueue) {
+        const deepQueueName =
+          job.data.analysisLane === 'cold_tool'
+            ? QUEUE_NAMES.ANALYSIS_SINGLE_COLD
+            : QUEUE_NAMES.ANALYSIS_SINGLE;
         const deepQueueDepth = await this.queueService.getQueueDepth(
-          QUEUE_NAMES.ANALYSIS_SINGLE,
+          deepQueueName,
         );
         const deepQueueHighWatermark = this.resolveDeepQueueHighWatermark();
 
@@ -925,12 +937,16 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
             runIdeaExtract: true,
             forceRerun: false,
             useDeepBundle: job.data.forceDeepAnalysis === true,
+            analysisLane: job.data.analysisLane,
           },
-          'backfill',
+          job.data.analysisLane === 'cold_tool'
+            ? 'cold_tool_collector'
+            : 'backfill',
           {
             parentJobId: result.deepAnalysis.parentJobId ?? undefined,
             metadata: {
               fromBackfill: true,
+              fromColdToolCollector: job.data.analysisLane === 'cold_tool',
               fullDbCatchup: job.data.forceDeepAnalysis === true,
               windowDate: result.windowDate,
               snapshotJobId: job.data.jobLogId,
