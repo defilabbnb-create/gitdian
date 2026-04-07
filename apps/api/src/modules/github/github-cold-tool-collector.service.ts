@@ -720,19 +720,32 @@ export class GitHubColdToolCollectorService {
 
     const chunkRepositoryIds = snapshotRepositoryChunks[chunkIndex];
     await this.emitRuntimeFromResumeState(state, 'snapshot', 70, options);
-    const result = await this.ideaSnapshotService.analyzeRepositoriesBatch({
-      repositoryIds: chunkRepositoryIds,
-      batchSize: this.readPositiveInt('COLD_TOOL_SNAPSHOT_BATCH_SIZE', 8, 1),
-      onlyIfMissing: true,
-      persist: true,
-      analysisLane: 'cold_tool',
-      modelOverride:
-        this.cleanText(process.env.COLD_TOOL_SNAPSHOT_MODEL, 80) ??
-        this.cleanText(process.env.COLD_TOOL_OPENAI_LIGHT_MODEL, 80) ??
-        this.cleanText(process.env.COLD_TOOL_OPENAI_MODEL, 80) ??
-        undefined,
-    });
-    state.snapshotProcessed += result.processed;
+    let processedInChunk = 0;
+    await this.runWithConcurrency(
+      chunkRepositoryIds,
+      this.readPositiveInt('COLD_TOOL_SNAPSHOT_ITEM_CONCURRENCY', 3, 1),
+      async (repositoryId) => {
+        try {
+          await this.ideaSnapshotService.analyzeRepository(repositoryId, {
+            onlyIfMissing: true,
+            analysisLane: 'cold_tool',
+            modelOverride:
+              this.cleanText(process.env.COLD_TOOL_SNAPSHOT_MODEL, 80) ??
+              this.cleanText(process.env.COLD_TOOL_OPENAI_LIGHT_MODEL, 80) ??
+              this.cleanText(process.env.COLD_TOOL_OPENAI_MODEL, 80) ??
+              undefined,
+          });
+          processedInChunk += 1;
+        } catch (error) {
+          this.logger.warn(
+            `cold_tool_snapshot_repository_failed repositoryId=${repositoryId} reason=${
+              error instanceof Error ? error.message : 'unknown'
+            }`,
+          );
+        }
+      },
+    );
+    state.snapshotProcessed += processedInChunk;
     const earlyDiscoveryEnabled = this.readBoolean(
       'COLD_TOOL_EARLY_DISCOVERY_AFTER_SNAPSHOT',
       true,
