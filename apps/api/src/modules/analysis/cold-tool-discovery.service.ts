@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AiRouterService } from '../ai/ai.router.service';
+import { AiProviderName } from '../ai/interfaces/ai.types';
 import {
   ExternalSiteEvidenceService,
   RepositoryExternalSiteSignals,
@@ -99,6 +100,8 @@ const COLD_TOOL_POOL_TAG = 'cold_tool_pool';
 
 @Injectable()
 export class ColdToolDiscoveryService {
+  private readonly logger = new Logger(ColdToolDiscoveryService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouterService: AiRouterService,
@@ -255,66 +258,14 @@ export class ColdToolDiscoveryService {
           externalSiteSignalsMap.get(repository.id) ?? null,
         ),
       }));
-      const prompt = buildColdToolDiscoveryBatchPrompt(promptInputs);
-      const aiResult = await this.aiRouterService.generateJson<
-        BatchColdToolDiscoveryOutputItem[]
-      >({
-        taskType: 'idea_fit',
-        prompt: prompt.prompt,
-        systemPrompt: prompt.systemPrompt,
-        schemaHint: prompt.schemaHint,
-        timeoutMs: Math.max(45_000, batch.length * 12_000),
-        modelOverride: desiredModel,
-        providerOptions: {
-          openai: buildColdToolOpenAiOptions(),
-        },
+      const currentBatchResults = await this.analyzeBatchWithFallback({
+        batch,
+        promptInputs,
+        desiredModel,
+        originsByRepositoryId: args.originsByRepositoryId,
+        externalSiteSignalsMap,
+        persist: args.persist === true,
       });
-
-      const normalizedOutputs = this.normalizeBatchOutputs(
-        aiResult.data,
-        batch.map((repository) => repository.id),
-      );
-      const currentBatchResults: BatchColdToolDiscoveryResultItem[] = [];
-
-      for (const repository of batch) {
-        const normalizedOutput = normalizedOutputs.get(repository.id) ?? null;
-        const origins = this.normalizeOrigins(
-          args.originsByRepositoryId?.[repository.id] ?? [],
-        );
-
-        if (!normalizedOutput) {
-          currentBatchResults.push({
-            repositoryId: repository.id,
-            action: 'failed',
-            output: null,
-            message: 'Cold tool discovery output missing repositoryId.',
-          });
-          continue;
-        }
-
-        const record = this.buildColdToolPoolRecord({
-          output: normalizedOutput,
-          origins,
-          provider: aiResult.provider,
-          model: aiResult.model,
-          promptVersion: prompt.promptVersion,
-        });
-
-        if (args.persist) {
-          await this.persistColdToolPoolRecord(
-            repository,
-            record,
-            externalSiteSignalsMap.get(repository.id) ?? null,
-          );
-        }
-
-        currentBatchResults.push({
-          repositoryId: repository.id,
-          action: 'analyzed',
-          output: record,
-          message: null,
-        });
-      }
 
       batchResults.push(currentBatchResults);
       completedBatches += 1;
@@ -342,6 +293,188 @@ export class ColdToolDiscoveryService {
       ).length,
       items,
     };
+  }
+
+  private async analyzeBatchWithFallback(args: {
+    batch: RepositoryColdToolTarget[];
+    promptInputs: Array<{
+      repoId: string;
+      input: unknown;
+    }>;
+    desiredModel: string;
+    originsByRepositoryId?: Record<string, ColdToolOrigin[]>;
+    externalSiteSignalsMap: Map<string, RepositoryExternalSiteSignals | null>;
+    persist: boolean;
+  }) {
+    const prompt = buildColdToolDiscoveryBatchPrompt(args.promptInputs);
+
+    try {
+      const aiResult = await this.aiRouterService.generateJson<
+        BatchColdToolDiscoveryOutputItem[]
+      >({
+        taskType: 'idea_fit',
+        prompt: prompt.prompt,
+        systemPrompt: prompt.systemPrompt,
+        schemaHint: prompt.schemaHint,
+        timeoutMs: Math.max(45_000, args.batch.length * 12_000),
+        modelOverride: args.desiredModel,
+        providerOverride: this.readColdToolDiscoveryProvider(),
+        providerOptions: {
+          openai: buildColdToolOpenAiOptions(),
+        },
+      });
+
+      return this.buildBatchResults({
+        batch: args.batch,
+        normalizedOutputs: this.normalizeBatchOutputs(
+          aiResult.data,
+          args.batch.map((repository) => repository.id),
+        ),
+        provider: aiResult.provider,
+        model: aiResult.model,
+        promptVersion: prompt.promptVersion,
+        originsByRepositoryId: args.originsByRepositoryId,
+        externalSiteSignalsMap: args.externalSiteSignalsMap,
+        persist: args.persist,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown cold tool discovery batch error.';
+      this.logger.warn(
+        `Cold tool discovery batch failed; falling back to per-repository execution for ${args.batch.length} repositories. error=${message}`,
+      );
+
+      const results: BatchColdToolDiscoveryResultItem[] = [];
+
+      for (const repository of args.batch) {
+        const singlePromptInput = args.promptInputs.find(
+          (item) => item.repoId === repository.id,
+        );
+
+        if (!singlePromptInput) {
+          results.push({
+            repositoryId: repository.id,
+            action: 'failed',
+            output: null,
+            message: 'Cold tool discovery prompt input missing.',
+          });
+          continue;
+        }
+
+        const singlePrompt = buildColdToolDiscoveryBatchPrompt([singlePromptInput]);
+
+        try {
+          const aiResult = await this.aiRouterService.generateJson<
+            BatchColdToolDiscoveryOutputItem[]
+          >({
+            taskType: 'idea_fit',
+            prompt: singlePrompt.prompt,
+            systemPrompt: singlePrompt.systemPrompt,
+            schemaHint: singlePrompt.schemaHint,
+            timeoutMs: 45_000,
+            modelOverride: args.desiredModel,
+            providerOverride: this.readColdToolDiscoveryProvider(),
+            providerOptions: {
+              openai: buildColdToolOpenAiOptions(),
+            },
+          });
+
+          const normalizedOutputs = this.normalizeBatchOutputs(aiResult.data, [
+            repository.id,
+          ]);
+          const [result] = await this.buildBatchResults({
+            batch: [repository],
+            normalizedOutputs,
+            provider: aiResult.provider,
+            model: aiResult.model,
+            promptVersion: singlePrompt.promptVersion,
+            originsByRepositoryId: args.originsByRepositoryId,
+            externalSiteSignalsMap: args.externalSiteSignalsMap,
+            persist: args.persist,
+          });
+          results.push(result);
+        } catch (singleError) {
+          results.push({
+            repositoryId: repository.id,
+            action: 'failed',
+            output: null,
+            message:
+              singleError instanceof Error
+                ? singleError.message
+                : 'Cold tool discovery fallback failed.',
+          });
+        }
+      }
+
+      return results;
+    }
+  }
+
+  private async buildBatchResults(args: {
+    batch: RepositoryColdToolTarget[];
+    normalizedOutputs: Map<string, ColdToolDiscoveryOutput>;
+    provider: string | null;
+    model: string | null;
+    promptVersion: string;
+    originsByRepositoryId?: Record<string, ColdToolOrigin[]>;
+    externalSiteSignalsMap: Map<string, RepositoryExternalSiteSignals | null>;
+    persist: boolean;
+  }) {
+    const results: BatchColdToolDiscoveryResultItem[] = [];
+
+    for (const repository of args.batch) {
+      const normalizedOutput = args.normalizedOutputs.get(repository.id) ?? null;
+      const origins = this.normalizeOrigins(
+        args.originsByRepositoryId?.[repository.id] ?? [],
+      );
+
+      if (!normalizedOutput) {
+        results.push({
+          repositoryId: repository.id,
+          action: 'failed',
+          output: null,
+          message: 'Cold tool discovery output missing repositoryId.',
+        });
+        continue;
+      }
+
+      const record = this.buildColdToolPoolRecord({
+        output: normalizedOutput,
+        origins,
+        provider: args.provider,
+        model: args.model,
+        promptVersion: args.promptVersion,
+      });
+
+      if (args.persist) {
+        await this.persistColdToolPoolRecord(
+          repository,
+          record,
+          args.externalSiteSignalsMap.get(repository.id) ?? null,
+        );
+      }
+
+      results.push({
+        repositoryId: repository.id,
+        action: 'analyzed',
+        output: record,
+        message: null,
+      });
+    }
+
+    return results;
+  }
+
+  private readColdToolDiscoveryProvider(): AiProviderName | undefined {
+    const normalized = String(
+      process.env.COLD_TOOL_DISCOVERY_PROVIDER ?? '',
+    ).trim().toLowerCase();
+
+    if (normalized === 'omlx' || normalized === 'openai') {
+      return normalized;
+    }
+
+    return undefined;
   }
 
   readColdToolPoolRecord(value: Prisma.JsonValue | null | undefined) {

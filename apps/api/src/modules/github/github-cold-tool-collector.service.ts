@@ -721,6 +721,16 @@ export class GitHubColdToolCollectorService {
     const chunkRepositoryIds = snapshotRepositoryChunks[chunkIndex];
     await this.emitRuntimeFromResumeState(state, 'snapshot', 70, options);
     let processedInChunk = 0;
+    let lastSnapshotHeartbeatAt = Date.now();
+    const emitSnapshotHeartbeat = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastSnapshotHeartbeatAt < 15_000) {
+        return;
+      }
+
+      lastSnapshotHeartbeatAt = now;
+      await this.emitRuntimeFromResumeState(state, 'snapshot', 70, options);
+    };
     await this.runWithConcurrency(
       chunkRepositoryIds,
       this.readPositiveInt('COLD_TOOL_SNAPSHOT_ITEM_CONCURRENCY', 3, 1),
@@ -742,9 +752,12 @@ export class GitHubColdToolCollectorService {
               error instanceof Error ? error.message : 'unknown'
             }`,
           );
+        } finally {
+          await emitSnapshotHeartbeat();
         }
       },
     );
+    await emitSnapshotHeartbeat(true);
     state.snapshotProcessed += processedInChunk;
     const earlyDiscoveryEnabled = this.readBoolean(
       'COLD_TOOL_EARLY_DISCOVERY_AFTER_SNAPSHOT',
@@ -763,49 +776,70 @@ export class GitHubColdToolCollectorService {
       const earlyDiscoveryRepositoryIds = chunkRepositoryIds.filter(
         (repositoryId) => !discoveryProcessedRepositoryIds.has(repositoryId),
       );
-      if (earlyDiscoveryRepositoryIds.length) {
-        const matchedRepositoryIds = new Set(state.matchedRepositoryIds);
-        const deepQueuedRepositoryIds = new Set(state.deepQueuedRepositoryIds);
-        const discoveryResult =
-          await this.coldToolDiscoveryService.analyzeRepositoriesBatch({
-            repositoryIds: earlyDiscoveryRepositoryIds,
-            originsByRepositoryId: chunkOriginsByRepositoryId,
-            batchSize: this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE', 4, 1),
-            persist: true,
-            forceRefresh: dto.forceRefresh,
-            modelOverride:
-              dto.modelOverride ??
-              this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
-              'gpt-5.4',
-          });
-        state.coldToolEvaluated += discoveryResult.processed;
-        const newlyMatchedRepositoryIds = new Set<string>();
-        for (const item of discoveryResult.items) {
-          if (item.output?.fitsColdToolPool === true) {
-            matchedRepositoryIds.add(item.repositoryId);
-            newlyMatchedRepositoryIds.add(item.repositoryId);
+        if (earlyDiscoveryRepositoryIds.length) {
+          const matchedRepositoryIds = new Set(state.matchedRepositoryIds);
+          const deepQueuedRepositoryIds = new Set(state.deepQueuedRepositoryIds);
+          try {
+            const discoveryResult =
+              await this.coldToolDiscoveryService.analyzeRepositoriesBatch({
+                repositoryIds: earlyDiscoveryRepositoryIds,
+                originsByRepositoryId: chunkOriginsByRepositoryId,
+                batchSize: this.readPositiveInt(
+                  'COLD_TOOL_DISCOVERY_BATCH_SIZE',
+                  4,
+                  1,
+                ),
+                persist: true,
+                forceRefresh: dto.forceRefresh,
+                modelOverride:
+                  dto.modelOverride ??
+                  this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
+                  'gpt-5.4',
+                onBatchProgress: async () => {
+                  await this.emitRuntimeFromResumeState(
+                    state,
+                    'snapshot',
+                    70,
+                    options,
+                    matchedRepositoryIds,
+                  );
+                },
+              });
+            state.coldToolEvaluated += discoveryResult.processed;
+            const newlyMatchedRepositoryIds = new Set<string>();
+            for (const item of discoveryResult.items) {
+              if (item.output?.fitsColdToolPool === true) {
+                matchedRepositoryIds.add(item.repositoryId);
+                newlyMatchedRepositoryIds.add(item.repositoryId);
+              }
+            }
+            state.matchedRepositoryIds = Array.from(matchedRepositoryIds);
+            const incrementalQueueCandidates = Array.from(
+              newlyMatchedRepositoryIds,
+            ).filter((repositoryId) => !deepQueuedRepositoryIds.has(repositoryId));
+            if (incrementalQueueCandidates.length) {
+              const incrementalQueued = await this.enqueueColdToolDeepAnalyses(
+                incrementalQueueCandidates,
+              );
+              state.deepAnalysisQueued += incrementalQueued.queuedCount;
+              incrementalQueued.queuedRepositoryIds.forEach((repositoryId) =>
+                deepQueuedRepositoryIds.add(repositoryId),
+              );
+            }
+          } catch (error) {
+            this.logger.warn(
+              `cold_tool_snapshot_early_discovery_failed runId=${state.runId} repositoryCount=${earlyDiscoveryRepositoryIds.length} reason=${
+                error instanceof Error ? error.message : 'unknown'
+              }`,
+            );
           }
-        }
-        state.matchedRepositoryIds = Array.from(matchedRepositoryIds);
-        const incrementalQueueCandidates = Array.from(newlyMatchedRepositoryIds).filter(
-          (repositoryId) => !deepQueuedRepositoryIds.has(repositoryId),
-        );
-        if (incrementalQueueCandidates.length) {
-          const incrementalQueued = await this.enqueueColdToolDeepAnalyses(
-            incrementalQueueCandidates,
+          earlyDiscoveryRepositoryIds.forEach((repositoryId) =>
+            discoveryProcessedRepositoryIds.add(repositoryId),
           );
-          state.deepAnalysisQueued += incrementalQueued.queuedCount;
-          incrementalQueued.queuedRepositoryIds.forEach((repositoryId) =>
-            deepQueuedRepositoryIds.add(repositoryId),
+          state.discoveryProcessedRepositoryIds = Array.from(
+            discoveryProcessedRepositoryIds,
           );
-        }
-        earlyDiscoveryRepositoryIds.forEach((repositoryId) =>
-          discoveryProcessedRepositoryIds.add(repositoryId),
-        );
-        state.discoveryProcessedRepositoryIds = Array.from(
-          discoveryProcessedRepositoryIds,
-        );
-        state.deepQueuedRepositoryIds = Array.from(deepQueuedRepositoryIds);
+          state.deepQueuedRepositoryIds = Array.from(deepQueuedRepositoryIds);
       }
     }
     state.snapshotChunkIndex = chunkIndex + 1;

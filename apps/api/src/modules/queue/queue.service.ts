@@ -87,6 +87,9 @@ type ActiveSingleAnalysisJobLog = {
   queueJobId: string | null;
   jobStatus: JobStatus;
   payload: Prisma.JsonValue | null;
+  result?: Prisma.JsonValue | null;
+  createdAt?: Date;
+  startedAt?: Date | null;
   updatedAt?: Date;
   progress?: number;
 };
@@ -234,12 +237,12 @@ export class QueueService implements OnModuleDestroy {
   private async recoverStaleColdToolCollectorEnqueueBlocker(
     jobLog: ActiveSingleAnalysisJobLog,
   ) {
-    const staleMs = this.readPositiveIntEnv(
-      process.env.COLD_TOOL_COLLECT_ENQUEUE_STALE_MS,
-      120_000,
+    const staleMs = this.resolveColdToolCollectorEnqueueStaleMs();
+    const runtime = this.readColdToolRuntimeState(jobLog.result ?? null);
+    const heartbeatAgeMs = this.getColdToolCollectorHeartbeatAgeMs(
+      jobLog,
+      runtime,
     );
-    const updatedAtMs = jobLog.updatedAt?.getTime() ?? 0;
-    const ageMs = updatedAtMs > 0 ? Date.now() - updatedAtMs : Number.POSITIVE_INFINITY;
 
     const queueSnapshot = jobLog.queueJobId
       ? await this.getQueueJobSnapshot(
@@ -250,11 +253,11 @@ export class QueueService implements OnModuleDestroy {
     const queueMissing = !queueSnapshot;
     const stale =
       queueMissing ||
-      ageMs >= staleMs ||
+      heartbeatAgeMs >= staleMs ||
       (jobLog.jobStatus === JobStatus.PENDING &&
         queueSnapshot &&
         ['waiting', 'delayed', 'prioritized'].includes(queueSnapshot.state) &&
-        ageMs >= staleMs / 2);
+        heartbeatAgeMs >= staleMs / 2);
 
     if (!stale) {
       return false;
@@ -271,8 +274,8 @@ export class QueueService implements OnModuleDestroy {
       );
     }
 
-    const ageSecondsText = Number.isFinite(ageMs)
-      ? `${Math.max(0, Math.round(ageMs / 1000))}s`
+    const ageSecondsText = Number.isFinite(heartbeatAgeMs)
+      ? `${Math.max(0, Math.round(heartbeatAgeMs / 1000))}s`
       : 'unknown duration';
 
     await this.jobLogService.failJob({
@@ -283,6 +286,9 @@ export class QueueService implements OnModuleDestroy {
         staleEnqueueBlocker: true,
         queueState: queueSnapshot?.state ?? null,
         queueJobId: jobLog.queueJobId,
+        currentStage: runtime.currentStage,
+        runtimeUpdatedAt: runtime.runtimeUpdatedAt,
+        heartbeatAgeMs,
         recoveredAt: new Date().toISOString(),
       },
     });
@@ -1087,8 +1093,93 @@ export class QueueService implements OnModuleDestroy {
         queueJobId: true,
         jobStatus: true,
         payload: true,
+        result: true,
+        createdAt: true,
+        startedAt: true,
+        updatedAt: true,
+        progress: true,
       },
     })) as ActiveSingleAnalysisJobLog | null;
+  }
+
+  private readColdToolRuntimeState(result: Prisma.JsonValue | null) {
+    const resultRecord =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? this.ensurePayload(result)
+        : {};
+    const runtimeRecord =
+      resultRecord.runtime && typeof resultRecord.runtime === 'object'
+        ? this.ensurePayload(resultRecord.runtime as Prisma.JsonValue)
+        : {};
+
+    return {
+      currentStage: this.toNullableString(runtimeRecord.currentStage),
+      runtimeUpdatedAt: this.toNullableString(runtimeRecord.runtimeUpdatedAt),
+    };
+  }
+
+  private getColdToolCollectorHeartbeatAgeMs(
+    jobLog: ActiveSingleAnalysisJobLog,
+    runtime: {
+      currentStage: string | null;
+      runtimeUpdatedAt: string | null;
+    },
+  ) {
+    const runtimeHeartbeatAt = this.parseTimestamp(runtime.runtimeUpdatedAt);
+    const persistedHeartbeatAt = jobLog.updatedAt?.getTime() ?? null;
+    const referenceTime =
+      runtimeHeartbeatAt && persistedHeartbeatAt
+        ? Math.max(runtimeHeartbeatAt, persistedHeartbeatAt)
+        : runtimeHeartbeatAt ??
+          persistedHeartbeatAt ??
+          jobLog.startedAt?.getTime() ??
+          jobLog.createdAt?.getTime() ??
+          null;
+
+    if (!referenceTime) {
+      return 0;
+    }
+
+    return Math.max(0, Date.now() - referenceTime);
+  }
+
+  private resolveColdToolCollectorEnqueueStaleMs() {
+    const configuredMs = this.readPositiveIntEnv(
+      process.env.COLD_TOOL_COLLECT_ENQUEUE_STALE_MS,
+      120_000,
+    );
+    const runtimeHeartbeatMs = this.readPositiveIntEnv(
+      process.env.QUEUE_RUNTIME_HEARTBEAT_MS,
+      30_000,
+    );
+    const watchdogMinutes = this.readPositiveIntEnv(
+      process.env.COLD_TOOL_STALE_RUNTIME_MINUTES,
+      10,
+    );
+
+    return Math.max(
+      configuredMs,
+      runtimeHeartbeatMs * 6,
+      watchdogMinutes * 60_000,
+    );
+  }
+
+  private parseTimestamp(value: string | null) {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private toNullableString(value: unknown) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const normalized = value.trim();
+    return normalized.length ? normalized : null;
   }
 
   private toExistingEnqueueResult(jobLog: ActiveSingleAnalysisJobLog): EnqueueResult {
