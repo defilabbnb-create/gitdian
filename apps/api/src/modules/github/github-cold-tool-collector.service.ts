@@ -114,6 +114,7 @@ type ColdToolCollectorResumeState = {
   snapshotChunkIndex: number;
   coldToolEvaluated: number;
   discoveryChunkIndex: number;
+  discoveryProcessedRepositoryIds: string[];
   matchedRepositoryIds: string[];
   deepQueuedRepositoryIds: string[];
   deepAnalysisQueued: number;
@@ -417,6 +418,7 @@ export class GitHubColdToolCollectorService {
       snapshotChunkIndex: 0,
       coldToolEvaluated,
       discoveryChunkIndex: 0,
+      discoveryProcessedRepositoryIds: [],
       matchedRepositoryIds: [],
       deepQueuedRepositoryIds: [],
       deepAnalysisQueued,
@@ -731,6 +733,68 @@ export class GitHubColdToolCollectorService {
         undefined,
     });
     state.snapshotProcessed += result.processed;
+    const earlyDiscoveryEnabled = this.readBoolean(
+      'COLD_TOOL_EARLY_DISCOVERY_AFTER_SNAPSHOT',
+      true,
+    );
+    if (earlyDiscoveryEnabled) {
+      const discoveryProcessedRepositoryIds = new Set(
+        state.discoveryProcessedRepositoryIds,
+      );
+      const chunkOriginsByRepositoryId = Object.fromEntries(
+        chunkRepositoryIds.map((repositoryId: string) => [
+          repositoryId,
+          state.originsByRepositoryId[repositoryId] ?? [],
+        ]),
+      );
+      const earlyDiscoveryRepositoryIds = chunkRepositoryIds.filter(
+        (repositoryId) => !discoveryProcessedRepositoryIds.has(repositoryId),
+      );
+      if (earlyDiscoveryRepositoryIds.length) {
+        const matchedRepositoryIds = new Set(state.matchedRepositoryIds);
+        const deepQueuedRepositoryIds = new Set(state.deepQueuedRepositoryIds);
+        const discoveryResult =
+          await this.coldToolDiscoveryService.analyzeRepositoriesBatch({
+            repositoryIds: earlyDiscoveryRepositoryIds,
+            originsByRepositoryId: chunkOriginsByRepositoryId,
+            batchSize: this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE', 4, 1),
+            persist: true,
+            forceRefresh: dto.forceRefresh,
+            modelOverride:
+              dto.modelOverride ??
+              this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
+              'gpt-5.4',
+          });
+        state.coldToolEvaluated += discoveryResult.processed;
+        const newlyMatchedRepositoryIds = new Set<string>();
+        for (const item of discoveryResult.items) {
+          if (item.output?.fitsColdToolPool === true) {
+            matchedRepositoryIds.add(item.repositoryId);
+            newlyMatchedRepositoryIds.add(item.repositoryId);
+          }
+        }
+        state.matchedRepositoryIds = Array.from(matchedRepositoryIds);
+        const incrementalQueueCandidates = Array.from(newlyMatchedRepositoryIds).filter(
+          (repositoryId) => !deepQueuedRepositoryIds.has(repositoryId),
+        );
+        if (incrementalQueueCandidates.length) {
+          const incrementalQueued = await this.enqueueColdToolDeepAnalyses(
+            incrementalQueueCandidates,
+          );
+          state.deepAnalysisQueued += incrementalQueued.queuedCount;
+          incrementalQueued.queuedRepositoryIds.forEach((repositoryId) =>
+            deepQueuedRepositoryIds.add(repositoryId),
+          );
+        }
+        earlyDiscoveryRepositoryIds.forEach((repositoryId) =>
+          discoveryProcessedRepositoryIds.add(repositoryId),
+        );
+        state.discoveryProcessedRepositoryIds = Array.from(
+          discoveryProcessedRepositoryIds,
+        );
+        state.deepQueuedRepositoryIds = Array.from(deepQueuedRepositoryIds);
+      }
+    }
     state.snapshotChunkIndex = chunkIndex + 1;
     const progress =
       70 +
@@ -780,7 +844,15 @@ export class GitHubColdToolCollectorService {
     },
   ): Promise<ColdToolCollectorDirectResult> {
     const state = this.readResumeState(dto.resumeState);
-    const discoveryRepositoryChunks = this.getDiscoveryChunks(state.repositoryIds);
+    const discoveryProcessedRepositoryIds = new Set(
+      state.discoveryProcessedRepositoryIds,
+    );
+    const remainingDiscoveryRepositoryIds = state.repositoryIds.filter(
+      (repositoryId) => !discoveryProcessedRepositoryIds.has(repositoryId),
+    );
+    const discoveryRepositoryChunks = this.getDiscoveryChunks(
+      remainingDiscoveryRepositoryIds,
+    );
     const chunkIndex = Math.max(0, state.discoveryChunkIndex);
 
     if (chunkIndex >= discoveryRepositoryChunks.length) {
@@ -858,6 +930,12 @@ export class GitHubColdToolCollectorService {
         deepQueuedRepositoryIds.add(repositoryId),
       );
     }
+    chunkRepositoryIds.forEach((repositoryId) =>
+      discoveryProcessedRepositoryIds.add(repositoryId),
+    );
+    state.discoveryProcessedRepositoryIds = Array.from(
+      discoveryProcessedRepositoryIds,
+    );
     state.deepQueuedRepositoryIds = Array.from(deepQueuedRepositoryIds);
     state.discoveryChunkIndex = chunkIndex + 1;
     const progress =
@@ -1556,6 +1634,13 @@ export class GitHubColdToolCollectorService {
           .map((item) => this.cleanText(item, 160))
           .filter((item): item is string => Boolean(item))
       : [];
+    const discoveryProcessedRepositoryIds = Array.isArray(
+      record.discoveryProcessedRepositoryIds,
+    )
+      ? record.discoveryProcessedRepositoryIds
+          .map((item) => this.cleanText(item, 160))
+          .filter((item): item is string => Boolean(item))
+      : [];
     const deepQueuedRepositoryIds = Array.isArray(record.deepQueuedRepositoryIds)
       ? record.deepQueuedRepositoryIds
           .map((item) => this.cleanText(item, 160))
@@ -1600,6 +1685,7 @@ export class GitHubColdToolCollectorService {
       snapshotChunkIndex: this.readNonNegativeInt(record.snapshotChunkIndex, 0),
       coldToolEvaluated: this.readNonNegativeInt(record.coldToolEvaluated, 0),
       discoveryChunkIndex: this.readNonNegativeInt(record.discoveryChunkIndex, 0),
+      discoveryProcessedRepositoryIds,
       matchedRepositoryIds,
       deepQueuedRepositoryIds,
       deepAnalysisQueued: this.readNonNegativeInt(record.deepAnalysisQueued, 0),
@@ -1742,6 +1828,7 @@ export class GitHubColdToolCollectorService {
       externalHits: state.externalHits.map((hit) => ({ ...hit })),
       externalImportChunkIndex: state.externalImportChunkIndex,
       repositoryIds: [...state.repositoryIds],
+      discoveryProcessedRepositoryIds: [...state.discoveryProcessedRepositoryIds],
       matchedRepositoryIds: [...state.matchedRepositoryIds],
       deepQueuedRepositoryIds: [...state.deepQueuedRepositoryIds],
       selectedEntries: state.selectedEntries.map((entry) => ({ ...entry })),
