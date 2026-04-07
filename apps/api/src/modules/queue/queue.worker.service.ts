@@ -849,6 +849,9 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       const handoff = await this.queueService.enqueueGitHubColdToolCollect(
         result.nextDto,
         'cold_tool_pipeline',
+        {
+          ignoreActiveJobId: job.data.jobLogId,
+        },
       );
 
       this.logger.log(

@@ -184,6 +184,9 @@ export class QueueService implements OnModuleDestroy {
   async enqueueGitHubColdToolCollect(
     dto: RunColdToolCollectorDto,
     triggeredBy = 'ui',
+    options: {
+      ignoreActiveJobId?: string;
+    } = {},
   ): Promise<EnqueueResult> {
     this.assertGitHubIntakeEnabled({
       source: 'github_cold_tool_collect',
@@ -196,6 +199,18 @@ export class QueueService implements OnModuleDestroy {
       jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
     });
     if (existingActiveJob) {
+      if (
+        options.ignoreActiveJobId &&
+        existingActiveJob.id === options.ignoreActiveJobId
+      ) {
+        return this.enqueueJob({
+          queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+          jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
+          payload: { dto },
+          triggeredBy,
+          parentJobId: options.ignoreActiveJobId,
+        });
+      }
       const recovered = await this.recoverStaleColdToolCollectorEnqueueBlocker(
         existingActiveJob,
       );
