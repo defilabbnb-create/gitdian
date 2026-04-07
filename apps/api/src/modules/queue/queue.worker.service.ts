@@ -881,6 +881,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       const result = await this.githubService.processIdeaSnapshotQueueJob({
         repositoryId: job.data.repositoryId,
         windowDate: job.data.windowDate,
+        analysisLane: job.data.analysisLane,
         fromBackfill: job.data.fromBackfill,
         runFastFilter: job.data.runFastFilter,
         runDeepAnalysis: job.data.runDeepAnalysis,

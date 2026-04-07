@@ -86,6 +86,7 @@ export type GitHubIssueItem = {
 export type GitHubIdeaSnapshotJobPayload = {
   repositoryId: string;
   windowDate: string;
+  analysisLane?: string;
   fromBackfill?: boolean;
   runFastFilter?: boolean;
   runDeepAnalysis?: boolean;

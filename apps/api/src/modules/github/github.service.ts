@@ -1627,9 +1627,13 @@ export class GitHubService {
   private async runIdeaSnapshotChildJob(
     payload: GitHubIdeaSnapshotJobPayload,
   ) {
-    const result = await this.ideaSnapshotService.analyzeRepository(payload.repositoryId, {
-      onlyIfMissing: true,
-    });
+    const result = await this.ideaSnapshotService.analyzeRepository(
+      payload.repositoryId,
+      {
+        onlyIfMissing: true,
+        analysisLane: payload.analysisLane,
+      },
+    );
     const snapshot = {
       oneLinerZh: result.oneLinerZh,
       isPromising: result.isPromising,
@@ -1647,7 +1651,9 @@ export class GitHubService {
     });
 
     const hasActiveDeepJob = await this.hasActiveRepositoryJob(
-      QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
+      payload.analysisLane === 'cold_tool'
+        ? QUEUE_JOB_TYPES.ANALYSIS_SINGLE_COLD
+        : QUEUE_JOB_TYPES.ANALYSIS_SINGLE,
       payload.repositoryId,
     );
     const forceDeepAnalysis = payload.forceDeepAnalysis === true;
