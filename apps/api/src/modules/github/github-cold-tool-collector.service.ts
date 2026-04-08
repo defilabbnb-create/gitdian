@@ -1189,6 +1189,22 @@ export class GitHubColdToolCollectorService {
           analysis?.insightJson
         );
       })
+      .filter((repository) => {
+        const analysisJson =
+          repository.analysis?.analysisJson &&
+          typeof repository.analysis.analysisJson === 'object' &&
+          !Array.isArray(repository.analysis.analysisJson)
+            ? (repository.analysis.analysisJson as Record<string, unknown>)
+            : null;
+        const coldToolPool =
+          analysisJson?.coldToolPool &&
+          typeof analysisJson.coldToolPool === 'object' &&
+          !Array.isArray(analysisJson.coldToolPool)
+            ? (analysisJson.coldToolPool as Record<string, unknown>)
+            : null;
+
+        return coldToolPool?.requiresManualApprovalForDeepAnalysis !== true;
+      })
       .map((repository) => ({
         repositoryId: repository.id,
         dto: {
@@ -1219,14 +1235,16 @@ export class GitHubColdToolCollectorService {
       };
     }
 
-    await this.queueService.enqueueSingleAnalysesBulk(
+    const results = await this.queueService.enqueueSingleAnalysesBulk(
       entries,
       'cold_tool_collector',
     );
 
     return {
-      queuedCount: entries.length,
-      queuedRepositoryIds: entries.map((entry) => entry.repositoryId),
+      queuedCount: results.filter((result) => result.jobStatus === 'PENDING').length,
+      queuedRepositoryIds: entries
+        .filter((_, index) => results[index]?.jobStatus === 'PENDING')
+        .map((entry) => entry.repositoryId),
     };
   }
 

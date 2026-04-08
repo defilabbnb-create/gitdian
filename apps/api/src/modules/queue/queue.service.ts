@@ -310,6 +310,14 @@ export class QueueService implements OnModuleDestroy {
       source: 'analysis_single',
       repositoryIds: [repositoryId],
     });
+    if (
+      this.shouldBlockColdToolAutoDeepAnalysis(dto, triggeredBy) &&
+      (await this.loadBlockedColdToolRepositoryIds([repositoryId])).has(
+        repositoryId,
+      )
+    ) {
+      return this.buildBlockedEnqueueResult(repositoryId, dto);
+    }
     const existingActiveJob = await this.findActiveSingleAnalysisJobLog(
       repositoryId,
     );
@@ -363,11 +371,35 @@ export class QueueService implements OnModuleDestroy {
       await this.findActiveSingleAnalysisJobLogs(
         entries.map((entry) => entry.repositoryId),
       );
+    const blockedRepositoryIds = await this.loadBlockedColdToolRepositoryIds(
+      entries
+        .filter((entry) =>
+          this.shouldBlockColdToolAutoDeepAnalysis(
+            entry.dto,
+            entry.triggeredBy ?? triggeredBy,
+          ),
+        )
+        .map((entry) => entry.repositoryId),
+    );
     const seenRepositoryIds = new Set<string>();
     const dedupedEntries: SingleAnalysisBulkEntry[] = [];
     const existingResultsByRepositoryId = new Map<string, EnqueueResult>();
 
     for (const entry of entries) {
+      if (
+        blockedRepositoryIds.has(entry.repositoryId) &&
+        this.shouldBlockColdToolAutoDeepAnalysis(
+          entry.dto,
+          entry.triggeredBy ?? triggeredBy,
+        )
+      ) {
+        existingResultsByRepositoryId.set(
+          entry.repositoryId,
+          this.buildBlockedEnqueueResult(entry.repositoryId, entry.dto),
+        );
+        continue;
+      }
+
       const existingActiveJob = existingActiveJobsByRepositoryId.get(
         entry.repositoryId,
       );
@@ -1190,6 +1222,58 @@ export class QueueService implements OnModuleDestroy {
       queueJobId: jobLog.queueJobId ?? jobLog.id,
       jobStatus: jobLog.jobStatus,
     };
+  }
+
+  private buildBlockedEnqueueResult(
+    repositoryId: string,
+    dto: RunAnalysisDto,
+  ): EnqueueResult {
+    const queueRoute = this.resolveSingleAnalysisQueue(dto);
+    return {
+      jobId: `blocked:${repositoryId}`,
+      queueName: queueRoute.queueName,
+      queueJobId: `blocked:${repositoryId}`,
+      jobStatus: JobStatus.FAILED,
+    };
+  }
+
+  private shouldBlockColdToolAutoDeepAnalysis(
+    dto: RunAnalysisDto,
+    triggeredBy: string,
+  ) {
+    if (dto.analysisLane !== 'cold_tool') {
+      return false;
+    }
+
+    return ![
+      'ui',
+      'cold_tool_skipped_rescreen',
+      'cold_tool_pending_rescreen',
+    ].includes(triggeredBy);
+  }
+
+  private async loadBlockedColdToolRepositoryIds(repositoryIds: string[]) {
+    const uniqueRepositoryIds = [...new Set(repositoryIds.filter(Boolean))];
+    if (!uniqueRepositoryIds.length) {
+      return new Set<string>();
+    }
+
+    const rows = await this.prisma.repositoryAnalysis.findMany({
+      where: {
+        repositoryId: {
+          in: uniqueRepositoryIds,
+        },
+        analysisJson: {
+          path: ['coldToolPool', 'requiresManualApprovalForDeepAnalysis'],
+          equals: true,
+        },
+      },
+      select: {
+        repositoryId: true,
+      },
+    });
+
+    return new Set(rows.map((row) => row.repositoryId));
   }
 
   private resolveSingleAnalysisQueue(dto: RunAnalysisDto) {

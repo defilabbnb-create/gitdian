@@ -1201,6 +1201,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         repositoryId: string;
         dto: RunAnalysisDto;
         fullDbCatchup?: boolean;
+        coldToolDeepRescreenState?: string;
       }
     >,
   ) {
@@ -1223,7 +1224,67 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         }),
       );
 
+      if (job.data.coldToolDeepRescreenState === 'skipped') {
+        await this.persistColdToolDeepApprovalBlock(job.data.repositoryId, result);
+      }
+
       return result;
+    });
+  }
+
+  private async persistColdToolDeepApprovalBlock(
+    repositoryId: string,
+    result: { repositoryId: string; steps: { ideaExtract: { ideaExtractSkipped?: boolean; ideaExtractReason?: string | null } } },
+  ) {
+    const isTerminalSkip =
+      result.steps.ideaExtract.ideaExtractSkipped === true &&
+      result.steps.ideaExtract.ideaExtractReason !== 'already_exists' &&
+      result.steps.ideaExtract.ideaExtractReason !== 'deferred' &&
+      result.steps.ideaExtract.ideaExtractReason !== 'execution_failed';
+
+    const analysis = await this.prisma.repositoryAnalysis.findUnique({
+      where: {
+        repositoryId,
+      },
+      select: {
+        analysisJson: true,
+      },
+    });
+
+    if (!analysis) {
+      return;
+    }
+
+    const analysisJson = this.readJsonRecord(analysis.analysisJson);
+    const coldToolPool = this.isJsonRecord(analysisJson.coldToolPool)
+      ? { ...(analysisJson.coldToolPool as Record<string, unknown>) }
+      : {};
+
+    if (!isTerminalSkip) {
+      if (!coldToolPool.requiresManualApprovalForDeepAnalysis) {
+        return;
+      }
+
+      delete coldToolPool.requiresManualApprovalForDeepAnalysis;
+      delete coldToolPool.deepRescreenBlockedAt;
+      delete coldToolPool.deepRescreenBlockedReason;
+    } else {
+      coldToolPool.requiresManualApprovalForDeepAnalysis = true;
+      coldToolPool.deepRescreenBlockedAt = new Date().toISOString();
+      coldToolPool.deepRescreenBlockedReason =
+        result.steps.ideaExtract.ideaExtractReason ?? 'rescreen_terminal_skip';
+    }
+
+    await this.prisma.repositoryAnalysis.update({
+      where: {
+        repositoryId,
+      },
+      data: {
+        analysisJson: {
+          ...analysisJson,
+          coldToolPool,
+        } as Prisma.InputJsonValue,
+      },
     });
   }
 
