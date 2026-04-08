@@ -759,6 +759,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   ) {
     let currentProgress = 10;
     let lastHeartbeatAt = 0;
+    let lastRuntimePayload: Record<string, unknown> | null = null;
     let lastRuntimeStage: string | null = null;
     let lastRuntimeProgress: number | null = null;
     let lastQueueProgress = 10;
@@ -774,66 +775,94 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     );
 
     const result = await this.runQueuedJob(job, async (heartbeat) => {
-      const result = await this.gitHubColdToolCollectorService.runCollectionDirect(
-        job.data.dto,
-        {
-          onProgress: async (progress) => {
-            const normalizedProgress = Math.max(
-              0,
-              Math.min(100, Math.round(progress)),
-            );
-            const now = Date.now();
-            currentProgress = normalizedProgress;
-            heartbeat.setProgress(normalizedProgress);
+      const persistRuntimeHeartbeat = async (
+        payload: Record<string, unknown>,
+        force = false,
+      ) => {
+        const now = Date.now();
+        const runtimeStage = this.readRuntimeStage(payload);
+        const runtimeProgress = this.readRuntimeProgress(
+          payload,
+          currentProgress,
+        );
+        const shouldPersistRuntime =
+          force ||
+          runtimeStage !== lastRuntimeStage ||
+          runtimeProgress !== lastRuntimeProgress ||
+          now - lastHeartbeatAt >= runtimeHeartbeatMs;
 
-            if (normalizedProgress !== lastQueueProgress) {
-              await job.updateProgress(normalizedProgress);
-              lastQueueProgress = normalizedProgress;
-            }
+        if (!shouldPersistRuntime) {
+          return;
+        }
 
-            if (
-              normalizedProgress !== lastPersistedProgress ||
-              now - lastPersistedAt >= progressRefreshMs
-            ) {
-              await this.jobLogService.updateJobProgress({
-                jobId: job.data.jobLogId,
-                progress: normalizedProgress,
-              });
-              lastPersistedProgress = normalizedProgress;
-              lastPersistedAt = now;
-            }
+        lastHeartbeatAt = now;
+        await this.jobLogService.updateJobProgress({
+          jobId: job.data.jobLogId,
+          progress: currentProgress,
+          result: {
+            runtime: payload,
           },
-          onHeartbeat: async (payload) => {
-            const now = Date.now();
-            const runtimeStage = this.readRuntimeStage(payload);
-            const runtimeProgress = this.readRuntimeProgress(
-              payload,
-              currentProgress,
-            );
-            const shouldPersistRuntime =
-              runtimeStage !== lastRuntimeStage ||
-              runtimeProgress !== lastRuntimeProgress ||
-              now - lastHeartbeatAt >= runtimeHeartbeatMs;
+        });
+        lastRuntimeStage = runtimeStage;
+        lastRuntimeProgress = runtimeProgress;
+        lastPersistedProgress = currentProgress;
+        lastPersistedAt = now;
+      };
 
-            if (!shouldPersistRuntime) {
-              return;
-            }
+      const keepalive = setInterval(() => {
+        if (!lastRuntimePayload) {
+          return;
+        }
 
-            lastHeartbeatAt = now;
-            await this.jobLogService.updateJobProgress({
-              jobId: job.data.jobLogId,
-              progress: currentProgress,
-              result: {
-                runtime: payload,
-              },
-            });
-            lastRuntimeStage = runtimeStage;
-            lastRuntimeProgress = runtimeProgress;
-            lastPersistedProgress = currentProgress;
-            lastPersistedAt = now;
+        void persistRuntimeHeartbeat(lastRuntimePayload, true).catch((error) => {
+          this.logger.warn(
+            `Cold tool collector keepalive failed jobId=${job.data.jobLogId} reason=${
+              error instanceof Error ? error.message : 'unknown'
+            }`,
+          );
+        });
+      }, runtimeHeartbeatMs);
+
+      let result;
+      try {
+        result = await this.gitHubColdToolCollectorService.runCollectionDirect(
+          job.data.dto,
+          {
+            onProgress: async (progress) => {
+              const normalizedProgress = Math.max(
+                0,
+                Math.min(100, Math.round(progress)),
+              );
+              const now = Date.now();
+              currentProgress = normalizedProgress;
+              heartbeat.setProgress(normalizedProgress);
+
+              if (normalizedProgress !== lastQueueProgress) {
+                await job.updateProgress(normalizedProgress);
+                lastQueueProgress = normalizedProgress;
+              }
+
+              if (
+                normalizedProgress !== lastPersistedProgress ||
+                now - lastPersistedAt >= progressRefreshMs
+              ) {
+                await this.jobLogService.updateJobProgress({
+                  jobId: job.data.jobLogId,
+                  progress: normalizedProgress,
+                });
+                lastPersistedProgress = normalizedProgress;
+                lastPersistedAt = now;
+              }
+            },
+            onHeartbeat: async (payload) => {
+              lastRuntimePayload = payload as Record<string, unknown>;
+              await persistRuntimeHeartbeat(lastRuntimePayload);
+            },
           },
-        },
-      );
+        );
+      } finally {
+        clearInterval(keepalive);
+      }
 
       if (this.isColdToolCollectorContinuationResult(result)) {
         return result;
