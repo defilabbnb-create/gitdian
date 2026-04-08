@@ -36,8 +36,15 @@ export default async function ColdToolsPage({
     },
     'coldTools',
   );
+  const summaryQuery: RepositoryListQueryState = {
+    ...query,
+    page: 1,
+    pageSize: 1,
+    deepAnalysisState: undefined,
+  };
 
   let repositories = null;
+  let summaryRepositories = null;
   let completedTotal = 0;
   let pendingTotal = 0;
   let skippedTotal = 0;
@@ -47,6 +54,7 @@ export default async function ColdToolsPage({
   try {
     const [
       allRepositories,
+      allSummaryRepositories,
       completedRepositories,
       pendingRepositories,
       skippedRepositories,
@@ -58,9 +66,15 @@ export default async function ColdToolsPage({
         }),
         getRepositories(
           {
-            ...query,
-            page: 1,
-            pageSize: 1,
+            ...summaryQuery,
+          },
+          {
+            timeoutMs: 20_000,
+          },
+        ),
+        getRepositories(
+          {
+            ...summaryQuery,
             deepAnalysisState: 'completed',
           },
           {
@@ -69,9 +83,7 @@ export default async function ColdToolsPage({
         ),
         getRepositories(
           {
-            ...query,
-            page: 1,
-            pageSize: 1,
+            ...summaryQuery,
             deepAnalysisState: 'pending',
           },
           {
@@ -80,9 +92,7 @@ export default async function ColdToolsPage({
         ),
         getRepositories(
           {
-            ...query,
-            page: 1,
-            pageSize: 1,
+            ...summaryQuery,
             deepAnalysisState: 'skipped',
           },
           {
@@ -91,9 +101,7 @@ export default async function ColdToolsPage({
         ),
         getRepositories(
           {
-            ...query,
-            page: 1,
-            pageSize: 1,
+            ...summaryQuery,
             deepAnalysisState: 'queued',
           },
           {
@@ -102,6 +110,7 @@ export default async function ColdToolsPage({
         ),
       ]);
     repositories = allRepositories;
+    summaryRepositories = allSummaryRepositories;
     completedTotal = completedRepositories.pagination.total;
     pendingTotal = pendingRepositories.pagination.total;
     skippedTotal = skippedRepositories.pagination.total;
@@ -113,7 +122,7 @@ export default async function ColdToolsPage({
     );
   }
 
-  const totalRepositories = repositories?.pagination.total ?? 0;
+  const totalRepositories = summaryRepositories?.pagination.total ?? 0;
   const completedRate =
     totalRepositories > 0
       ? Math.round((completedTotal / totalRepositories) * 100)
@@ -136,9 +145,9 @@ export default async function ColdToolsPage({
           {
             label: '工具池规模',
             value: repositories
-              ? `${repositories.pagination.total.toLocaleString()}`
+              ? `${totalRepositories.toLocaleString()}`
               : '--',
-            helper: '当前冷门视图下的总量。',
+            helper: '当前冷门池整体总量，不受“已完成/排队中/已跳过”卡片筛选影响。',
           },
           {
             label: '深分析完成',
