@@ -232,13 +232,21 @@ export class OpenAiProvider implements AiProvider {
           requestBody,
         });
         if (streamFallbackText) {
+          const repairedText = await this.parseOrRetryStreamingText(
+            streamFallbackText,
+            {
+              ...args,
+              timeoutMs,
+              requestBody,
+            },
+          );
           const latencyMs = Date.now() - startedAt;
           this.logger.log(
             `provider=${this.name} lane=${args.laneConfig.laneKey} target=${args.targetConfig.stateKey} model=${args.model} latencyMs=${latencyMs} gateWaitMs=${args.gateWaitMs} success=true fallback=ananapi_stream_recovery`,
           );
 
           return {
-            data: JSON.parse(streamFallbackText) as T,
+            data: JSON.parse(repairedText) as T,
             provider: this.name,
             model: args.model,
             latencyMs,
@@ -424,6 +432,45 @@ export class OpenAiProvider implements AiProvider {
 
     const normalized = text.trim();
     return normalized.length ? normalized : null;
+  }
+
+  private async parseOrRetryStreamingText<T>(
+    streamText: string,
+    args: {
+      input: GenerateJsonInput;
+      model: string;
+      gateWaitMs: number;
+      laneConfig: OpenAiLaneConfig;
+      targetConfig: OpenAiTargetConfig;
+      timeoutMs: number;
+      requestBody: {
+        model: string;
+        response_format: { type: 'json_object' };
+        messages: Array<{ role: string; content: string }>;
+      };
+    },
+  ) {
+    try {
+      JSON.parse(streamText);
+      return streamText;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const shouldRetry =
+        message.includes('Unterminated string') ||
+        message.includes('Unexpected end of JSON input');
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      const retried = await this.tryStreamingTextFallback(args);
+      if (retried) {
+        JSON.parse(retried);
+        return retried;
+      }
+
+      throw error;
+    }
   }
 
   private extractResponseText(payload: {
