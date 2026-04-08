@@ -165,12 +165,27 @@ export default async function ColdToolsPage({
 
         {repositories ? (
           <section className="space-y-4">
+            <ScopeLegend
+              items={[
+                {
+                  tone: 'emerald',
+                  label: '整池汇总',
+                  helper: '顶部四张卡固定看整个冷门工具池，不跟随下面列表状态筛选变化。',
+                },
+                {
+                  tone: 'sky',
+                  label: '当前列表结果',
+                  helper: '下面列表只看你当前点进去的筛选结果，比如“排队中”或“已完成”。',
+                },
+              ]}
+            />
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <SummaryCard
                 label="冷门工具池规模"
                 value={`${totalRepositories.toLocaleString()} 个`}
                 helper="当前只保留真实活跃用户约 1000 到 100 万的工具。"
                 tone="emerald"
+                scopeLabel="整池汇总"
               />
               <SummaryCard
                 label="深分析完成率"
@@ -178,12 +193,14 @@ export default async function ColdToolsPage({
                 helper={`已完成 ${completedTotal.toLocaleString()} 个，表示四层结果都已经齐了。`}
                 href={buildColdToolSectionHref(query, 'completed')}
                 tone="slate"
+                scopeLabel="整池汇总"
               />
               <SummaryCard
                 label="待处理总量"
                 value={`${actionableTotal.toLocaleString()} 个`}
                 helper="等于待继续 + 排队中，更适合盯下一步要推进的条目。"
                 tone="amber"
+                scopeLabel="整池汇总"
               />
               <SummaryCard
                 label="当前自动推进"
@@ -193,6 +210,7 @@ export default async function ColdToolsPage({
                 helper="这里只看已经进入冷门深分析队列的条目，不包含已跳过。"
                 href={buildColdToolSectionHref(query, 'queued')}
                 tone={queuedTotal > 0 ? 'amber' : 'emerald'}
+                scopeLabel="整池汇总"
               />
             </div>
 
@@ -240,6 +258,13 @@ export default async function ColdToolsPage({
           </section>
         ) : null}
 
+        {repositories ? (
+          <CurrentListBanner
+            total={repositories.pagination.total}
+            query={query}
+          />
+        ) : null}
+
         <RepositoryFilters query={query} />
 
         {errorMessage ? (
@@ -268,12 +293,14 @@ function SummaryCard({
   helper,
   href,
   tone = 'emerald',
+  scopeLabel,
 }: {
   label: string;
   value: string;
   helper: string;
   href?: string;
   tone?: 'emerald' | 'amber' | 'slate' | 'sky';
+  scopeLabel?: string;
 }) {
   const toneStyles = {
     emerald: {
@@ -298,9 +325,12 @@ function SummaryCard({
     <section
       className={`surface-card rounded-[26px] p-5 transition hover:-translate-y-0.5 hover:shadow-xl ${styles.border}`}
     >
-      <p className={`text-xs font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
-        {label}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className={`text-xs font-semibold uppercase tracking-[0.16em] ${styles.label}`}>
+          {label}
+        </p>
+        {scopeLabel ? <ScopePill label={scopeLabel} /> : null}
+      </div>
       <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
         {value}
       </h2>
@@ -313,6 +343,94 @@ function SummaryCard({
   }
 
   return <a href={href}>{content}</a>;
+}
+
+function ScopeLegend({
+  items,
+}: {
+  items: Array<{
+    tone: 'emerald' | 'sky';
+    label: string;
+    helper: string;
+  }>;
+}) {
+  return (
+    <section className="surface-card rounded-[24px] px-4 py-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          统计口径
+        </p>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {items.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-[18px] border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm text-slate-700"
+            >
+              <div className="flex items-center gap-2">
+                <ScopePill label={item.label} tone={item.tone} />
+              </div>
+              <p className="mt-2 leading-6">{item.helper}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CurrentListBanner({
+  total,
+  query,
+}: {
+  total: number;
+  query: RepositoryListQueryState;
+}) {
+  const stateLabel = (() => {
+    switch (query.deepAnalysisState) {
+      case 'completed':
+        return '当前列表：深度分析已完成';
+      case 'pending':
+        return '当前列表：深度分析待继续';
+      case 'queued':
+        return '当前列表：深度分析排队中';
+      case 'skipped':
+        return '当前列表：深度分析已跳过';
+      default:
+        return '当前列表：冷门工具池全部条目';
+    }
+  })();
+
+  return (
+    <section className="rounded-[22px] border border-sky-200 bg-sky-50/80 px-4 py-4">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-2">
+          <ScopePill label="当前列表结果" tone="sky" />
+          <p className="text-sm font-semibold text-slate-950">{stateLabel}</p>
+        </div>
+        <p className="text-sm text-slate-600">当前筛选命中 {total.toLocaleString()} 个</p>
+      </div>
+    </section>
+  );
+}
+
+function ScopePill({
+  label,
+  tone = 'slate',
+}: {
+  label: string;
+  tone?: 'emerald' | 'sky' | 'slate';
+}) {
+  const styles = {
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    sky: 'border-sky-200 bg-sky-50 text-sky-700',
+    slate: 'border-slate-200 bg-slate-50 text-slate-600',
+  } as const;
+
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${styles[tone]}`}>
+      {label}
+    </span>
+  );
 }
 
 function StatusBreakdownCard({
