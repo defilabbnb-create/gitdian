@@ -37,19 +37,18 @@ export function ColdToolCollectorPanel() {
   }
 
   return (
-    <section className="relative overflow-hidden rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.96)_0%,rgba(255,255,255,0.92)_58%,rgba(220,252,231,0.88)_100%)] p-5 shadow-[0_26px_80px_-40px_rgba(5,150,105,0.28)]">
+    <details className="relative overflow-hidden rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.96)_0%,rgba(255,255,255,0.92)_58%,rgba(220,252,231,0.88)_100%)] p-5 shadow-[0_26px_80px_-40px_rgba(5,150,105,0.28)]">
       <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.18),transparent_72%)] lg:block" />
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="relative max-w-3xl space-y-2">
+      <summary className="relative flex cursor-pointer list-none flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="max-w-3xl space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
             冷门工具采集框
           </p>
-          <h2 className="font-display text-3xl font-semibold tracking-[-0.04em] text-slate-950">
-            采全球真实活跃用户约 1万到100万 的互联网工具
+          <h2 className="font-display text-2xl font-semibold tracking-[-0.04em] text-slate-950">
+            默认折叠参数区，首页先看结果，需要时再展开手动触发。
           </h2>
           <p className="text-sm leading-7 text-slate-700">
-            这条链路会按领域关键词和主流编程语言轮转搜索，仓库入库后先跑
-            GPT-5.4 冷门工具判断，命中的项目会立刻进入深度分析。
+            当前这条链路会轮转关键词和语言采集，命中冷门池后自动进入深分析。
           </p>
           <div className="flex flex-wrap gap-2 pt-1 text-xs font-semibold">
             <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
@@ -59,7 +58,7 @@ export function ColdToolCollectorPanel() {
               命中即进深分析
             </span>
             <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
-              长跑模式
+              点击展开参数
             </span>
           </div>
         </div>
@@ -73,7 +72,7 @@ export function ColdToolCollectorPanel() {
             去任务页看进度
           </Link>
         </div>
-      </div>
+      </summary>
 
       <form onSubmit={handleSubmit} className="relative mt-5 grid gap-4 lg:grid-cols-4">
         <label className="space-y-2">
@@ -144,6 +143,6 @@ export function ColdToolCollectorPanel() {
           {message}
         </p>
       ) : null}
-    </section>
+    </details>
   );
 }

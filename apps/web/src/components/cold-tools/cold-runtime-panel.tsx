@@ -6,22 +6,34 @@ export async function ColdRuntimePanel() {
     const runtime = await getColdRuntime({ timeoutMs: 4_000 });
     const collectorTone = resolveTone(runtime.collector.heartbeatState);
     const queueTone = resolveTone(runtime.coldDeepQueue.queueState);
+    const currentRun = shortId(
+      runtime.collector.currentRunId ?? runtime.collector.lastSuccessRunId,
+    );
 
     return (
-      <section className="rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.95)_0%,rgba(240,253,244,0.92)_58%,rgba(236,253,245,0.88)_100%)] p-5 shadow-[0_28px_80px_-40px_rgba(5,150,105,0.28)]">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div>
+      <details className="rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.95)_0%,rgba(240,253,244,0.92)_58%,rgba(236,253,245,0.88)_100%)] p-5 shadow-[0_28px_80px_-40px_rgba(5,150,105,0.28)]">
+        <summary className="flex cursor-pointer list-none flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
               冷门运行状态
             </p>
-            <h2 className="font-display mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
-              直接看采集、深分析和当前运行版本，不靠感觉判断是不是停了。
+            <h2 className="font-display text-2xl font-semibold tracking-[-0.04em] text-slate-950">
+              运行态已折叠，先看摘要，必要时再展开明细。
             </h2>
+            <p className="text-sm leading-6 text-slate-600">
+              当前阶段 {runtime.collector.currentStage ?? '空闲'}，run={currentRun}，
+              队列 active {runtime.coldDeepQueue.active} / queued {runtime.coldDeepQueue.queued}。
+            </p>
           </div>
-          <div className="rounded-full border border-emerald-200 bg-white/80 px-4 py-2 font-mono text-xs text-slate-500">
-            Git SHA: {runtime.runtime.gitSha}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="rounded-full border border-emerald-200 bg-white/80 px-4 py-2 font-mono text-xs text-slate-500">
+              Git SHA: {runtime.runtime.gitSha}
+            </div>
+            <div className="rounded-full border border-slate-200 bg-white/80 px-4 py-2 text-xs font-semibold text-slate-600">
+              点击展开运行细节
+            </div>
           </div>
-        </div>
+        </summary>
 
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <RuntimeCell
@@ -56,9 +68,7 @@ export async function ColdRuntimePanel() {
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           <RuntimeCell
             label="当前 Run"
-            value={shortId(
-              runtime.collector.currentRunId ?? runtime.collector.lastSuccessRunId,
-            )}
+            value={currentRun}
             helper={`最近成功 run=${shortId(runtime.collector.lastSuccessRunId)} · 最近失败 run=${shortId(runtime.collector.lastFailureRunId)}`}
             tone={collectorTone}
           />
@@ -169,7 +179,7 @@ export async function ColdRuntimePanel() {
             </div>
           </div>
         ) : null}
-      </section>
+      </details>
     );
   } catch (error) {
     return (
