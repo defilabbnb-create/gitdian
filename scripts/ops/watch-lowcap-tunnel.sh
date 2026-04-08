@@ -1,8 +1,8 @@
-#!/bin/zsh
+#!/bin/bash
 
 set -euo pipefail
 
-USER_ID="$(id -u)"
+USER_ID="$(/usr/bin/id -u)"
 LABEL="com.lowcap.tunnel"
 LOCAL_URL="${LOCAL_URL:-http://127.0.0.1:3000/cold-tools}"
 PUBLIC_URL="${PUBLIC_URL:-https://local3000.luckytad.vip/cold-tools}"
@@ -14,12 +14,12 @@ VERIFY_DELAY_SECONDS="${VERIFY_DELAY_SECONDS:-4}"
 mkdir -p "$STATE_DIR"
 
 timestamp() {
-  date '+%Y-%m-%dT%H:%M:%S%z'
+  /bin/date '+%Y-%m-%dT%H:%M:%S%z'
 }
 
 http_code() {
   local url="$1"
-  curl -L -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo "000"
+  /usr/bin/curl -L -sS -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null || echo "000"
 }
 
 recent_restart_blocked() {
@@ -32,7 +32,7 @@ recent_restart_blocked() {
   [[ -z "$last_restart" ]] && return 1
 
   local now
-  now="$(date +%s)"
+  now="$(/bin/date +%s)"
   if (( now - last_restart < MIN_RESTART_INTERVAL_SECONDS )); then
     return 0
   fi
@@ -41,7 +41,7 @@ recent_restart_blocked() {
 }
 
 record_restart() {
-  date +%s > "$STATE_FILE"
+  /bin/date +%s > "$STATE_FILE"
 }
 
 local_status="$(http_code "$LOCAL_URL")"
@@ -63,7 +63,7 @@ fi
 
 echo "$(timestamp) tunnel unhealthy, restarting label=${LABEL} public_status=${public_status} public_url=${PUBLIC_URL}"
 record_restart
-launchctl kickstart -k "gui/${USER_ID}/${LABEL}"
+/bin/launchctl kickstart -k "gui/${USER_ID}/${LABEL}"
 sleep "$VERIFY_DELAY_SECONDS"
 
 public_status_after="$(http_code "$PUBLIC_URL")"

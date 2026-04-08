@@ -215,8 +215,7 @@ cat > "$PLIST_DIR/com.gitdian.tunnel-health.plist" <<EOF
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
-      <string>-lc</string>
-      <string>exec /Users/v188/Documents/gitdian/scripts/ops/watch-lowcap-tunnel.sh</string>
+      <string>/Users/v188/Documents/gitdian/scripts/ops/watch-lowcap-tunnel.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/v188</string>
