@@ -1636,13 +1636,63 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
 
     const limit = Math.max(
       1,
-      this.readConcurrency('COLD_TOOL_BACKLOG_REPLENISH_LIMIT', 24),
+      this.readConcurrency('COLD_TOOL_BACKLOG_REPLENISH_LIMIT', 48),
     );
     const rows = await this.prisma.repositoryAnalysis.findMany({
       where: {
         tags: {
           has: 'cold_tool_pool',
         },
+        NOT: {
+          AND: [
+            {
+              completenessJson: {
+                not: Prisma.AnyNull,
+              },
+            },
+            {
+              ideaFitJson: {
+                not: Prisma.AnyNull,
+              },
+            },
+            {
+              extractedIdeaJson: {
+                not: Prisma.AnyNull,
+              },
+            },
+            {
+              insightJson: {
+                not: Prisma.AnyNull,
+              },
+            },
+          ],
+        },
+        AND: [
+          {
+            NOT: {
+              OR: [
+                {
+                  ideaSnapshotJson: {
+                    path: ['isPromising'],
+                    equals: false,
+                  },
+                },
+                {
+                  ideaSnapshotJson: {
+                    path: ['nextAction'],
+                    equals: 'SKIP',
+                  },
+                },
+                {
+                  insightJson: {
+                    path: ['oneLinerStrength'],
+                    equals: 'WEAK',
+                  },
+                },
+              ],
+            },
+          },
+        ],
         OR: [
           {
             completenessJson: {
@@ -1667,7 +1717,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         ],
       },
       orderBy: {
-        updatedAt: 'desc',
+        updatedAt: 'asc',
       },
       take: limit,
       select: {
@@ -1690,6 +1740,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
           runIdeaFit: true,
           runIdeaExtract: true,
           forceRerun: false,
+          useDeepBundle: true,
           analysisLane: 'cold_tool',
         } as RunAnalysisDto,
         triggeredBy: 'cold_tool_backlog_replenish',
