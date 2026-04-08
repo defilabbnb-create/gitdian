@@ -1424,7 +1424,21 @@ export class RepositoryService {
         ],
       });
     } else if (deepAnalysisState === RepositoryDeepAnalysisState.SKIPPED) {
-      andConditions.push(this.buildDeepAnalysisSkippedCondition());
+      const queuedRepositoryIds = await this.findQueuedColdToolRepositoryIds();
+      andConditions.push({
+        AND: [
+          this.buildDeepAnalysisSkippedCondition(),
+          ...(queuedRepositoryIds.length
+            ? [
+                {
+                  id: {
+                    notIn: queuedRepositoryIds,
+                  },
+                } satisfies Prisma.RepositoryWhereInput,
+              ]
+            : []),
+        ],
+      });
     } else if (deepAnalysisState === RepositoryDeepAnalysisState.QUEUED) {
       const queuedRepositoryIds = await this.findQueuedColdToolRepositoryIds();
       andConditions.push({
