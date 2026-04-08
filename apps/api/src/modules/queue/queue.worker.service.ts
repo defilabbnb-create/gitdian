@@ -154,6 +154,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     );
 
     await this.recoverColdToolCollectorInterruptedByWorkerRestart();
+    await this.recoverColdDeepAnalysisInterruptedByWorkerRestart();
     this.startColdToolCollectorScheduler();
     this.startAnalysisSingleWatchdog();
   }
@@ -540,6 +541,121 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     this.logger.warn(
       `Cold tool startup recovery queued replacement job previousJobId=${activeJob.id} newJobId=${replacement.jobId} newQueueJobId=${replacement.queueJobId}`,
     );
+  }
+
+  private async recoverColdDeepAnalysisInterruptedByWorkerRestart() {
+    const recoveryLimit = this.readConcurrency(
+      'COLD_TOOL_ANALYSIS_RESTART_RECOVERY_LIMIT',
+      Math.max(8, this.readConcurrency('COLD_TOOL_DEEP_ANALYSIS_CONCURRENCY', 8) * 2),
+    );
+    const recoveryGraceMs = this.readConcurrency(
+      'COLD_TOOL_ANALYSIS_RESTART_RECOVERY_GRACE_MS',
+      15_000,
+    );
+    const activeRows = await this.prisma.jobLog.findMany({
+      where: {
+        queueName: QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+        jobStatus: {
+          in: [JobStatus.PENDING, JobStatus.RUNNING],
+        },
+      },
+      orderBy: {
+        updatedAt: 'asc',
+      },
+      take: recoveryLimit,
+      select: {
+        id: true,
+        queueName: true,
+        queueJobId: true,
+        jobStatus: true,
+        progress: true,
+        triggeredBy: true,
+        createdAt: true,
+        startedAt: true,
+        updatedAt: true,
+        payload: true,
+      },
+    });
+
+    for (const row of activeRows) {
+      if (!row.queueJobId) {
+        continue;
+      }
+
+      const queueSnapshot = await this.queueService.getQueueJobSnapshot(
+        QUEUE_NAMES.ANALYSIS_SINGLE_COLD,
+        row.queueJobId,
+      );
+
+      if (queueSnapshot?.state !== 'active') {
+        continue;
+      }
+
+      const lastTouchedAt =
+        row.updatedAt?.getTime() ??
+        row.startedAt?.getTime() ??
+        row.createdAt.getTime();
+
+      if (lastTouchedAt >= this.workerBootedAtMs - recoveryGraceMs) {
+        continue;
+      }
+
+      const payload = this.readJsonRecord(row.payload);
+      const repositoryId = this.normalizeNullableString(payload.repositoryId);
+      const dtoRecord = this.isJsonRecord(payload.dto)
+        ? ({ ...(payload.dto as Record<string, unknown>) } as unknown as RunAnalysisDto)
+        : null;
+
+      if (!repositoryId || !dtoRecord) {
+        continue;
+      }
+
+      const orphanedForMs = Math.max(0, this.workerBootedAtMs - lastTouchedAt);
+      await this.jobLogService.failJob({
+        jobId: row.id,
+        errorMessage:
+          `Recovered cold deep-analysis job after worker restart interrupted the active execution. orphanedForMs=${orphanedForMs}.`,
+        progress: row.progress,
+        result: {
+          orphanedByWorkerRestart: true,
+          queueState: queueSnapshot.state,
+          queueJobId: row.queueJobId,
+          workerBootedAt: new Date(this.workerBootedAtMs).toISOString(),
+          orphanedForMs,
+        },
+      });
+
+      this.logger.warn(
+        `Cold deep startup recovery replaced orphaned active job jobId=${row.id} queueJobId=${row.queueJobId} repositoryId=${repositoryId} orphanedForMs=${orphanedForMs}`,
+      );
+
+      const replacement = await this.queueService.enqueueSingleAnalysis(
+        repositoryId,
+        {
+          ...dtoRecord,
+          analysisLane: 'cold_tool',
+        },
+        'analysis_single_watchdog',
+        {
+          parentJobId: row.id,
+          metadata: {
+            fromColdToolCollector: true,
+            recoveredAfterWorkerRestart: true,
+            staleRecoveredQueueJobId: row.queueJobId,
+          },
+          jobOptionsOverride: {
+            priority: this.readConcurrency(
+              'COLD_TOOL_DEEP_ANALYSIS_PRIORITY',
+              18,
+            ),
+          },
+        },
+      );
+
+      this.logger.warn(
+        `Cold deep startup recovery queued replacement job previousJobId=${row.id} newJobId=${replacement.jobId} newQueueJobId=${replacement.queueJobId} repositoryId=${repositoryId}`,
+      );
+    }
   }
 
   private startColdToolCollectorWatchdog() {
@@ -1344,15 +1460,18 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async recoverStaleAnalysisSingleJobsIfNeeded() {
-    const staleMinutes = this.readConcurrency(
+    const defaultStaleMinutes = this.readConcurrency(
       'ANALYSIS_SINGLE_STALE_MINUTES',
       30,
+    );
+    const coldStaleMinutes = this.readConcurrency(
+      'COLD_TOOL_ANALYSIS_STALE_MINUTES',
+      6,
     );
     const limit = this.readConcurrency(
       'ANALYSIS_SINGLE_STALE_RECOVERY_LIMIT',
       Math.max(20, this.readConcurrency('DEEP_ANALYSIS_CONCURRENCY', 6) * 4),
     );
-    const cutoff = new Date(Date.now() - staleMinutes * 60_000);
     const staleRows = await this.prisma.jobLog.findMany({
       where: {
         queueName: {
@@ -1360,9 +1479,6 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         },
         jobStatus: {
           in: [JobStatus.PENDING, JobStatus.RUNNING],
-        },
-        updatedAt: {
-          lt: cutoff,
         },
       },
       orderBy: {
@@ -1386,6 +1502,16 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     let skippedCount = 0;
 
     for (const row of staleRows) {
+      const staleMinutes =
+        row.queueName === QUEUE_NAMES.ANALYSIS_SINGLE_COLD
+          ? coldStaleMinutes
+          : defaultStaleMinutes;
+      const cutoff = new Date(Date.now() - staleMinutes * 60_000);
+      if (row.updatedAt >= cutoff) {
+        skippedCount += 1;
+        continue;
+      }
+
       const queueName =
         row.queueName === QUEUE_NAMES.ANALYSIS_SINGLE_COLD
           ? QUEUE_NAMES.ANALYSIS_SINGLE_COLD
