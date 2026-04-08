@@ -119,6 +119,8 @@ for script_name in load-env.sh start-api.sh start-worker.sh start-web.sh; do
   chmod 755 "$BIN_DIR/$script_name"
 done
 
+chmod 755 "$ROOT/scripts/ops/watch-lowcap-tunnel.sh"
+
 cat > "$PLIST_DIR/com.gitdian.api.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -203,10 +205,38 @@ cat > "$PLIST_DIR/com.gitdian.web.plist" <<EOF
 </plist>
 EOF
 
+cat > "$PLIST_DIR/com.gitdian.tunnel-health.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.gitdian.tunnel-health</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>-lc</string>
+      <string>exec /Users/v188/Documents/gitdian/scripts/ops/watch-lowcap-tunnel.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/v188</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/v188/Library/Logs/gitdian/tunnel-health.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/v188/Library/Logs/gitdian/tunnel-health.stderr.log</string>
+  </dict>
+</plist>
+EOF
+
 for plist in \
   "$PLIST_DIR/com.gitdian.api.plist" \
   "$PLIST_DIR/com.gitdian.worker.plist" \
-  "$PLIST_DIR/com.gitdian.web.plist"; do
+  "$PLIST_DIR/com.gitdian.web.plist" \
+  "$PLIST_DIR/com.gitdian.tunnel-health.plist"; do
   plutil -lint "$plist" >/dev/null
 done
 
@@ -224,12 +254,12 @@ pkill -f 'next-server' 2>/dev/null || true
 wait_for_port_release 3001 || true
 wait_for_port_release 3000 || true
 
-for label in com.gitdian.api com.gitdian.worker com.gitdian.web; do
+for label in com.gitdian.api com.gitdian.worker com.gitdian.web com.gitdian.tunnel-health; do
   launchctl bootout "gui/$(id -u)" "$PLIST_DIR/$label.plist" 2>/dev/null || true
   launchctl remove "$label" 2>/dev/null || true
 done
 
-for label in com.gitdian.api com.gitdian.worker com.gitdian.web; do
+for label in com.gitdian.api com.gitdian.worker com.gitdian.web com.gitdian.tunnel-health; do
   bootstrap_launch_agent "$label" "$PLIST_DIR/$label.plist"
 done
 
