@@ -454,6 +454,12 @@ export class OpenAiProvider implements AiProvider {
       JSON.parse(streamText);
       return streamText;
     } catch (error) {
+      const repaired = this.tryRepairJsonText(streamText);
+      if (repaired) {
+        JSON.parse(repaired);
+        return repaired;
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       const shouldRetry =
         message.includes('Unterminated string') ||
@@ -471,6 +477,33 @@ export class OpenAiProvider implements AiProvider {
 
       throw error;
     }
+  }
+
+  private tryRepairJsonText(streamText: string) {
+    const source = streamText.trim();
+    if (!source.startsWith('{') && !source.startsWith('[')) {
+      return null;
+    }
+
+    let repaired = source;
+    const quoteCount = (repaired.match(/(?<!\\)"/g) ?? []).length;
+    if (quoteCount % 2 === 1) {
+      repaired += '"';
+    }
+
+    const openCurly = (repaired.match(/{/g) ?? []).length;
+    const closeCurly = (repaired.match(/}/g) ?? []).length;
+    if (openCurly > closeCurly) {
+      repaired += '}'.repeat(openCurly - closeCurly);
+    }
+
+    const openSquare = (repaired.match(/\[/g) ?? []).length;
+    const closeSquare = (repaired.match(/]/g) ?? []).length;
+    if (openSquare > closeSquare) {
+      repaired += ']'.repeat(openSquare - closeSquare);
+    }
+
+    return repaired === source ? null : repaired;
   }
 
   private extractResponseText(payload: {
