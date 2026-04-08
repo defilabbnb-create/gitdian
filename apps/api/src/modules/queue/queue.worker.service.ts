@@ -43,6 +43,7 @@ type ColdToolRuntimeState = {
 export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueWorkerService.name);
   private readonly workers: Worker[] = [];
+  private readonly workerBootedAtMs = Date.now();
   private coldToolSchedulerTimer: NodeJS.Timeout | null = null;
   private coldToolWatchdogTimer: NodeJS.Timeout | null = null;
   private coldToolAutofillTimer: NodeJS.Timeout | null = null;
@@ -152,6 +153,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
       `Queue workers started (${this.workers.length}). githubBackfillConcurrency=${backfillConcurrency} ideaSnapshotConcurrency=${snapshotConcurrency} deepAnalysisConcurrency=${deepAnalysisConcurrency}`,
     );
 
+    await this.recoverColdToolCollectorInterruptedByWorkerRestart();
     this.startColdToolCollectorScheduler();
     this.startAnalysisSingleWatchdog();
   }
@@ -466,6 +468,78 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
 
     this.startColdToolCollectorWatchdog();
     this.startColdToolAutofillMonitor();
+  }
+
+  private async recoverColdToolCollectorInterruptedByWorkerRestart() {
+    const activeJob = await this.queueService.getLatestActiveQueueJobLog({
+      queueName: QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+      jobName: QUEUE_JOB_TYPES.GITHUB_COLD_TOOL_COLLECT,
+    });
+
+    if (!activeJob?.queueJobId) {
+      return;
+    }
+
+    const queueSnapshot = await this.queueService.getQueueJobSnapshot(
+      QUEUE_NAMES.GITHUB_COLD_TOOL_COLLECT,
+      activeJob.queueJobId,
+    );
+
+    if (queueSnapshot?.state !== 'active') {
+      return;
+    }
+
+    const runtime = this.readColdToolRuntimeState(activeJob.result);
+    const heartbeatAtMs =
+      this.parseTimestamp(runtime.runtimeUpdatedAt) ??
+      activeJob.updatedAt?.getTime() ??
+      activeJob.startedAt?.getTime() ??
+      activeJob.createdAt.getTime();
+    const recoveryGraceMs = this.readConcurrency(
+      'COLD_TOOL_RESTART_RECOVERY_GRACE_MS',
+      15_000,
+    );
+
+    if (heartbeatAtMs >= this.workerBootedAtMs - recoveryGraceMs) {
+      return;
+    }
+
+    const dto = this.extractColdToolCollectorDto(activeJob.payload);
+    const heartbeatAgeMs = Math.max(0, this.workerBootedAtMs - heartbeatAtMs);
+    const errorMessage =
+      `Recovered cold-tool collector after worker restart interrupted the active phase. orphanedForMs=${heartbeatAgeMs}.`;
+
+    await this.jobLogService.failJob({
+      jobId: activeJob.id,
+      errorMessage,
+      progress: runtime.progress ?? activeJob.progress,
+      result: {
+        orphanedByWorkerRestart: true,
+        queueState: queueSnapshot.state,
+        queueJobId: activeJob.queueJobId,
+        currentStage: runtime.currentStage,
+        runtimeUpdatedAt: runtime.runtimeUpdatedAt,
+        workerBootedAt: new Date(this.workerBootedAtMs).toISOString(),
+        heartbeatAgeMs,
+      },
+    });
+
+    this.logger.warn(
+      `Cold tool startup recovery replaced orphaned active job jobId=${activeJob.id} queueJobId=${activeJob.queueJobId} stage=${runtime.currentStage ?? 'unknown'} heartbeatAgeMs=${heartbeatAgeMs}`,
+    );
+
+    if (!dto) {
+      return;
+    }
+
+    const replacement = await this.queueService.enqueueGitHubColdToolCollect(
+      dto,
+      'cold_tool_restart_recovery',
+    );
+
+    this.logger.warn(
+      `Cold tool startup recovery queued replacement job previousJobId=${activeJob.id} newJobId=${replacement.jobId} newQueueJobId=${replacement.queueJobId}`,
+    );
   }
 
   private startColdToolCollectorWatchdog() {
