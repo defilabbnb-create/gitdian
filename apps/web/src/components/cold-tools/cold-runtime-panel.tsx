@@ -11,26 +11,25 @@ export async function ColdRuntimePanel() {
     );
 
     return (
-      <details className="rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.95)_0%,rgba(240,253,244,0.92)_58%,rgba(236,253,245,0.88)_100%)] p-5 shadow-[0_28px_80px_-40px_rgba(5,150,105,0.28)]">
-        <summary className="flex cursor-pointer list-none flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
+      <details className="rounded-[26px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.95)_0%,rgba(240,253,244,0.92)_58%,rgba(236,253,245,0.88)_100%)] p-4 shadow-[0_24px_70px_-42px_rgba(5,150,105,0.28)]">
+        <summary className="flex cursor-pointer list-none flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
               冷门运行状态
             </p>
-            <h2 className="font-display text-2xl font-semibold tracking-[-0.04em] text-slate-950">
-              运行态已折叠，先看摘要，必要时再展开明细。
-            </h2>
-            <p className="text-sm leading-6 text-slate-600">
-              当前阶段 {runtime.collector.currentStage ?? '空闲'}，run={currentRun}，
-              队列 active {runtime.coldDeepQueue.active} / queued {runtime.coldDeepQueue.queued}。
+            <p className="text-sm font-semibold text-slate-950">
+              阶段 {runtime.collector.currentStage ?? '空闲'} · run={currentRun} ·
+              队列 active {runtime.coldDeepQueue.active} / queued {runtime.coldDeepQueue.queued}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="rounded-full border border-emerald-200 bg-white/80 px-4 py-2 font-mono text-xs text-slate-500">
               Git SHA: {runtime.runtime.gitSha}
             </div>
-            <div className="rounded-full border border-slate-200 bg-white/80 px-4 py-2 text-xs font-semibold text-slate-600">
-              点击展开运行细节
+            <SummaryChip label="心跳" value={formatAge(runtime.collector.heartbeatAgeSeconds)} />
+            <SummaryChip label="状态" value={runtime.collector.currentStatus ?? '--'} />
+            <div className="rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-xs font-semibold text-slate-600">
+              展开运行细节
             </div>
           </div>
         </summary>
@@ -183,7 +182,7 @@ export async function ColdRuntimePanel() {
     );
   } catch (error) {
     return (
-      <section className="rounded-[28px] border border-rose-200 bg-rose-50/90 p-5 shadow-sm">
+      <section className="rounded-[24px] border border-rose-200 bg-rose-50/90 p-4 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-700">
           冷门运行状态
         </p>
@@ -199,6 +198,16 @@ export async function ColdRuntimePanel() {
       </section>
     );
   }
+}
+
+function SummaryChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-600">
+      <span className="font-semibold text-slate-900">{label}</span>
+      {' · '}
+      {value}
+    </div>
+  );
 }
 
 function PhaseBadge({ phase }: { phase: string | null }) {

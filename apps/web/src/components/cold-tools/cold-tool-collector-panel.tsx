@@ -37,18 +37,15 @@ export function ColdToolCollectorPanel() {
   }
 
   return (
-    <details className="relative overflow-hidden rounded-[32px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.96)_0%,rgba(255,255,255,0.92)_58%,rgba(220,252,231,0.88)_100%)] p-5 shadow-[0_26px_80px_-40px_rgba(5,150,105,0.28)]">
+    <details className="relative overflow-hidden rounded-[26px] border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.96)_0%,rgba(255,255,255,0.92)_58%,rgba(220,252,231,0.88)_100%)] p-4 shadow-[0_24px_70px_-42px_rgba(5,150,105,0.28)]">
       <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.18),transparent_72%)] lg:block" />
-      <summary className="relative flex cursor-pointer list-none flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="max-w-3xl space-y-2">
+      <summary className="relative flex cursor-pointer list-none flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="max-w-3xl space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
             冷门工具采集框
           </p>
-          <h2 className="font-display text-2xl font-semibold tracking-[-0.04em] text-slate-950">
-            默认折叠参数区，首页先看结果，需要时再展开手动触发。
-          </h2>
-          <p className="text-sm leading-7 text-slate-700">
-            当前这条链路会轮转关键词和语言采集，命中冷门池后自动进入深分析。
+          <p className="text-sm font-semibold text-slate-950">
+            轮转关键词采集，命中后自动进深分析；参数默认收起。
           </p>
           <div className="flex flex-wrap gap-2 pt-1 text-xs font-semibold">
             <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
@@ -58,16 +55,16 @@ export function ColdToolCollectorPanel() {
               命中即进深分析
             </span>
             <span className="rounded-full border border-emerald-200 bg-white/80 px-3 py-1 text-emerald-700">
-              点击展开参数
+              展开采集参数
             </span>
           </div>
         </div>
 
-        <div className="relative flex flex-wrap gap-3">
+        <div className="relative flex flex-wrap gap-2">
           <ExportColdToolsButton />
           <Link
             href="/jobs"
-            className="inline-flex h-11 items-center justify-center rounded-2xl border border-emerald-300 bg-white px-4 text-sm font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50"
+            className="inline-flex h-10 items-center justify-center rounded-2xl border border-emerald-300 bg-white px-4 text-sm font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50"
           >
             去任务页看进度
           </Link>
