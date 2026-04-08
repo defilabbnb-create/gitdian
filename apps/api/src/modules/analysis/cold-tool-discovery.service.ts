@@ -689,6 +689,7 @@ export class ColdToolDiscoveryService {
   }
 
   private mergeColdToolTags(existingTags: string[], record: ColdToolPoolRecord) {
+    const keepInPool = existingTags.includes(COLD_TOOL_POOL_TAG);
     const nextTags = existingTags.filter(
       (tag) => !tag.startsWith(COLD_TOOL_TAG_PREFIX),
     );
@@ -697,7 +698,7 @@ export class ColdToolDiscoveryService {
     if (record.isRealUserTool) {
       nextTags.push('cold_tool_real_user');
     }
-    if (record.fitsColdToolPool) {
+    if (record.fitsColdToolPool || keepInPool) {
       nextTags.push(COLD_TOOL_POOL_TAG);
     }
     if (record.hasPayingIntent) {
