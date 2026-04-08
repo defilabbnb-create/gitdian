@@ -70,8 +70,8 @@ export function ExportColdToolsButton() {
         className="inline-flex h-11 items-center justify-center rounded-2xl border border-emerald-300 bg-white px-4 text-sm font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {exportingKey === 'deep-pending'
-          ? '导出未完成中...'
-          : '导出深度分析未完成 CSV'}
+          ? '导出待继续中...'
+          : '导出深度分析待继续 CSV'}
       </button>
     </div>
   );

@@ -1403,8 +1403,25 @@ export class RepositoryService {
     if (deepAnalysisState === RepositoryDeepAnalysisState.COMPLETED) {
       andConditions.push(this.buildDeepAnalysisCompletedCondition());
     } else if (deepAnalysisState === RepositoryDeepAnalysisState.PENDING) {
+      const queuedRepositoryIds = await this.findQueuedColdToolRepositoryIds();
       andConditions.push({
-        NOT: this.buildDeepAnalysisCompletedCondition(),
+        AND: [
+          {
+            NOT: this.buildDeepAnalysisCompletedCondition(),
+          },
+          {
+            NOT: this.buildDeepAnalysisSkippedCondition(),
+          },
+          ...(queuedRepositoryIds.length
+            ? [
+                {
+                  id: {
+                    notIn: queuedRepositoryIds,
+                  },
+                } satisfies Prisma.RepositoryWhereInput,
+              ]
+            : []),
+        ],
       });
     } else if (deepAnalysisState === RepositoryDeepAnalysisState.SKIPPED) {
       andConditions.push(this.buildDeepAnalysisSkippedCondition());
@@ -1498,7 +1515,7 @@ export class RepositoryService {
     };
   }
 
-  private async findQueuedColdToolRepositoryIds() {
+  async findQueuedColdToolRepositoryIds() {
     const rows = (await this.prisma.$queryRawUnsafe(`
       select distinct payload->>'repositoryId' as "repositoryId"
       from "JobLog"

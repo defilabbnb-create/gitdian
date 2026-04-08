@@ -171,15 +171,15 @@ export default async function ColdToolsPage({
               href={buildColdToolSectionHref(query, 'completed')}
             />
             <SummaryCard
-              label="深度分析未完成"
+              label="深度分析待继续"
               value={`${pendingTotal.toLocaleString()} 个`}
-              helper="还在补完整分析链，适合继续盯任务和导出未完成清单。"
+              helper="还没完成、也不在排队、也没被明确跳过，通常是未启动或待补跑的条目。"
               href={buildColdToolSectionHref(query, 'pending')}
             />
             <SummaryCard
               label="深度分析已跳过"
               value={`${skippedTotal.toLocaleString()} 个`}
-              helper="不是失败，而是当前信号偏弱或 snapshot 明确不值得继续深分析。"
+              helper="不是失败，而是 snapshot 明确不值得继续，或当前信号强度偏弱。"
               href={buildColdToolSectionHref(query, 'skipped')}
             />
             <SummaryCard

@@ -221,8 +221,9 @@ export class ExportService {
         '最近评估时间',
       ].join(','),
     ];
+    const where = await this.buildColdToolExportWhere(deepAnalysisState);
     const repositories = await this.prisma.repository.findMany({
-      where: this.buildColdToolExportWhere(deepAnalysisState),
+      where,
       select: {
         id: true,
         name: true,
@@ -300,9 +301,9 @@ export class ExportService {
     return lines.join('\n');
   }
 
-  private buildColdToolExportWhere(
+  private async buildColdToolExportWhere(
     deepAnalysisState?: RepositoryDeepAnalysisState,
-  ): Prisma.RepositoryWhereInput {
+  ): Promise<Prisma.RepositoryWhereInput> {
     const baseWhere: Prisma.RepositoryWhereInput = {
       analysis: {
         is: {
@@ -340,12 +341,59 @@ export class ExportService {
     }
 
     if (deepAnalysisState === RepositoryDeepAnalysisState.PENDING) {
+      const queuedRepositoryIds =
+        await this.repositoryService.findQueuedColdToolRepositoryIds();
       return {
         AND: [
           baseWhere,
           {
             NOT: deepCompletedWhere,
           },
+          {
+            NOT: {
+              OR: [
+                {
+                  analysis: {
+                    is: {
+                      ideaSnapshotJson: {
+                        path: ['isPromising'],
+                        equals: false,
+                      },
+                    },
+                  },
+                },
+                {
+                  analysis: {
+                    is: {
+                      ideaSnapshotJson: {
+                        path: ['nextAction'],
+                        equals: 'SKIP',
+                      },
+                    },
+                  },
+                },
+                {
+                  analysis: {
+                    is: {
+                      insightJson: {
+                        path: ['oneLinerStrength'],
+                        equals: 'WEAK',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+          ...(queuedRepositoryIds.length
+            ? [
+                {
+                  id: {
+                    notIn: queuedRepositoryIds,
+                  },
+                } satisfies Prisma.RepositoryWhereInput,
+              ]
+            : []),
         ],
       };
     }
