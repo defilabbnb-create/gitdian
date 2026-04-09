@@ -456,6 +456,7 @@ export class GitHubColdToolCollectorService {
     },
   ): Promise<ColdToolCollectorDirectResult> {
     const state = this.readResumeState(dto.resumeState);
+    const lightweightFirst = this.shouldUseLightweightFirstPipeline();
     const importEntries = this.getExternalImportEntries(state.externalHits);
     const importChunks = this.chunkItems(
       importEntries,
@@ -469,16 +470,18 @@ export class GitHubColdToolCollectorService {
 
     if (chunkIndex >= importChunks.length) {
       this.logger.log(
-        `cold_tool_collection stage=hydrate_content repositoryCandidates=${state.repositoryIds.length}`,
+        lightweightFirst
+          ? `cold_tool_collection stage=snapshot repositoryCandidates=${state.repositoryIds.length} snapshotChunks=${this.getSnapshotChunks(state.repositoryIds).length} mode=lightweight_first`
+          : `cold_tool_collection stage=hydrate_content repositoryCandidates=${state.repositoryIds.length}`,
       );
       return {
         continued: true,
-        phase: 'hydrate_content',
+        phase: lightweightFirst ? 'snapshot' : 'hydrate_content',
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
           runId: state.runId,
-          phase: 'hydrate_content',
+          phase: lightweightFirst ? 'snapshot' : 'hydrate_content',
           resumeState: state as Record<string, unknown>,
         },
       };
@@ -586,12 +589,12 @@ export class GitHubColdToolCollectorService {
 
     return {
       continued: true,
-      phase: 'hydrate_content',
+      phase: lightweightFirst ? 'snapshot' : 'hydrate_content',
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
         runId: state.runId,
-        phase: 'hydrate_content',
+        phase: lightweightFirst ? 'snapshot' : 'hydrate_content',
         resumeState: state as Record<string, unknown>,
       },
     };
@@ -607,8 +610,10 @@ export class GitHubColdToolCollectorService {
     },
   ): Promise<ColdToolCollectorDirectResult> {
     const state = this.readResumeState(dto.resumeState);
+    const lightweightFirst = this.shouldUseLightweightFirstPipeline();
+    const hydrateTargets = this.resolveHydrateRepositoryIds(state);
     const hydrateChunks = this.chunkItems(
-      state.repositoryIds,
+      hydrateTargets,
       this.readPositiveInt(
         'COLD_TOOL_HYDRATE_REPOSITORY_CHUNK_SIZE',
         120,
@@ -616,25 +621,34 @@ export class GitHubColdToolCollectorService {
       ),
     );
     const chunkIndex = Math.max(0, state.hydrateChunkIndex);
+    const progressStart = lightweightFirst ? 88 : 62;
+    const progressEnd = lightweightFirst ? 95 : 70;
 
     if (chunkIndex >= hydrateChunks.length) {
-      this.logger.log(
-        `cold_tool_collection stage=snapshot repositoryCandidates=${state.repositoryIds.length} snapshotChunks=${this.getSnapshotChunks(state.repositoryIds).length}`,
-      );
+      if (!lightweightFirst) {
+        this.logger.log(
+          `cold_tool_collection stage=snapshot repositoryCandidates=${state.repositoryIds.length} snapshotChunks=${this.getSnapshotChunks(state.repositoryIds).length}`,
+        );
+      }
       return {
         continued: true,
-        phase: 'snapshot',
+        phase: lightweightFirst ? 'deep_queue' : 'snapshot',
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
           runId: state.runId,
-          phase: 'snapshot',
+          phase: lightweightFirst ? 'deep_queue' : 'snapshot',
           resumeState: state as Record<string, unknown>,
         },
       };
     }
 
-    await this.emitRuntimeFromResumeState(state, 'hydrate_content', 62, options);
+    await this.emitRuntimeFromResumeState(
+      state,
+      'hydrate_content',
+      progressStart,
+      options,
+    );
     const hydrationResult = await this.githubService.hydrateRepositories(
       hydrateChunks[chunkIndex],
       {
@@ -655,12 +669,15 @@ export class GitHubColdToolCollectorService {
     state.hydrationFailed += hydrationResult.failed;
     state.hydrateChunkIndex = chunkIndex + 1;
     const progress =
-      62 +
-      Math.round((state.hydrateChunkIndex / Math.max(1, hydrateChunks.length)) * 8);
+      progressStart +
+      Math.round(
+        (state.hydrateChunkIndex / Math.max(1, hydrateChunks.length)) *
+          Math.max(1, progressEnd - progressStart),
+      );
     await this.emitRuntimeFromResumeState(
       state,
       'hydrate_content',
-      Math.max(62, Math.min(70, progress)),
+      Math.max(progressStart, Math.min(progressEnd, progress)),
       options,
     );
 
@@ -680,12 +697,12 @@ export class GitHubColdToolCollectorService {
 
     return {
       continued: true,
-      phase: 'snapshot',
+      phase: lightweightFirst ? 'deep_queue' : 'snapshot',
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
         runId: state.runId,
-        phase: 'snapshot',
+        phase: lightweightFirst ? 'deep_queue' : 'snapshot',
         resumeState: state as Record<string, unknown>,
       },
     };
@@ -701,8 +718,11 @@ export class GitHubColdToolCollectorService {
     },
   ): Promise<ColdToolCollectorDirectResult> {
     const state = this.readResumeState(dto.resumeState);
+    const lightweightFirst = this.shouldUseLightweightFirstPipeline();
     const snapshotRepositoryChunks = this.getSnapshotChunks(state.repositoryIds);
     const chunkIndex = Math.max(0, state.snapshotChunkIndex);
+    const progressStart = lightweightFirst ? 58 : 70;
+    const progressEnd = lightweightFirst ? 78 : 80;
 
     if (chunkIndex >= snapshotRepositoryChunks.length) {
       return {
@@ -719,7 +739,12 @@ export class GitHubColdToolCollectorService {
     }
 
     const chunkRepositoryIds = snapshotRepositoryChunks[chunkIndex];
-    await this.emitRuntimeFromResumeState(state, 'snapshot', 70, options);
+    await this.emitRuntimeFromResumeState(
+      state,
+      'snapshot',
+      progressStart,
+      options,
+    );
     const snapshotBatchSize = this.readPositiveInt(
       'COLD_TOOL_SNAPSHOT_BATCH_SIZE',
       2,
@@ -853,7 +878,7 @@ export class GitHubColdToolCollectorService {
                 await this.emitRuntimeFromResumeState(
                   state,
                   'snapshot',
-                  70,
+                  progressStart,
                   options,
                   matchedRepositoryIds,
                 );
@@ -898,9 +923,10 @@ export class GitHubColdToolCollectorService {
     }
     state.snapshotChunkIndex = chunkIndex + 1;
     const progress =
-      70 +
+      progressStart +
       Math.round(
-        (state.snapshotChunkIndex / Math.max(1, snapshotRepositoryChunks.length)) * 10,
+        (state.snapshotChunkIndex / Math.max(1, snapshotRepositoryChunks.length)) *
+          Math.max(1, progressEnd - progressStart),
       );
     await this.emitRuntimeFromResumeState(state, 'snapshot', progress, options);
 
@@ -945,6 +971,7 @@ export class GitHubColdToolCollectorService {
     },
   ): Promise<ColdToolCollectorDirectResult> {
     const state = this.readResumeState(dto.resumeState);
+    const lightweightFirst = this.shouldUseLightweightFirstPipeline();
     const discoveryProcessedRepositoryIds = new Set(
       state.discoveryProcessedRepositoryIds,
     );
@@ -955,22 +982,34 @@ export class GitHubColdToolCollectorService {
       remainingDiscoveryRepositoryIds,
     );
     const chunkIndex = Math.max(0, state.discoveryChunkIndex);
+    const progressStart = lightweightFirst ? 78 : 82;
+    const progressEnd = lightweightFirst ? 88 : 92;
 
     if (chunkIndex >= discoveryRepositoryChunks.length) {
+      if (lightweightFirst) {
+        this.logger.log(
+          `cold_tool_collection stage=hydrate_content matchedCandidates=${state.matchedRepositoryIds.length} hydrateChunks=${this.chunkItems(this.resolveHydrateRepositoryIds(state), this.readPositiveInt('COLD_TOOL_HYDRATE_REPOSITORY_CHUNK_SIZE', 120, 1)).length} mode=lightweight_first`,
+        );
+      }
       return {
         continued: true,
-        phase: 'deep_queue',
+        phase: lightweightFirst ? 'hydrate_content' : 'deep_queue',
         repositoryCandidates: state.repositoryIds.length,
         nextDto: {
           ...dto,
           runId: state.runId,
-          phase: 'deep_queue',
+          phase: lightweightFirst ? 'hydrate_content' : 'deep_queue',
           resumeState: state as Record<string, unknown>,
         },
       };
     }
 
-    await this.emitRuntimeFromResumeState(state, 'cold_tool_discovery', 82, options);
+    await this.emitRuntimeFromResumeState(
+      state,
+      'cold_tool_discovery',
+      progressStart,
+      options,
+    );
     const chunkRepositoryIds = discoveryRepositoryChunks[chunkIndex];
     const chunkOriginsByRepositoryId = Object.fromEntries(
       chunkRepositoryIds.map((repositoryId: string) => [
@@ -999,12 +1038,14 @@ export class GitHubColdToolCollectorService {
             : 1;
         const overallRatio =
           completedChunkRatio + currentChunkRatio / totalChunks;
-        const progress = 82 + Math.round(overallRatio * 10);
+        const progress =
+          progressStart +
+          Math.round(overallRatio * Math.max(1, progressEnd - progressStart));
 
         await this.emitRuntimeFromResumeState(
           state,
           'cold_tool_discovery',
-          Math.max(82, Math.min(92, progress)),
+          Math.max(progressStart, Math.min(progressEnd, progress)),
           options,
           matchedRepositoryIds,
         );
@@ -1040,9 +1081,10 @@ export class GitHubColdToolCollectorService {
     state.deepQueuedRepositoryIds = Array.from(deepQueuedRepositoryIds);
     state.discoveryChunkIndex = chunkIndex + 1;
     const progress =
-      82 +
+      progressStart +
       Math.round(
-        (state.discoveryChunkIndex / Math.max(1, discoveryRepositoryChunks.length)) * 10,
+        (state.discoveryChunkIndex / Math.max(1, discoveryRepositoryChunks.length)) *
+          Math.max(1, progressEnd - progressStart),
       );
     await this.emitRuntimeFromResumeState(
       state,
@@ -1068,12 +1110,12 @@ export class GitHubColdToolCollectorService {
 
     return {
       continued: true,
-      phase: 'deep_queue',
+      phase: lightweightFirst ? 'hydrate_content' : 'deep_queue',
       repositoryCandidates: state.repositoryIds.length,
       nextDto: {
         ...dto,
         runId: state.runId,
-        phase: 'deep_queue',
+        phase: lightweightFirst ? 'hydrate_content' : 'deep_queue',
         resumeState: state as Record<string, unknown>,
       },
     };
@@ -1975,6 +2017,23 @@ export class GitHubColdToolCollectorService {
     );
   }
 
+  private resolveHydrateRepositoryIds(state: ColdToolCollectorResumeState) {
+    if (!this.shouldUseLightweightFirstPipeline()) {
+      return state.repositoryIds;
+    }
+
+    const hydrateMatchedOnly = this.readBoolean(
+      'COLD_TOOL_HYDRATE_MATCHED_ONLY',
+      true,
+    );
+
+    if (!hydrateMatchedOnly) {
+      return state.repositoryIds;
+    }
+
+    return state.matchedRepositoryIds;
+  }
+
   private getExternalImportEntries(externalHits: ExternalSourceHit[]) {
     const grouped = new Map<string, ExternalSourceHit[]>();
 
@@ -2044,6 +2103,10 @@ export class GitHubColdToolCollectorService {
 
   private uniqueKeywords(keywords: string[]) {
     return [...new Set(keywords.map((item) => item.trim()).filter(Boolean))];
+  }
+
+  private shouldUseLightweightFirstPipeline() {
+    return this.readBoolean('COLD_TOOL_LIGHTWEIGHT_FIRST', true);
   }
 
   private appendOrigin(

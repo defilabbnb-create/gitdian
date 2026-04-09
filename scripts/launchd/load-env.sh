@@ -129,7 +129,7 @@ log_runtime_summary() {
     loaded_envs="${(j:,:)LOADED_ENV_FILES}"
   fi
 
-  echo "Runtime env ready service=${SERVICE_NAME} node=${node_version} loadedEnvFiles=${loaded_envs} nodeOptions=${NODE_OPTIONS:-} queueWorkers=${ENABLE_QUEUE_WORKERS:-unset} continuousRadar=${ENABLE_CONTINUOUS_RADAR:-unset} intake=${GITHUB_NEW_REPOSITORY_INTAKE_ENABLED:-unset} openaiMaxConcurrency=${OPENAI_MAX_CONCURRENCY:-unset} snapshotConcurrency=${IDEA_SNAPSHOT_CONCURRENCY:-unset} deepConcurrency=${DEEP_ANALYSIS_CONCURRENCY:-unset}"
+  echo "Runtime env ready service=${SERVICE_NAME} node=${node_version} loadedEnvFiles=${loaded_envs} nodeOptions=${NODE_OPTIONS:-} queueWorkers=${ENABLE_QUEUE_WORKERS:-unset} continuousRadar=${ENABLE_CONTINUOUS_RADAR:-unset} intake=${GITHUB_NEW_REPOSITORY_INTAKE_ENABLED:-unset} openaiMaxConcurrency=${OPENAI_MAX_CONCURRENCY:-unset} coldOpenaiMaxConcurrency=${COLD_TOOL_OPENAI_MAX_CONCURRENCY:-unset} snapshotConcurrency=${IDEA_SNAPSHOT_CONCURRENCY:-unset} deepConcurrency=${DEEP_ANALYSIS_CONCURRENCY:-unset} coldCollectorConcurrency=${COLD_TOOL_COLLECT_CONCURRENCY:-unset} coldQueryConcurrency=${COLD_TOOL_QUERY_CONCURRENCY:-unset} coldSnapshotModel=${COLD_TOOL_SNAPSHOT_MODEL:-unset} coldSnapshotBatchSize=${COLD_TOOL_SNAPSHOT_BATCH_SIZE:-unset} coldSnapshotBatchConcurrency=${COLD_TOOL_SNAPSHOT_BATCH_CONCURRENCY:-unset} coldDiscoveryModel=${COLD_TOOL_DISCOVERY_MODEL:-unset} coldDiscoveryBatchSize=${COLD_TOOL_DISCOVERY_BATCH_SIZE:-unset} coldLightweightFirst=${COLD_TOOL_LIGHTWEIGHT_FIRST:-unset}"
 }
 
 load_root_env
