@@ -238,6 +238,7 @@ export class QueueService implements OnModuleDestroy {
     jobLog: ActiveSingleAnalysisJobLog,
   ) {
     const staleMs = this.resolveColdToolCollectorEnqueueStaleMs();
+    const queueMissingGraceMs = this.resolveColdToolCollectorQueueMissingGraceMs();
     const runtime = this.readColdToolRuntimeState(jobLog.result ?? null);
     const heartbeatAgeMs = this.getColdToolCollectorHeartbeatAgeMs(
       jobLog,
@@ -251,8 +252,9 @@ export class QueueService implements OnModuleDestroy {
         )
       : null;
     const queueMissing = !queueSnapshot;
+    const queueMissingPastGrace = queueMissing && heartbeatAgeMs >= queueMissingGraceMs;
     const stale =
-      queueMissing ||
+      queueMissingPastGrace ||
       heartbeatAgeMs >= staleMs ||
       (jobLog.jobStatus === JobStatus.PENDING &&
         queueSnapshot &&
@@ -1194,6 +1196,19 @@ export class QueueService implements OnModuleDestroy {
       runtimeHeartbeatMs * 6,
       watchdogMinutes * 60_000,
     );
+  }
+
+  private resolveColdToolCollectorQueueMissingGraceMs() {
+    const configuredMs = this.readPositiveIntEnv(
+      process.env.COLD_TOOL_COLLECT_QUEUE_MISSING_GRACE_MS,
+      45_000,
+    );
+    const runtimeHeartbeatMs = this.readPositiveIntEnv(
+      process.env.QUEUE_RUNTIME_HEARTBEAT_MS,
+      30_000,
+    );
+
+    return Math.max(configuredMs, runtimeHeartbeatMs * 2);
   }
 
   private parseTimestamp(value: string | null) {
