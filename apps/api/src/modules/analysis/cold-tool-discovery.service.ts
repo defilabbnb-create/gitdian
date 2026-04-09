@@ -186,6 +186,7 @@ export class ColdToolDiscoveryService {
 
     const items: BatchColdToolDiscoveryResultItem[] = [];
     const repositoriesToAnalyze: RepositoryColdToolTarget[] = [];
+    let skippedWeakSnapshot = 0;
     const desiredModel =
       args.modelOverride ??
       this.cleanText(process.env.COLD_TOOL_DISCOVERY_MODEL, 80) ??
@@ -220,7 +221,25 @@ export class ColdToolDiscoveryService {
         continue;
       }
 
+      if (this.shouldSkipRepositoryBeforeDiscovery(repository)) {
+        skippedWeakSnapshot += 1;
+        items.push({
+          repositoryId: repository.id,
+          action: 'skipped',
+          output: null,
+          message:
+            'Skipped before cold tool discovery because snapshot signals are too weak.',
+        });
+        continue;
+      }
+
       repositoriesToAnalyze.push(repository);
+    }
+
+    if (skippedWeakSnapshot > 0) {
+      this.logger.log(
+        `cold_tool_discovery_prefilter skipped=${skippedWeakSnapshot} queued=${repositoriesToAnalyze.length} requested=${uniqueRepositoryIds.length} model=${desiredModel}`,
+      );
     }
 
     const batches = this.chunkItems(repositoriesToAnalyze, batchSize);
@@ -316,6 +335,7 @@ export class ColdToolDiscoveryService {
     const prompt = buildColdToolDiscoveryBatchPrompt(args.promptInputs);
 
     try {
+      const startedAt = Date.now();
       const aiResult = await this.aiRouterService.generateJson<
         BatchColdToolDiscoveryOutputItem[]
       >({
@@ -330,6 +350,9 @@ export class ColdToolDiscoveryService {
           openai: buildColdToolOpenAiOptions(),
         },
       });
+      this.logger.log(
+        `cold_tool_discovery_batch_completed repositoryCount=${args.batch.length} provider=${aiResult.provider ?? 'unknown'} model=${aiResult.model ?? args.desiredModel} wallMs=${Date.now() - startedAt} latencyMs=${aiResult.latencyMs}`,
+      );
 
       return this.buildBatchResults({
         batch: args.batch,
@@ -373,6 +396,7 @@ export class ColdToolDiscoveryService {
         );
 
         try {
+          const startedAt = Date.now();
           const aiResult = await this.aiRouterService.generateJson<
             ColdToolDiscoveryOutput
           >({
@@ -387,6 +411,9 @@ export class ColdToolDiscoveryService {
               openai: buildColdToolOpenAiOptions(),
             },
           });
+          this.logger.log(
+            `cold_tool_discovery_single_completed repositoryId=${repository.id} provider=${aiResult.provider ?? 'unknown'} model=${aiResult.model ?? args.desiredModel} wallMs=${Date.now() - startedAt} latencyMs=${aiResult.latencyMs}`,
+          );
 
           const normalizedOutputs = new Map<string, ColdToolDiscoveryOutput>([
             [repository.id, this.normalizeOutput(aiResult.data)],
@@ -496,7 +523,7 @@ export class ColdToolDiscoveryService {
         : this.readPositiveInt('COLD_TOOL_DISCOVERY_BATCH_SIZE_OPENAI', 2, 1);
     const rawBatchSize = requestedBatchSize ?? defaultBatchSize;
 
-    return Math.max(1, Math.min(rawBatchSize, 6));
+    return Math.max(1, Math.min(rawBatchSize, 8));
   }
 
   readColdToolPoolRecord(value: Prisma.JsonValue | null | undefined) {
@@ -846,6 +873,54 @@ export class ColdToolDiscoveryService {
     return chunks;
   }
 
+  private shouldSkipRepositoryBeforeDiscovery(
+    repository: RepositoryColdToolTarget,
+  ) {
+    if (!this.readBoolean('COLD_TOOL_DISCOVERY_SKIP_WEAK_SNAPSHOT', true)) {
+      return false;
+    }
+
+    const snapshot = this.readSnapshot(repository.analysis?.ideaSnapshotJson);
+    if (!snapshot) {
+      return false;
+    }
+
+    if (snapshot.isPromising === true || snapshot.toolLike === true) {
+      return false;
+    }
+
+    if (snapshot.nextAction === 'KEEP' || snapshot.nextAction === 'DEEP_ANALYZE') {
+      return false;
+    }
+
+    const mainCategory = this.cleanText(snapshot.category?.main, 40);
+    if (
+      mainCategory === 'tools' ||
+      mainCategory === 'platform' ||
+      mainCategory === 'data' ||
+      mainCategory === 'infra'
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private readSnapshot(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    return value as {
+      isPromising?: boolean | null;
+      toolLike?: boolean | null;
+      nextAction?: string | null;
+      category?: {
+        main?: string | null;
+      } | null;
+    };
+  }
+
   private async runWithConcurrency<T>(
     items: T[],
     concurrency: number,
@@ -1007,5 +1082,23 @@ export class ColdToolDiscoveryService {
     }
 
     return parsed;
+  }
+
+  private readBoolean(envName: string, fallback: boolean) {
+    const raw = process.env[envName]?.trim().toLowerCase();
+
+    if (!raw) {
+      return fallback;
+    }
+
+    if (['1', 'true', 'yes', 'on'].includes(raw)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'off'].includes(raw)) {
+      return false;
+    }
+
+    return fallback;
   }
 }

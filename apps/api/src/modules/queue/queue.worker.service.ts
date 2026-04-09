@@ -379,11 +379,11 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
         {
           queriesPerRun: this.readConcurrency(
             'COLD_TOOL_AUTOFILL_QUERIES_PER_RUN',
-            Math.min(12, this.readConcurrency('COLD_TOOL_QUERIES_PER_RUN', 36)),
+            this.readConcurrency('COLD_TOOL_QUERIES_PER_RUN', 36),
           ),
           perQueryLimit: this.readConcurrency(
             'COLD_TOOL_AUTOFILL_PER_QUERY_LIMIT',
-            Math.min(6, this.readConcurrency('COLD_TOOL_PER_QUERY_LIMIT', 8)),
+            this.readConcurrency('COLD_TOOL_PER_QUERY_LIMIT', 8),
           ),
           lookbackDays: this.readConcurrency('COLD_TOOL_LOOKBACK_DAYS', 540),
           forceRefresh: this.readBooleanEnv(
