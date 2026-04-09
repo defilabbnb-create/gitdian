@@ -26,7 +26,7 @@ export class RunColdToolCollectorDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(120)
+  @Max(240)
   queriesPerRun?: number;
 
   @IsOptional()
