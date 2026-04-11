@@ -84,8 +84,7 @@ export function detectRepositoryConflicts(
     analysisState?.deepReady === false ||
     deepStatus.status === 'NOT_STARTED' ||
     deepStatus.status === 'PENDING' ||
-    deepStatus.status === 'RUNNING' ||
-    deepStatus.status === 'FAILED';
+    deepStatus.status === 'RUNNING';
   const incompleteAnalysis =
     analysisState?.fullyAnalyzed === false ||
     !repository.analysis?.insightJson ||

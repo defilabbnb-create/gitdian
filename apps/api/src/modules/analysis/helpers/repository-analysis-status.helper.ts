@@ -401,10 +401,6 @@ function resolveAnalysisStatus(
     fallbackVisible: boolean;
   },
 ): RepositoryDerivedAnalysisStatus {
-  if (input.deepAnalysisStatus === 'FAILED') {
-    return 'FAILED';
-  }
-
   if (!input.hasSnapshot && !input.hasInsight && !input.hasFinalDecision) {
     return 'NOT_READY';
   }
@@ -431,7 +427,8 @@ function resolveAnalysisStatus(
 
   if (
     input.deepAnalysisStatus === 'PENDING' ||
-    input.deepAnalysisStatus === 'RUNNING'
+    input.deepAnalysisStatus === 'RUNNING' ||
+    input.deepAnalysisStatus === 'FAILED'
   ) {
     return 'DEEP_PENDING';
   }
@@ -510,10 +507,9 @@ function deriveIncompleteReasons(
   }
 
   if (!input.fullDeepReady) {
-    if (input.deepAnalysisStatus === 'FAILED') {
-      reasons.push('FAILED_DURING_ANALYSIS');
-    } else if (
+    if (
       input.deepAnalysisStatus === 'PENDING' ||
+      input.deepAnalysisStatus === 'FAILED' ||
       input.deepAnalysisStatus === 'RUNNING'
     ) {
       reasons.push('QUEUED_NOT_FINISHED');

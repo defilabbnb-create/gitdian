@@ -199,7 +199,6 @@ const DEGRADE_INCOMPLETE_REASONS = new Set<RepositoryIncompleteReason>([
   'NO_FINAL_DECISION',
   'FALLBACK_ONLY',
   'CONFLICT_HELD_BACK',
-  'FAILED_DURING_ANALYSIS',
   'UNKNOWN',
 ]);
 
@@ -850,8 +849,6 @@ function getIdeaExtractStatusLabel(
       return '补跑中';
     case 'PENDING':
       return '排队中';
-    case 'FAILED':
-      return '补跑失败';
     case 'SKIPPED_BY_GATE':
       return '基础判断已完成';
     case 'SKIPPED_BY_STRENGTH':
@@ -1534,8 +1531,7 @@ export function buildRepositoryDecisionViewModel(
     repository.analysisState?.unsafe === true ||
     !repository.analysis?.insightJson ||
     !hasFinalDecision ||
-    incompleteReasons.some((reason) => DEGRADE_INCOMPLETE_REASONS.has(reason)) ||
-    deep.status === 'FAILED';
+    incompleteReasons.some((reason) => DEGRADE_INCOMPLETE_REASONS.has(reason));
   const displayState = buildDisplayState({
     hasDeepAnalysis,
     hasFinalDecisionWithoutDeep,

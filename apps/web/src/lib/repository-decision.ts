@@ -2460,10 +2460,11 @@ export function getRepositoryIdeaExtractStatus(
 
   if (relevantJob?.jobStatus === 'FAILED') {
     return {
-      status: 'FAILED',
+      status: 'PENDING',
       mode,
       reason: analysis?.ideaExtractStatusReason ?? 'execution_failed',
-      helperText: '这层分析上一次没有跑完，你现在可以立即重试，把用户、场景和收费判断补齐。',
+      helperText:
+        '这层分析上一次没有跑完，系统会继续自动重试，把用户、场景和收费判断补齐。',
     };
   }
 
@@ -2552,10 +2553,11 @@ export function getRepositoryDeepAnalysisStatus(
 
   if (deepJob?.jobStatus === 'FAILED') {
     return {
-      status: 'FAILED',
+      status: 'PENDING',
       reason: 'execution_failed',
-      label: '补分析失败',
-      helperText: '上一次补分析没有跑完；你现在可以直接点击“立即补分析”重新补齐。',
+      label: '补分析待重试',
+      helperText:
+        '上一次补分析没有跑完；系统会继续自动重试，直到创业评分、点子提取和完整性分析补齐。',
       missingSteps,
     };
   }
@@ -3281,9 +3283,7 @@ export function getRepositoryAnalysisLayerLabel(
     case 'RUNNING':
       return '正在补跑深分析';
     case 'PENDING':
-      return '深分析排队中';
-    case 'FAILED':
-      return '补分析失败';
+      return '深分析待重试';
     case 'SKIPPED_BY_GATE':
       return '基础判断已完成';
     case 'SKIPPED_BY_STRENGTH':
